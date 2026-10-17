@@ -5,7 +5,7 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 
 ## Estado actual (F1 + Equipo) ✅
 
-- **Centro de Mando (vista principal)**: chat del equipo + **espacio de artefactos** en pestañas — `💬 Feed` (mensajes y sistema en vivo), `± Cambios` (git status + diff del proyecto, con **revisión por tarea**: diffs filtrados a sus archivos y botones *Aceptar (commit)* / *Revertir* con confirmación; clic en una tarea abre su diff), `👁 Preview` (HTML/SVG en iframe, MD/CSV como texto; se recarga solo cuando un agente guarda), `📁 Archivos` (explorador + atajos a Normas y `.agents/skills`). Cada agente es una **mini-tarjeta** en la barra lateral: estado, 👑 líder (clic para cambiarlo), `▸_` terminal bajo demanda, selector de **modelo**, alternar **modo**, 🔄 **relevo** (pide resumen para continuar), 🧹 **compactar** y **termómetro de contexto real** (Claude Code: el puente lee el transcript y muestra `Ctx 36%` + modelo, verde/ámbar/rojo). El input de misión soporta **menciones** (`@todos`, `@lider`, `@claude`…) y el disparo `📋 Planificar` / `⚡ Ejecutar`: en plan la misión va **solo al líder** y nadie edita hasta tu OK (Claude arranca con `--permission-mode plan`, Antigravity con `--mode plan`). Los **bloqueos** (agente esperando permiso o respuesta, vía hook `Notification`) aparecen en `🚨 Bloqueos` encima de la lista de agentes. El **lienzo espacial** sigue disponible como vista secundaria (`⬚ Lienzo` / `← Comando`); las terminales ocultas siguen vivas (PTY + scrollback) y se re-adjuntan al abrirlas.
+- **Centro de Mando (vista principal)**: chat del equipo + **espacio de artefactos** en pestañas — `💬 Feed` (mensajes y sistema en vivo), `± Cambios` (git status + diff del proyecto, con **revisión por tarea**: diffs filtrados a sus archivos y botones *Aceptar (commit)* / *Revertir* con confirmación; clic en una tarea abre su diff + su **caja de relevo** 📝; si git ve cambios que no reclama ninguna tarea aparece la sección **⚠️ Scope Creep** con *↺ Revertir* por archivo, y los diffs de `.html`/`.svg`/`.md` tienen botón **👁 Ver Preview**), `👁 Preview` (HTML/SVG en iframe, MD/CSV como texto; se recarga solo cuando un agente guarda), `📁 Archivos` (explorador + atajos a Normas y `.agents/skills`). Cada agente es una **mini-tarjeta** en la barra lateral: estado, 👑 líder (clic para cambiarlo), `▸_` terminal bajo demanda, selector de **modelo**, alternar **modo**, 🔄 **relevo con memoria** (el agente guarda su resumen estructurado en la tarea con `team_handover_save` y lienzo **compacta su contexto automáticamente** en cuanto lo guarda, sin amnesia), 🧹 **compactar** y **termómetro de contexto real** (`Ctx 36%` + modelo, verde/ámbar/rojo) alimentado de verdad por Claude Code (transcript vía hooks), **OpenCode** (su almacén local `opencode.db`) y **Codex** (sus rollouts en `~/.codex/sessions`). El input de misión soporta **menciones** (`@todos`, `@lider`, `@claude`…) y el disparo `📋 Planificar` / `⚡ Ejecutar`: en plan la misión va **solo al líder** y nadie edita hasta tu OK (Claude arranca con `--permission-mode plan`, Antigravity con `--mode plan`). Los **bloqueos** (agente esperando permiso o respuesta, vía hook `Notification`) aparecen en `🚨 Bloqueos` encima de la lista de agentes. El **lienzo espacial** sigue disponible como vista secundaria (`⬚ Lienzo` / `← Comando`); las terminales ocultas siguen vivas (PTY + scrollback) y se re-adjuntan al abrirlas.
 - **Lienzo infinito**: arrastra el fondo para mover, rueda del ratón para zoom al cursor, `Shift+rueda` para desplazarte en horizontal.
 - **Terminales reales** (ConPTY vía `portable-pty`) como paneles:
   - Doble clic en el lienzo → nueva terminal.
@@ -16,7 +16,7 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 - **Persistencia del layout**: paneles, posiciones, tamaños y vista se guardan en `localStorage`.
 - **Capó de equipo (agentes trabajando juntos)**:
   - Panel **Equipo** en el lienzo (`+ Equipo`): actividad en vivo, tareas compartidas y conexión de agentes.
-  - **`lienzo-mcp.exe`**: puente MCP universal. Da a cualquier agente las herramientas `team_context`, `team_update`, `team_feed`, `team_message`, `team_task_*`, `team_claim_files` / `team_release_files`.
+  - **`lienzo-mcp.exe`**: puente MCP universal. Da a cualquier agente las herramientas `team_context`, `team_update`, `team_feed`, `team_message`, `team_task_*`, `team_claim_files` / `team_release_files` y **`team_handover_save`** (memoria de relevo pegada a la tarea). Para OpenCode y Codex, además, un **muestreador** lee su almacén local cada 12 s y reporta su contexto real al hub (sin ruido en el feed).
   - **Conexión con 1 clic**: detecta Claude Code, Codex, OpenCode y Antigravity y escribe su configuración (`.mcp.json`, `~/.codex/config.toml`, `opencode.json`, `.agents/mcp_config.json`) + bloque de protocolo en `AGENTS.md`/`CLAUDE.md`.
   - **Reporte automático**: los hooks de Claude Code (y Codex) publican cada edición/comando en el feed y **inyectan el contexto del equipo en cada prompt** — Claude ve lo que hizo otro agente antes de responder.
   - **Sin pisarse archivos**: `team_claim_files` reserva archivos y devuelve conflictos si otro agente ya los tiene.
@@ -34,10 +34,10 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 | --- | --- | --- |
 | Gestor PTY (Rust) | `src-tauri/src/pty.rs` | Spawn de shell, streaming base64 por eventos `pty://data` / `pty://exit`, scrollback ring buffer, inyecta env del hub |
 | Hub de equipo (Rust) | `src-tauri/src/hub/mod.rs` | Estado compartido: agentes, feed, tareas, reservas; persistencia en `%APPDATA%\lienzo\team-state.json` |
-| API HTTP del hub | `src-tauri/src/hub/server.rs` | `127.0.0.1` puerto aleatorio + token: `/join`, `/event`, `/feed`, `/state`, `/task`, `/claim`, `/release`, `/broadcast`, `/pending`, `/charter` |
-| Conectores | `src-tauri/src/hub/connectors.rs` | Detección de agentes, escritura de configs (Claude/Codex/OpenCode/Antigravity) y lanzamiento (`team_open`, flag de modo plan) |
+| API HTTP del hub | `src-tauri/src/hub/server.rs` | `127.0.0.1` puerto aleatorio + token: `/join`, `/event`, `/feed`, `/state`, `/task`, `/claim`, `/release`, `/broadcast`, `/pending`, `/charter`, `/handover` (relevo con memoria), `/ctx` (telemetría del muestreador) |
+| Conectores | `src-tauri/src/hub/connectors.rs` | Detección de agentes, escritura de configs (Claude/Codex/OpenCode/Antigravity), lanzamiento (`team_open`, flag de modo plan) y **compactación de OpenCode** vía la API de su servidor local (`opencode_compact`) |
 | Proyecto (Rust) | `src-tauri/src/project.rs` | Ventana a la carpeta: git status/diff, revisión por tarea (commit o revert de sus rutas), listados y lecturas con tope de tamaño (nunca sale de la raíz) |
-| Puente MCP | `src-tauri/src/bin/lienzo-mcp.rs` | Servidor MCP por stdio (`team_*` + recursos `team://`), modo `hook` para Claude Code / Codex (contexto de equipo, avisos de bloqueo y telemetría de contexto desde el transcript) |
+| Puente MCP | `src-tauri/src/bin/lienzo-mcp.rs` | Servidor MCP por stdio (`team_*` + recursos `team://`), modo `hook` para Claude Code / Codex (contexto de equipo, avisos de bloqueo y telemetría de contexto desde el transcript) y muestreador de telemetría local para OpenCode (`opencode.db`) y Codex (rollouts) |
 | Registro de comandos | `src-tauri/src/lib.rs` | `term_*` + `team_*` (estado, tareas, líder, detectar/conectar/lanzar agentes) + `project_*` |
 | Estado del lienzo | `src/store.ts` | Paneles (terminal/equipo/progreso) + vista con `useSyncExternalStore` y persistencia |
 | Lienzo | `src/components/Canvas.tsx` | Paneo, zoom, LOD, barra de herramientas |
@@ -77,6 +77,24 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
    `team_task_create`); los agentes las reclaman (`team_task_claim`) y las cierran
    (`team_task_done`) — el progreso se ve en el panel.
 
+## Relevo con memoria (compactar sin amnesia)
+
+Cuando la barra de contexto de un agente se acerque al límite (o cuando quieras
+traspasar su trabajo), pulsa el 🔄 que está **junto a la barra de contexto** (o el 🔄
+de sus comandos rápidos):
+
+1. El agente guarda su relevo con `team_handover_save`: qué hizo, decisiones tomadas,
+   qué falta y qué archivos tocó. Queda **pegado a su tarea** (se ve en `± Cambios`
+   junto a su diff) y anunciado en el feed.
+2. En cuanto lo guarda, lienzo **compacta su contexto solo**: Claude recibe
+   `/compact` con el foco de la tarea («Mantén el contexto de la tarea #X y los
+   archivos Y»), Codex su `/compact`, y OpenCode se compacta vía la API de su
+   servidor local (`POST /api/session/:id/compact`; la petición es duradera y se
+   aplica en su siguiente límite de paso). Antigravity aún no expone compactado:
+   su relevo queda igualmente guardado en la tarea.
+3. La barra de contexto baja en vivo y el agente sigue con la memoria a mano, sin
+   releer todo el historial.
+
 ## Si un agente no ve las herramientas del equipo
 
 - **OpenCode**: su servicio de fondo se queda con la conexión MCP muerta si el puente
@@ -92,6 +110,12 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 ```powershell
 npm run tauri dev
 ```
+
+**Binarios bloqueados:** si un build falla con «Acceso denegado (os error 5/32)»
+porque un `.exe` está en uso (puentes MCP vivos, webviews zombie), ya no hay que
+hacer nada a mano: `src-tauri/build.rs` corre antes de cada enlace y el script
+`pretauri` (`scripts/unblock-bins.mjs`) al arrancar `npm run tauri …`; los binarios
+bloqueados se apartan como `.locked-<ts>` y los procesos vivos siguen con su copia.
 
 ## Compilar release
 
@@ -112,3 +136,4 @@ npm run tauri build
 - **F3 — Cola de tareas con worktrees**: cada tarea crea un `git worktree` propio, lanza el agente ahí y al terminar revisas el diff y apruebas/rechazas en bloque.
 - **F4 — Productividad**: command palette (`Ctrl+K`), notificaciones cuando un agente necesita aprobación, miniaturas reales en LOD, plantillas de layout.
 - **F5 — Editor y diffs**: panel de código con CodeMirror 6, visor de diffs, búsqueda con ripgrep.
+- **Antigravity**: su telemetría de contexto queda pendiente (almacén en protobuf sin login activo); el resto del equipo ya tiene termómetro real.
