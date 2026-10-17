@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-export type PanelKind = "terminal";
+export type PanelKind = "terminal" | "team";
 
 export type Panel = {
   id: string;
@@ -120,6 +120,22 @@ export function addTerminal(x: number, y: number): Panel {
     w: 640,
     h: 400,
     title: `Terminal ${n}`,
+    sessionId: null,
+  };
+  set({ panels: [...state.panels, panel], seq: n + 1 });
+  return panel;
+}
+
+export function addTeam(x: number, y: number): Panel {
+  const n = state.seq;
+  const panel: Panel = {
+    id: `p${n}`,
+    kind: "team",
+    x,
+    y,
+    w: 620,
+    h: 470,
+    title: "Equipo",
     sessionId: null,
   };
   set({ panels: [...state.panels, panel], seq: n + 1 });

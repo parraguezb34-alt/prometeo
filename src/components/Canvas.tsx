@@ -5,6 +5,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import {
+  addTeam,
   addTerminal,
   clampZoom,
   getLayout,
@@ -16,6 +17,7 @@ import {
 import { termKill } from "../lib/pty";
 import { PanelFrame } from "./PanelFrame";
 import { TerminalPanel } from "./TerminalPanel";
+import { TeamPanel } from "./TeamPanel";
 
 /** Below this zoom the canvas switches to semantic zoom (LOD) mode. */
 const LOD_ZOOM = 0.35;
@@ -131,6 +133,16 @@ export function Canvas() {
     );
   };
 
+  const addTeamAtCenter = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const v = getLayout().view;
+    addTeam(
+      Math.round((el.clientWidth / 2 - v.x) / v.zoom) - 310,
+      Math.round((el.clientHeight / 2 - v.y) / v.zoom) - 235,
+    );
+  };
+
   const closePanel = (id: string, sessionId: string | null) => {
     if (sessionId) termKill(sessionId).catch(() => {});
     removePanel(id);
@@ -170,7 +182,11 @@ export function Canvas() {
             panel={p}
             onClose={() => closePanel(p.id, p.sessionId)}
           >
-            <TerminalPanel panel={p} lod={lod} />
+            {p.kind === "team" ? (
+              <TeamPanel panel={p} />
+            ) : (
+              <TerminalPanel panel={p} lod={lod} />
+            )}
           </PanelFrame>
         ))}
       </div>
@@ -178,6 +194,12 @@ export function Canvas() {
       <div className="toolbar ui-overlay">
         <button onClick={addAtCenter} title="Nueva terminal (o doble clic en el lienzo)">
           + Terminal
+        </button>
+        <button
+          onClick={addTeamAtCenter}
+          title="Panel del equipo: actividad, tareas y conexión de agentes"
+        >
+          + Equipo
         </button>
         <button onClick={() => zoomAtCenter(1 / 1.25)} title="Alejar">
           −
@@ -195,7 +217,8 @@ export function Canvas() {
       </div>
 
       <div className="hint">
-        Arrastra el fondo para mover · Rueda = zoom · Doble clic = nueva terminal
+        Arrastra el fondo para mover · Rueda = zoom · Doble clic = nueva terminal · + Equipo =
+        agentes trabajando en conjunto
       </div>
     </div>
   );

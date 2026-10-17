@@ -114,8 +114,13 @@ pub fn term_spawn(
     let shell = default_shell();
     let mut cmd = CommandBuilder::new(shell.clone());
     cmd.env("TERM", "xterm-256color");
+    // Any agent launched inside a lienzo terminal can find the team hub.
+    for (key, value) in crate::hub::terminal_env_vars() {
+        cmd.env(key, value);
+    }
     let dir = cwd
         .filter(|d| std::path::Path::new(d).is_dir())
+        .or_else(crate::hub::default_terminal_dir)
         .or_else(home_dir);
     if let Some(dir) = dir {
         cmd.cwd(dir);
