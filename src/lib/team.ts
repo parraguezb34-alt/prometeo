@@ -21,6 +21,11 @@ export type TeamAgent = {
   pid: number;
   last_seen_ms: number;
   online: boolean;
+  /** Telemetría real reportada por el puente (Claude Code): modelo y contexto. */
+  model?: string | null;
+  ctx_tokens?: number | null;
+  ctx_window?: number | null;
+  ctx_ms?: number | null;
 };
 
 export type TeamTask = {

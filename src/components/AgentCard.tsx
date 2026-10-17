@@ -75,6 +75,18 @@ export function AgentQuickCmds({
   );
 }
 
+/** "62k", "9.4k", "820" */
+function fmtTokens(n: number): string {
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${n}`;
+}
+
+/** "claude-opus-4-5-20260101" → "opus-4-5" */
+function shortModel(m: string): string {
+  return m.replace(/^claude-/, "").replace(/-\d{8}$/, "");
+}
+
 /** Mini-card of one connected agent in the sidebar. */
 export function AgentCard({
   agent,
@@ -99,6 +111,14 @@ export function AgentCard({
 }) {
   const name = agent.name;
   const isLeader = leader === name;
+  const ctx =
+    agent.ctx_tokens != null && agent.ctx_window
+      ? {
+          tokens: agent.ctx_tokens,
+          window: agent.ctx_window,
+          pct: Math.min(100, Math.round((agent.ctx_tokens / agent.ctx_window) * 100)),
+        }
+      : null;
   return (
     <div
       className="cc-agent-card"
@@ -139,6 +159,25 @@ export function AgentCard({
           {task ? `#${task.id} ${task.title}` : last ? last.text : "sin actividad aún"}
         </span>
       </div>
+      {ctx && (
+        <div
+          className="cc-ctx"
+          title={`Contexto usado: ${fmtTokens(ctx.tokens)} de ${fmtTokens(ctx.window)} tokens (${ctx.pct}%)${
+            agent.model ? ` · ${agent.model}` : ""
+          }`}
+        >
+          <div className="cc-ctx-bar">
+            <i
+              data-w={ctx.pct >= 80 ? "hi" : ctx.pct >= 60 ? "mid" : "ok"}
+              style={{ width: `${ctx.pct}%` }}
+            />
+          </div>
+          <span className="cc-ctx-label">
+            Ctx {ctx.pct}%{ctx.pct >= 80 ? " ⚠️" : ""}
+          </span>
+          {agent.model ? <span className="cc-ctx-model">{shortModel(agent.model)}</span> : null}
+        </div>
+      )}
       <AgentQuickCmds agent={name} onCmd={onCmd} />
     </div>
   );

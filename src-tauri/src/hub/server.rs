@@ -147,6 +147,10 @@ fn cmd_join(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 project: project.clone(),
                 pid,
                 last_seen_ms: now,
+                model: None,
+                ctx_tokens: None,
+                ctx_window: None,
+                ctx_ms: None,
             },
         );
         let norm = project.replace('\\', "/");
@@ -214,6 +218,13 @@ fn cmd_event(app: &AppHandle, payload: &Value) -> Result<Value, String> {
             .unwrap_or_default();
         let to = payload["to"].as_str().map(|s| s.to_string());
         let ev = hub::push_event(inner, &agent, &sid, &kind, &text, files, to);
+        // Telemetría opcional del puente: modelo y uso de contexto reales.
+        let model = payload["model"].as_str().map(|s| s.to_string());
+        let ctx_tokens = payload["ctx_tokens"].as_u64();
+        let ctx_window = payload["ctx_window"].as_u64();
+        if model.is_some() || ctx_tokens.is_some() {
+            hub::report_ctx(inner, &sid, &agent, model, ctx_tokens, ctx_window);
+        }
         hub::persist(inner);
         json!({ "seq": ev.seq })
     })

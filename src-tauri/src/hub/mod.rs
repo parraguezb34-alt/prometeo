@@ -30,6 +30,15 @@ pub struct AgentInfo {
     pub project: String,
     pub pid: u32,
     pub last_seen_ms: u64,
+    /// Última telemetría que reportó el puente (uso real de contexto).
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub ctx_tokens: Option<u64>,
+    #[serde(default)]
+    pub ctx_window: Option<u64>,
+    #[serde(default)]
+    pub ctx_ms: Option<u64>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -258,6 +267,10 @@ pub fn snapshot(inner: &HubInner, limit: usize) -> serde_json::Value {
                 "pid": a.pid,
                 "last_seen_ms": a.last_seen_ms,
                 "online": now.saturating_sub(a.last_seen_ms) < AGENT_TTL_MS,
+                "model": a.model,
+                "ctx_tokens": a.ctx_tokens,
+                "ctx_window": a.ctx_window,
+                "ctx_ms": a.ctx_ms,
             })
         })
         .collect();
@@ -339,6 +352,44 @@ pub fn last_broadcast_seq(inner: &HubInner) -> u64 {
 pub fn touch_agent(inner: &mut HubInner, session_id: &str) {
     if let Some(agent) = inner.agents.get_mut(session_id) {
         agent.last_seen_ms = now_ms();
+    }
+}
+
+/// Guarda la telemetría de contexto que reporta el puente (uso real de tokens
+/// leído del transcript del agente). Busca por sesión y, si no, por nombre.
+pub fn report_ctx(
+    inner: &mut HubInner,
+    session_id: &str,
+    agent_name: &str,
+    model: Option<String>,
+    tokens: Option<u64>,
+    window: Option<u64>,
+) {
+    let key = if !session_id.is_empty() && inner.agents.contains_key(session_id) {
+        session_id.to_string()
+    } else {
+        inner
+            .agents
+            .iter()
+            .filter(|(_, a)| a.name == agent_name)
+            .max_by_key(|(_, a)| a.last_seen_ms)
+            .map(|(k, _)| k.clone())
+            .unwrap_or_default()
+    };
+    if key.is_empty() {
+        return;
+    }
+    if let Some(agent) = inner.agents.get_mut(&key) {
+        if model.is_some() {
+            agent.model = model;
+        }
+        if let Some(t) = tokens {
+            agent.ctx_tokens = Some(t);
+        }
+        if let Some(w) = window {
+            agent.ctx_window = Some(w);
+        }
+        agent.ctx_ms = Some(now_ms());
     }
 }
 

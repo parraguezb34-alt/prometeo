@@ -1248,6 +1248,54 @@ body,
   text-overflow: ellipsis;
 }
 
+.cc-ctx {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cc-ctx-bar {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  border-radius: 999px;
+  background: #1a2338;
+  overflow: hidden;
+}
+
+.cc-ctx-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #9ece6a;
+  transition: width 0.3s ease;
+}
+
+.cc-ctx-bar i[data-w="mid"] {
+  background: #e0af68;
+}
+
+.cc-ctx-bar i[data-w="hi"] {
+  background: #f7768e;
+}
+
+.cc-ctx-label {
+  flex: none;
+  font-size: 10px;
+  color: #5c688b;
+  white-space: nowrap;
+}
+
+.cc-ctx-model {
+  flex: none;
+  font-size: 10px;
+  color: #46527a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 92px;
+}
+
 .cc-cmds {
   display: flex;
   gap: 4px;

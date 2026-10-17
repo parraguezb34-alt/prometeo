@@ -9,7 +9,7 @@
 
 use lienzo_lib::hub::client::HubClient;
 use serde_json::{json, Value};
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -694,10 +694,25 @@ fn hook_mode(args: &[String]) {
 
     let session_key = payload["session_id"].as_str().unwrap_or("").to_string();
 
-    let _ = client.post(
-        "/event",
-        &json!({ "agent": agent, "kind": kind, "text": text, "files": files }),
-    );
+    // Telemetría de contexto: Claude Code deja el uso real de tokens en el
+    // transcript de la sesión; leemos su cola y lo mandamos junto al evento.
+    let (model, ctx_tokens, ctx_window) = if agent == "claude" {
+        transcript_usage(payload["transcript_path"].as_str().unwrap_or(""))
+    } else {
+        (None, None, None)
+    };
+
+    let mut body = json!({ "agent": agent, "kind": kind, "text": text, "files": files });
+    if let Some(m) = &model {
+        body["model"] = json!(m);
+    }
+    if let Some(t) = ctx_tokens {
+        body["ctx_tokens"] = json!(t);
+    }
+    if let Some(w) = ctx_window {
+        body["ctx_window"] = json!(w);
+    }
+    let _ = client.post("/event", &body);
 
     // Broadcasts the user sent to the whole team that this session hasn't seen.
     let pending = fetch_pending(&client, &agent, &session_key);
@@ -747,6 +762,65 @@ fn hook_mode(args: &[String]) {
                 })
             );
         }
+    }
+}
+
+/// Uso de contexto del último turno de un transcript de Claude Code (JSONL).
+/// Devuelve (modelo, tokens de contexto usados, ventana del modelo).
+fn transcript_usage(path: &str) -> (Option<String>, Option<u64>, Option<u64>) {
+    if path.is_empty() {
+        return (None, None, None);
+    }
+    let Ok(meta) = std::fs::metadata(path) else {
+        return (None, None, None);
+    };
+    if !meta.is_file() {
+        return (None, None, None);
+    }
+    // Solo la cola: los transcripts crecen mucho (resultados de herramientas).
+    const TAIL: u64 = 512 * 1024;
+    let start = meta.len().saturating_sub(TAIL);
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return (None, None, None);
+    };
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return (None, None, None);
+    }
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
+        return (None, None, None);
+    }
+    // La primera línea puede venir cortada (empezamos en mitad del archivo);
+    // los JSON inválidos se saltan solos.
+    let text = String::from_utf8_lossy(&bytes);
+    for line in text.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v["type"].as_str() != Some("assistant") || v["isSidechain"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        let usage = &v["message"]["usage"];
+        let used = usage["input_tokens"].as_u64().unwrap_or(0)
+            + usage["cache_read_input_tokens"].as_u64().unwrap_or(0)
+            + usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+        if used == 0 {
+            continue;
+        }
+        let model = v["message"]["model"].as_str().unwrap_or("").to_string();
+        let model = if model.is_empty() { None } else { Some(model) };
+        let window = model.as_deref().map(model_window).unwrap_or(200_000);
+        return (model, Some(used), Some(window));
+    }
+    (None, None, None)
+}
+
+/// Tamaño de ventana de contexto por modelo (200k por defecto; `…-1m` → 1M).
+fn model_window(model: &str) -> u64 {
+    if model.to_lowercase().contains("1m") {
+        1_000_000
+    } else {
+        200_000
     }
 }
 
