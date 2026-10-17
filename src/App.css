@@ -718,6 +718,7 @@ body,
 
 .cc-summary {
   flex: none;
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -905,6 +906,7 @@ body,
   all: unset;
   flex: 1;
   min-width: 0;
+  user-select: text;
   background: #0b0f19;
   border: 1px solid #232a3d;
   border-radius: 7px;
@@ -1082,6 +1084,7 @@ body,
   min-height: 18px;
   max-height: 132px;
   overflow-y: auto;
+  user-select: text;
   background: #0b0f19;
   border: 1px solid #3b4d7a;
   border-radius: 10px;
