@@ -12,6 +12,8 @@ export type Panel = {
   title: string;
   /** PTY session id attached to this panel (survives frontend reloads). */
   sessionId: string | null;
+  /** Command the terminal runs on spawn (e.g. an agent CLI). */
+  cmd?: string | null;
 };
 
 export type View = { x: number; y: number; zoom: number };
@@ -137,6 +139,29 @@ export function addTeam(x: number, y: number): Panel {
     h: 470,
     title: "Equipo",
     sessionId: null,
+  };
+  set({ panels: [...state.panels, panel], seq: n + 1 });
+  return panel;
+}
+
+/** A terminal panel that starts already running a command (e.g. an agent CLI). */
+export function addAgentTerminal(
+  x: number,
+  y: number,
+  title: string,
+  cmd: string,
+): Panel {
+  const n = state.seq;
+  const panel: Panel = {
+    id: `p${n}`,
+    kind: "terminal",
+    x,
+    y,
+    w: 720,
+    h: 470,
+    title,
+    sessionId: null,
+    cmd,
   };
   set({ panels: [...state.panels, panel], seq: n + 1 });
   return panel;

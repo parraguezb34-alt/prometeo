@@ -474,3 +474,62 @@ pub fn team_connect(app: tauri::AppHandle, agent: String, project: Option<String
 
     Ok(json!({ "files": files, "notes": notes }))
 }
+
+/// Where to open an agent: a terminal command (`pty`) or its desktop app (`app`).
+pub fn launch_target(agent: &str) -> Option<Value> {
+    let local = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    match agent {
+        "claude" | "codex" => {
+            let def = AGENTS.iter().find(|d| d.id == agent)?;
+            if cli_installed(def) {
+                Some(json!({ "kind": "pty", "cmd": agent }))
+            } else {
+                None
+            }
+        }
+        "opencode" => {
+            let bundled = local.join(r"Programs\@opencode-aidesktop\resources\opencode-cli.exe");
+            if bundled.exists() {
+                Some(json!({ "kind": "pty", "cmd": bundled.display().to_string() }))
+            } else if which("opencode") {
+                Some(json!({ "kind": "pty", "cmd": "opencode" }))
+            } else {
+                None
+            }
+        }
+        "antigravity" => {
+            let app_exe = local.join(r"Programs\antigravity\Antigravity.exe");
+            if app_exe.exists() {
+                Some(json!({ "kind": "app", "exe": app_exe.display().to_string() }))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Open an agent: returns `{kind:"pty", cmd}` for the frontend to spawn in a
+/// terminal panel, or launches its desktop app (`kind:"app"`) directly.
+#[tauri::command]
+pub fn team_open(app: tauri::AppHandle, agent: String) -> Result<Value, String> {
+    let spec = launch_target(&agent)
+        .ok_or_else(|| format!("no encontré cómo abrir «{}» — ¿está instalado?", agent))?;
+    if spec.get("kind").and_then(|k| k.as_str()) == Some("app") {
+        let exe = spec
+            .get("exe")
+            .and_then(|e| e.as_str())
+            .ok_or("ruta de la app no encontrada")?;
+        let mut cmd = Command::new(exe);
+        if let Some(project) = project_of(&app).filter(|p| !p.trim().is_empty()) {
+            cmd.arg(project);
+        }
+        cmd.spawn()
+            .map_err(|e| format!("no se pudo abrir {}: {e}", exe))?;
+        Ok(json!({ "kind": "app" }))
+    } else {
+        Ok(spec)
+    }
+}

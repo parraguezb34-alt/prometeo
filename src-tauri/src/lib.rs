@@ -26,6 +26,7 @@ pub fn run() {
             hub::team_task_op,
             hub::connectors::team_detect,
             hub::connectors::team_connect,
+            hub::connectors::team_open,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

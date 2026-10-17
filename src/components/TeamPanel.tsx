@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Panel } from "../store";
+import { addAgentTerminal } from "../store";
 import {
   agentColor,
   ago,
@@ -10,6 +11,7 @@ import {
   teamConnect,
   teamDetect,
   teamDetails,
+  teamOpen,
   teamProjectSet,
   teamState,
   teamTaskOp,
@@ -37,7 +39,7 @@ const STATUS_LABEL: Record<string, string> = {
   done: "hecha",
 };
 
-export function TeamPanel(_props: { panel: Panel }) {
+export function TeamPanel({ panel }: { panel: Panel }) {
   const [tab, setTab] = useState<Tab>("feed");
   const [state, setState] = useState<TeamState | null>(null);
   const [detect, setDetect] = useState<DetectResult | null>(null);
@@ -46,6 +48,7 @@ export function TeamPanel(_props: { panel: Panel }) {
   const [taskDraft, setTaskDraft] = useState("");
   const [flash, setFlash] = useState<{ text: string; err?: boolean } | null>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [opening, setOpening] = useState<string | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
 
   const say = useCallback((text: string, err = false) => {
@@ -128,6 +131,28 @@ export function TeamPanel(_props: { panel: Panel }) {
       say(errMsg(e), true);
     } finally {
       setConnecting(null);
+    }
+  };
+
+  const openAgent = async (id: string, label: string) => {
+    setOpening(id);
+    try {
+      const det = detect?.agents.find((x) => x.id === id);
+      if (!det?.connected) {
+        await teamConnect(id, projectDraft.trim() || null);
+        refreshDetect();
+      }
+      const r = await teamOpen(id);
+      if (r.kind === "app") {
+        say(`✓ ${label} abriéndose en la carpeta del equipo.`);
+      } else {
+        addAgentTerminal(panel.x + panel.w + 28, panel.y, label, r.cmd);
+        say(`✓ ${label} abriéndose en una terminal del lienzo…`);
+      }
+    } catch (e) {
+      say(errMsg(e), true);
+    } finally {
+      setOpening(null);
     }
   };
 
@@ -269,6 +294,14 @@ export function TeamPanel(_props: { panel: Panel }) {
                   <span className="agent-name">{a.label}</span>
                   <button
                     className="agent-btn"
+                    data-ghost="1"
+                    disabled={opening === a.id}
+                    onClick={() => openAgent(a.id, a.label)}
+                  >
+                    {opening === a.id ? "Abriendo…" : "Abrir"}
+                  </button>
+                  <button
+                    className="agent-btn"
                     disabled={a.connected || connecting === a.id || !projectDraft.trim()}
                     onClick={() => connect(a.id)}
                   >
@@ -294,8 +327,8 @@ export function TeamPanel(_props: { panel: Panel }) {
             <div className="team-section-title">Sesiones en línea</div>
             {agents.length === 0 ? (
               <div className="team-empty">
-                Ninguna sesión conectada todavía. Abre Claude Code (u otro agente) en una
-                terminal de lienzo o en un proyecto conectado.
+                Ninguna sesión conectada todavía. Pulsa «Abrir» en un agente para lanzarlo
+                en una terminal del lienzo, ya dentro del proyecto.
               </div>
             ) : (
               agents.map((a) => (

@@ -42,8 +42,11 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 1. Abre el panel **Equipo** (`+ Equipo` en la barra) → pestaña **Agentes**.
 2. Escribe la carpeta del proyecto y pulsa **Guardar**.
 3. Pulsa **Conectar** en el agente que quieras (Claude Code, Codex, OpenCode, Antigravity).
-4. Abre el agente (por ejemplo `claude`) en una terminal — ya está en el equipo:
-   verás su actividad en el feed y él verá la tuya vía `team_context` / hooks.
+4. Pulsa **Abrir** para lanzarlo ya dentro del proyecto: Claude/Codex/OpenCode se abren
+   en una **terminal del lienzo** (OpenCode usa su CLI v2, `mcp.servers`); Antigravity
+   se abre en su app con la carpeta del equipo. También puedes abrirlo tú en una
+   terminal — ya está en el equipo: verás su actividad en el feed y él verá la tuya
+   vía `team_context` / hooks.
 
 ## Ejecutar (desarrollo)
 

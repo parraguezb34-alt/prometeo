@@ -73,11 +73,15 @@ export type ConnectResult = {
   notes: string[];
 };
 
+export type OpenResult = { kind: "pty"; cmd: string } | { kind: "app" };
+
 export const teamState = () => invoke<TeamState>("team_state");
 export const teamDetails = () => invoke<TeamDetails>("team_details");
 export const teamDetect = () => invoke<DetectResult>("team_detect");
 export const teamConnect = (agent: string, project: string | null) =>
   invoke<ConnectResult>("team_connect", { agent, project });
+export const teamOpen = (agent: string) =>
+  invoke<OpenResult>("team_open", { agent });
 export const teamProjectSet = (path: string | null) =>
   invoke<void>("team_project_set", { path });
 export const teamAddTask = (title: string) =>

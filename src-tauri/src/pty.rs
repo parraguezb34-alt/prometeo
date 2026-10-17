@@ -93,6 +93,9 @@ fn append_scrollback(buffer: &Arc<Mutex<VecDeque<u8>>>, bytes: &[u8]) {
 
 /// Spawn a new terminal session. Returns its id; the frontend subscribes to
 /// `pty://data` and `pty://exit` events afterwards.
+///
+/// When `command` is set, the shell starts already running it (used by the
+/// team panel to open agent sessions like `claude` or the OpenCode CLI).
 #[tauri::command]
 pub fn term_spawn(
     app: AppHandle,
@@ -100,6 +103,7 @@ pub fn term_spawn(
     cwd: Option<String>,
     cols: u16,
     rows: u16,
+    command: Option<String>,
 ) -> Result<SessionInfo, String> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -113,6 +117,28 @@ pub fn term_spawn(
 
     let shell = default_shell();
     let mut cmd = CommandBuilder::new(shell.clone());
+    if let Some(line) = command.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let sh = shell.to_ascii_lowercase();
+        let is_ps = sh.contains("pwsh") || sh.contains("powershell");
+        let needs_quote = line.contains([' ', '\\', '/']);
+        if is_ps {
+            cmd.arg("-NoLogo");
+            cmd.arg("-NoExit");
+            cmd.arg("-Command");
+            cmd.arg(if needs_quote {
+                format!("& '{}'", line.replace('\'', "''"))
+            } else {
+                line.to_string()
+            });
+        } else {
+            cmd.arg("/K");
+            cmd.arg(if needs_quote {
+                format!("\"{}\"", line)
+            } else {
+                line.to_string()
+            });
+        }
+    }
     cmd.env("TERM", "xterm-256color");
     // Any agent launched inside a lienzo terminal can find the team hub.
     for (key, value) in crate::hub::terminal_env_vars() {

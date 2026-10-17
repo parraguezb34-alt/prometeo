@@ -98,7 +98,7 @@ export const TerminalPanel = memo(function TerminalPanel({
         }
       }
       if (!sid) {
-        const info = await termSpawn(null, term.cols, term.rows);
+        const info = await termSpawn(null, term.cols, term.rows, panel.cmd ?? null);
         sid = info.id;
         if (disposedRef.current) {
           termKill(sid).catch(() => {});

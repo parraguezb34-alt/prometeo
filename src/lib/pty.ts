@@ -17,8 +17,12 @@ export function base64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
-export const termSpawn = (cwd: string | null, cols: number, rows: number) =>
-  invoke<SessionInfo>("term_spawn", { cwd, cols, rows });
+export const termSpawn = (
+  cwd: string | null,
+  cols: number,
+  rows: number,
+  command: string | null = null,
+) => invoke<SessionInfo>("term_spawn", { cwd, cols, rows, command });
 
 export const termWrite = (id: string, data: string) =>
   invoke<void>("term_write", { id, data });

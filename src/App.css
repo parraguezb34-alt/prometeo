@@ -439,6 +439,16 @@ body,
   cursor: default;
 }
 
+.agent-btn[data-ghost="1"] {
+  background: transparent;
+  border: 1px solid #3b4d7a;
+  color: #c8d3e8;
+}
+
+.agent-btn[data-ghost="1"]:hover {
+  background: #1a2238;
+}
+
 .team-project {
   display: flex;
   gap: 6px;
