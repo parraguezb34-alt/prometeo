@@ -31,10 +31,13 @@ const STATUS_LABEL: Record<string, string> = {
 export function TeamPanel({
   panel,
   initialTab,
+  launchMode,
   onTerminalOpen,
 }: {
   panel?: Panel;
   initialTab?: Tab;
+  /** Modo con el que se lanzan los agentes desde aqui (plan = sin editar). */
+  launchMode?: "plan" | "exec";
   onTerminalOpen?: (panel: Panel) => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab ?? "feed");
@@ -152,7 +155,7 @@ export function TeamPanel({
         await teamConnect(id, projectDraft.trim() || null);
         refreshDetect();
       }
-      const r = await teamOpen(id);
+      const r = await teamOpen(id, launchMode ?? "exec");
       if (r.kind === "app") {
         say(`✓ ${label} abriéndose en la carpeta del equipo.`);
       } else {

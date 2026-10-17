@@ -195,12 +195,17 @@ fn merge_hooks(settings: &mut Value, exe: &str, agent: &str) {
         *hooks = json!({});
     }
     let hooks = hooks.as_object_mut().unwrap();
-    let defs: [(&str, &str, Option<&str>); 4] = [
+    let mut defs: Vec<(&str, &str, Option<&str>)> = vec![
         ("SessionStart", "session", None),
         ("UserPromptSubmit", "prompt", None),
         ("PostToolUse", "tool", Some("Edit|Write|MultiEdit|NotebookEdit|Bash")),
         ("Stop", "stop", None),
     ];
+    // Claude avisa cuando un agente se queda esperando permiso o respuesta:
+    // eso alimenta la bandeja de bloqueos del centro de mando.
+    if agent == "claude" {
+        defs.push(("Notification", "waiting", None));
+    }
     for (event, flag, matcher) in defs {
         let arr = hooks.entry(event).or_insert_with(|| json!([]));
         if !arr.is_array() {
@@ -480,7 +485,8 @@ pub fn team_connect(app: tauri::AppHandle, agent: String, project: Option<String
 }
 
 /// Where to open an agent: a terminal command (`pty`) or its desktop app (`app`).
-pub fn launch_target(agent: &str) -> Option<Value> {
+/// `plan` starts the CLI read-only in its planning mode when it has one.
+pub fn launch_target(agent: &str, plan: bool) -> Option<Value> {
     let local = std::env::var("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_default();
@@ -488,7 +494,13 @@ pub fn launch_target(agent: &str) -> Option<Value> {
         "claude" | "codex" => {
             let def = AGENTS.iter().find(|d| d.id == agent)?;
             if cli_installed(def) {
-                Some(json!({ "kind": "pty", "cmd": agent }))
+                // Claude Code: `--permission-mode plan` lo arranca en plan.
+                let cmd = if plan && agent == "claude" {
+                    "claude --permission-mode plan".to_string()
+                } else {
+                    agent.to_string()
+                };
+                Some(json!({ "kind": "pty", "cmd": cmd }))
             } else {
                 None
             }
@@ -508,14 +520,19 @@ pub fn launch_target(agent: &str) -> Option<Value> {
             // terminal; fall back to opening its desktop app.
             // `--dangerously-skip-permissions` stops the constant tool
             // permission prompts — remove the flag here to get them back.
+            let flags = if plan {
+                "--dangerously-skip-permissions --mode plan"
+            } else {
+                "--dangerously-skip-permissions"
+            };
             let agy = local.join(r"agy\bin\agy.exe");
             if agy.exists() {
                 Some(json!({
                     "kind": "pty",
-                    "cmd": format!("\"{}\" --dangerously-skip-permissions", agy.display())
+                    "cmd": format!("\"{}\" {}", agy.display(), flags)
                 }))
             } else if which("agy") {
-                Some(json!({ "kind": "pty", "cmd": "agy --dangerously-skip-permissions" }))
+                Some(json!({ "kind": "pty", "cmd": format!("agy {}", flags) }))
             } else {
                 let app_exe = local.join(r"Programs\antigravity\Antigravity.exe");
                 if app_exe.exists() {
@@ -531,9 +548,12 @@ pub fn launch_target(agent: &str) -> Option<Value> {
 
 /// Open an agent: returns `{kind:"pty", cmd}` for the frontend to spawn in a
 /// terminal panel, or launches its desktop app (`kind:"app"`) directly.
+/// `mode = "plan"` starts the CLI in its read-only planning mode when it
+/// supports one.
 #[tauri::command]
-pub fn team_open(app: tauri::AppHandle, agent: String) -> Result<Value, String> {
-    let spec = launch_target(&agent)
+pub fn team_open(app: tauri::AppHandle, agent: String, mode: Option<String>) -> Result<Value, String> {
+    let plan = mode.as_deref() == Some("plan");
+    let spec = launch_target(&agent, plan)
         .ok_or_else(|| format!("no encontré cómo abrir «{}» — ¿está instalado?", agent))?;
     if spec.get("kind").and_then(|k| k.as_str()) == Some("app") {
         let exe = spec

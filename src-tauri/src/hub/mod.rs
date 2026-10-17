@@ -561,6 +561,24 @@ pub fn team_task_op(hub: tauri::State<'_, Hub>, id: u64, op: String) -> Result<(
     Ok(())
 }
 
+/// Change who coordinates the team, without touching the charter.
+#[tauri::command]
+pub fn team_leader(hub: tauri::State<'_, Hub>, leader: Option<String>) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    inner.leader = leader.and_then(|l| {
+        let t = l.trim().to_string();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
+    });
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
 /// Log a direct user message to one agent in the feed (the text itself is typed
 /// into its terminal by the UI, so the agent receives it as a prompt).
 #[tauri::command]

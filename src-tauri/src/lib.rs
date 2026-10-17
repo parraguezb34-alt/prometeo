@@ -1,4 +1,5 @@
 pub mod hub;
+mod project;
 mod pty;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,12 +26,18 @@ pub fn run() {
             hub::team_add_task,
             hub::team_task_op,
             hub::team_dm,
+            hub::team_leader,
             hub::team_broadcast,
             hub::team_broadcast_ack,
             hub::team_charter,
             hub::connectors::team_detect,
             hub::connectors::team_connect,
             hub::connectors::team_open,
+            project::project_info,
+            project::project_status,
+            project::project_list,
+            project::project_read,
+            project::project_recent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

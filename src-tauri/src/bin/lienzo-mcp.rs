@@ -680,6 +680,15 @@ fn hook_mode(args: &[String]) {
         }
         "stop" => ("stop", "terminó su turno".to_string(), vec![]),
         "session" => ("session", "sesión iniciada".to_string(), vec![]),
+        // Claude pide atencion (permiso, pregunta o lleva rato esperando).
+        "waiting" => (
+            "waiting",
+            trunc(
+                payload["message"].as_str().unwrap_or("esperando tu respuesta"),
+                240,
+            ),
+            vec![],
+        ),
         _ => ("event", event.clone(), vec![]),
     };
 

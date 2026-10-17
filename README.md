@@ -5,7 +5,7 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 
 ## Estado actual (F1 + Equipo) ✅
 
-- **Centro de Mando (vista principal)**: los agentes viven en un **dock** compacto (qué hace cada uno *ahora mismo* y qué tarea tiene), el centro es un **escenario** con Tareas + Actividad en tiempo real, y las **terminales se abren bajo demanda en un cajón lateral** (pulsa un agente; `Esc` cierra). El **lienzo espacial** sigue disponible como vista secundaria (`⬚ Lienzo` / `← Comando`); las terminales ocultas siguen vivas (PTY + scrollback).
+- **Centro de Mando (vista principal)**: chat del equipo + **espacio de artefactos** en pestañas — `💬 Feed` (mensajes y sistema en vivo), `± Cambios` (git status + diff del proyecto), `👁 Preview` (HTML/SVG en iframe, MD/CSV como texto; se recarga solo cuando un agente guarda), `📁 Archivos` (explorador + atajos a Normas y `.agents/skills`). Cada agente es una **mini-tarjeta** en la barra lateral: estado, 👑 líder (clic para cambiarlo), `▸_` terminal bajo demanda, selector de **modelo**, alternar **modo**, 🔄 **relevo** (pide resumen para continuar) y 🧹 **compactar**. El input de misión soporta **menciones** (`@todos`, `@lider`, `@claude`…) y el disparo `📋 Planificar` / `⚡ Ejecutar`: en plan la misión va **solo al líder** y nadie edita hasta tu OK (Claude arranca con `--permission-mode plan`, Antigravity con `--mode plan`). Los **bloqueos** (agente esperando permiso o respuesta, vía hook `Notification`) aparecen en `🚨 Bloqueos` encima de la lista de agentes. El **lienzo espacial** sigue disponible como vista secundaria (`⬚ Lienzo` / `← Comando`); las terminales ocultas siguen vivas (PTY + scrollback) y se re-adjuntan al abrirlas.
 - **Lienzo infinito**: arrastra el fondo para mover, rueda del ratón para zoom al cursor, `Shift+rueda` para desplazarte en horizontal.
 - **Terminales reales** (ConPTY vía `portable-pty`) como paneles:
   - Doble clic en el lienzo → nueva terminal.
@@ -35,16 +35,19 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 | Gestor PTY (Rust) | `src-tauri/src/pty.rs` | Spawn de shell, streaming base64 por eventos `pty://data` / `pty://exit`, scrollback ring buffer, inyecta env del hub |
 | Hub de equipo (Rust) | `src-tauri/src/hub/mod.rs` | Estado compartido: agentes, feed, tareas, reservas; persistencia en `%APPDATA%\lienzo\team-state.json` |
 | API HTTP del hub | `src-tauri/src/hub/server.rs` | `127.0.0.1` puerto aleatorio + token: `/join`, `/event`, `/feed`, `/state`, `/task`, `/claim`, `/release`, `/broadcast`, `/pending`, `/charter` |
-| Conectores | `src-tauri/src/hub/connectors.rs` | Detección de agentes y escritura de configs (Claude/Codex/OpenCode/Antigravity) |
+| Conectores | `src-tauri/src/hub/connectors.rs` | Detección de agentes, escritura de configs (Claude/Codex/OpenCode/Antigravity) y lanzamiento (`team_open`, flag de modo plan) |
+| Proyecto (Rust) | `src-tauri/src/project.rs` | Ventana de solo lectura a la carpeta: git status/diff, listados y lecturas con tope de tamaño (nunca sale de la raíz) |
 | Puente MCP | `src-tauri/src/bin/lienzo-mcp.rs` | Servidor MCP por stdio (`team_*` + recursos `team://`) y modo `hook` para Claude Code / Codex |
-| Registro de comandos | `src-tauri/src/lib.rs` | `term_*` + `team_*` (estado, tareas, detectar/conectar agentes) |
+| Registro de comandos | `src-tauri/src/lib.rs` | `term_*` + `team_*` (estado, tareas, líder, detectar/conectar/lanzar agentes) + `project_*` |
 | Estado del lienzo | `src/store.ts` | Paneles (terminal/equipo/progreso) + vista con `useSyncExternalStore` y persistencia |
 | Lienzo | `src/components/Canvas.tsx` | Paneo, zoom, LOD, barra de herramientas |
 | Marco de panel | `src/components/PanelFrame.tsx` | Mover, redimensionar, cerrar, traer al frente |
 | Terminal | `src/components/TerminalPanel.tsx` | xterm.js + re-attach a la sesión PTY |
 | Panel Equipo | `src/components/TeamPanel.tsx` | Actividad, tareas, agentes, prompt para todos (📣), normas y líder (también en el cajón del Centro de Mando) |
 | Panel Progreso | `src/components/TasksPanel.tsx` | Barra de avance, agentes en línea y tablero compacto |
-| Centro de Mando | `src/components/CommandCenter.tsx` | Vista principal: dock de agentes, escenario (tareas + actividad), cajón de terminal y de equipo |
+| Centro de Mando | `src/components/CommandCenter.tsx` | Vista principal: pestañas de artefactos, chat del equipo y por agente, tarjetas de agente, menciones y disparo Plan/Ejecutar |
+| Tarjeta de agente | `src/components/AgentCard.tsx` | Estado, líder, terminal y comandos rápidos por CLI (modelo, modo, relevo, compactar) |
+| Pestañas de artefactos | `src/components/DiffTab.tsx`, `PreviewTab.tsx`, `FilesTab.tsx` | Cambios (git diff), preview con recarga automática y explorador del proyecto |
 | Feed compartido | `src/components/FeedList.tsx` | Lista de actividad reutilizada por el panel Equipo y el Centro de Mando |
 
 ## Conectar un agente (equipo)

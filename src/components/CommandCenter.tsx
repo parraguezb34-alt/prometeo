@@ -5,21 +5,31 @@ import {
   agentColor,
   agentKeyFromCmd,
   ago,
+  buildPlanPrompt,
   errMsg,
   onTeamUpdate,
   pushBroadcast,
+  pushPlan,
   shortPath,
   teamAddTask,
   teamConnect,
-  teamDm,
+  teamDetails,
   teamDetect,
+  teamDm,
+  teamLeader,
   teamOpen,
   teamState,
   teamTaskOp,
 } from "../lib/team";
 import type { DetectResult, TeamEvent, TeamState } from "../lib/team";
 import { termWrite } from "../lib/pty";
+import { projectInfo } from "../lib/project";
+import type { ProjectInfo } from "../lib/project";
 import { GLYPHS } from "./FeedList";
+import { AgentCard, AgentQuickCmds } from "./AgentCard";
+import { DiffTab } from "./DiffTab";
+import { FilesTab } from "./FilesTab";
+import { PreviewTab } from "./PreviewTab";
 import { TeamPanel } from "./TeamPanel";
 import { TerminalPanel } from "./TerminalPanel";
 
@@ -28,7 +38,23 @@ type Mode = "command" | "canvas";
 /** Conversation shown in the central chat: the whole team or one agent. */
 type Sel = { kind: "team" } | { kind: "agent"; name: string };
 
+/** What the center shows for the team destination. */
+type CenterView = "feed" | "diff" | "preview" | "files";
+
+/** Mission trigger mode: plan-first or straight to execution. */
+type Shoot = "plan" | "exec";
+
 type Drawer = { kind: "team"; agents?: boolean } | null;
+
+const SHOOT_KEY = "lienzo.shoot.v1";
+
+function loadShoot(): Shoot {
+  try {
+    return localStorage.getItem(SHOOT_KEY) === "plan" ? "plan" : "exec";
+  } catch {
+    return "exec";
+  }
+}
 
 /** Terminal panel (if any) that belongs to a hub agent name. */
 function panelForAgent(panels: Panel[], agentName: string): Panel | undefined {
@@ -38,21 +64,30 @@ function panelForAgent(panels: Panel[], agentName: string): Panel | undefined {
 }
 
 /**
- * Centro de Mando: la vista principal, con forma de chat (como Claude Code o
- * OpenCode). A la izquierda el equipo, sus agentes y las tareas; en el centro la
- * conversacion con el equipo o con un agente (con pestana de terminal integrada);
- * abajo la caja de texto. El lienzo espacial queda como vista de topologia.
+ * Centro de Mando: vista principal. A la izquierda el equipo (agentes con sus
+ * controles, tareas y bloqueos); en el centro el espacio de artefactos (feed,
+ * diffs, preview, archivos) o la conversacion con un agente; abajo el input de
+ * mision con modo Planificar/Ejecutar. Las terminales viven ocultas pero vivas,
+ * listas para verse bajo demanda.
  */
 export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const layout = useLayout();
   const [state, setState] = useState<TeamState | null>(null);
   const [detect, setDetect] = useState<DetectResult | null>(null);
+  const [info, setInfo] = useState<ProjectInfo | null>(null);
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [sel, setSel] = useState<Sel>({ kind: "team" });
+  const [view, setView] = useState<CenterView>("feed");
   const [tab, setTab] = useState<"chat" | "term">("chat");
+  const [shoot, setShoot] = useState<Shoot>(loadShoot);
+  const [taskFilter, setTaskFilter] = useState<"all" | "active" | "done">("all");
+  const [changeCount, setChangeCount] = useState<number | null>(null);
+  const [previewRel, setPreviewRel] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [taskDraft, setTaskDraft] = useState("");
   const [opening, setOpening] = useState<string | null>(null);
+  const [hubOk, setHubOk] = useState(true);
+  const [hubUrl, setHubUrl] = useState("");
   const [flash, setFlash] = useState<{ text: string; err?: boolean } | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
   const chatRef = useRef<HTMLDivElement>(null);
@@ -67,8 +102,11 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
 
   const refresh = useCallback(() => {
     teamState()
-      .then(setState)
-      .catch(() => {});
+      .then((s) => {
+        setState(s);
+        setHubOk(true);
+      })
+      .catch(() => setHubOk(false));
   }, []);
 
   const refreshDetect = useCallback(() => {
@@ -78,6 +116,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   useEffect(() => {
     refresh();
     refreshDetect();
+    teamDetails().then((d) => setHubUrl(d.url)).catch(() => {});
     const unlisten = onTeamUpdate(refresh);
     const interval = window.setInterval(refresh, 4000);
     return () => {
@@ -97,14 +136,45 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [drawer]);
 
+  const project = state?.project ?? null;
+
+  // Rama git del proyecto, para la barra superior.
+  useEffect(() => {
+    let alive = true;
+    if (!project) {
+      setInfo(null);
+      return;
+    }
+    projectInfo(project)
+      .then((i) => alive && setInfo(i))
+      .catch(() => alive && setInfo(null));
+    return () => {
+      alive = false;
+    };
+  }, [project]);
+
   const tasks = state?.tasks ?? [];
   const agents = state?.agents ?? [];
   const online = agents.filter((a) => a.online);
   const leader = state?.leader ?? "";
   const done = tasks.filter((t) => t.status === "done").length;
   const total = tasks.length;
+  const openTasks = tasks.filter((t) => t.status !== "done").length;
 
-  // Task each agent is currently holding (claimed) → subtitle of its chat.
+  // Latest activity per agent (joins/leaves aside) → cards + bloqueos.
+  const lastByAgent = useMemo(() => {
+    const m = new Map<string, TeamEvent>();
+    for (const e of state?.events ?? []) {
+      if (e.kind === "join" || e.kind === "leave") continue;
+      const prev = m.get(e.agent);
+      if (!prev || e.seq > prev.seq) m.set(e.agent, e);
+    }
+    return m;
+  }, [state]);
+
+  const blocked = online.filter((a) => lastByAgent.get(a.name)?.kind === "waiting");
+
+  // Task each agent is currently holding (claimed).
   const claimedBy = useMemo(() => {
     const m = new Map<string, { id: number; title: string }>();
     for (const t of tasks) {
@@ -143,38 +213,70 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   useEffect(() => {
     const el = chatRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [selKey, tab, msgs.length]);
+  }, [selKey, tab, view, msgs.length]);
 
   const selectAgent = (name: string, to: "chat" | "term" = "chat") => {
     setSel({ kind: "agent", name });
     setTab(to);
   };
 
-  /** Connect (if needed) and launch an agent, then open its terminal here. */
-  const launchAgent = async (id: string, label: string) => {
+  const setShootMode = (m: Shoot) => {
+    setShoot(m);
+    try {
+      localStorage.setItem(SHOOT_KEY, m);
+    } catch {
+      /* storage unavailable: mode won't persist */
+    }
+  };
+
+  /** Connect (if needed) and launch an agent. Returns whether it worked. */
+  const launchAgent = async (
+    id: string,
+    label: string,
+    opts: { selectTerm?: boolean } = { selectTerm: true },
+  ): Promise<boolean> => {
     setOpening(id);
     try {
       const det = detect?.agents.find((x) => x.id === id);
       if (!det?.connected) {
-        await teamConnect(id, state?.project ?? null);
+        await teamConnect(id, project);
         refreshDetect();
       }
-      const r = await teamOpen(id);
+      const r = await teamOpen(id, shoot);
       if (r.kind === "app") {
         say(`✓ ${label} se está abriendo en su app de escritorio…`);
       } else {
         const spot = autoSpot();
         addAgentTerminal(spot.x, spot.y, label, r.cmd);
-        selectAgent(agentKeyFromCmd(r.cmd), "term");
-        setDrawer(null);
-        say(`✓ ${label} lanzado. Su terminal está abierta aquí.`);
+        if (opts.selectTerm) {
+          selectAgent(agentKeyFromCmd(r.cmd), "term");
+          setDrawer(null);
+        }
+        say(`✓ ${label} lanzado${shoot === "plan" ? " en modo plan" : ""}.`);
       }
       refresh();
+      return true;
     } catch (e) {
       say(errMsg(e), true);
+      return false;
     } finally {
       setOpening(null);
     }
+  };
+
+  /** One click: connect + launch every agent CLI found on this machine. */
+  const launchSquad = async () => {
+    const list = (detect?.agents ?? []).filter((a) => a.cli_found || a.config_dir_found);
+    if (list.length === 0) {
+      say("No encontré CLIs de agentes (claude, opencode, codex, agy) en este equipo.", true);
+      return;
+    }
+    let ok = 0;
+    for (const a of list) {
+      const launched = await launchAgent(a.id, a.label, { selectTerm: false });
+      if (launched) ok += 1;
+    }
+    say(`⚡ Escuadrón: ${ok} de ${list.length} agentes en marcha${shoot === "plan" ? " (modo plan)" : ""}.`);
   };
 
   /** Open the selected agent's terminal tab, or launch it if it has none. */
@@ -184,44 +286,124 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     else launchAgent(name, name).catch(() => {});
   };
 
-  /** Send the composer: team → broadcast with protocol; agent → direct message
-   * typed into its terminal (and logged in the feed). */
-  const send = async () => {
-    const text = draft.trim();
-    if (!text) return;
-    const one = text.replace(/\s*\n+\s*/g, " ");
-    if (sel.kind === "team") {
-      try {
-        const typed = await pushBroadcast(one, leader);
-        setDraft("");
-        if (areaRef.current) areaRef.current.style.height = "auto";
-        refresh();
-        say(
-          typed > 0
-            ? `📣 Misión escrita en ${typed} terminal(es) de agentes, con instrucciones de coordinación.`
-            : "📣 Publicada en el feed (no hay terminales de agentes abiertas ahora mismo).",
-        );
-      } catch (e) {
-        say(errMsg(e), true);
-      }
+  /** Type a command/keystroke into an agent terminal (model, compact, Esc…). */
+  const writeAgent = async (name: string, data: string, note: string) => {
+    const p = panelForAgent(layout.panels, name);
+    if (!p?.sessionId) {
+      say(`${name} no tiene terminal abierta: dale a ▸_ para poder mandarle «${note}».`, true);
       return;
     }
-    const name = sel.name;
     try {
-      const p = panelForAgent(layout.panels, name);
-      if (p?.sessionId) await termWrite(p.sessionId, `${one}\r`);
-      await teamDm(name, text);
+      await termWrite(p.sessionId, data);
+      say(`⌨ ${note} → ${name}`);
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
+  const toggleLeader = async (name: string) => {
+    try {
+      await teamLeader(leader === name ? null : name);
+      refresh();
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
+  /** Send the composer. Supports mentions (@todos, @lider, @agente) and the
+   * Planificar / Ejecutar trigger. */
+  const send = async () => {
+    const raw = draft.trim();
+    if (!raw) return;
+
+    let target: Sel = sel;
+    let body = raw;
+    const m = /^@([\w\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1.-]+)\s+([\s\S]+)$/.exec(raw);
+    if (m) {
+      const key = m[1].toLowerCase();
+      if (["todos", "equipo", "all"].includes(key)) {
+        target = { kind: "team" };
+      } else if (["lider", "líder", "leader"].includes(key)) {
+        if (leader) target = { kind: "agent", name: leader };
+        else say("No hay líder elegido; lo mando al equipo entero.", true);
+      } else {
+        const found = agents.find((a) => a.name.toLowerCase() === key);
+        if (!found) {
+          say(`No conozco a «${m[1]}» — usa @todos, @lider o el nombre de un agente.`, true);
+          return;
+        }
+        target = { kind: "agent", name: found.name };
+      }
+      body = m[2];
+    }
+    const flat = body.replace(/\s*\n+\s*/g, " ");
+    const clear = () => {
       setDraft("");
       if (areaRef.current) areaRef.current.style.height = "auto";
+    };
+
+    try {
+      if (target.kind === "team") {
+        if (shoot === "plan" && leader) {
+          // Modo plan con líder: solo el líder recibe la misión (y no toca nada).
+          const p = panelForAgent(layout.panels, leader);
+          if (p?.sessionId) {
+            await termWrite(p.sessionId, `${buildPlanPrompt(flat, leader)}\r`);
+          }
+          await teamDm(leader, `📋 (modo plan) ${body}`);
+          clear();
+          refresh();
+          say(
+            p?.sessionId
+              ? `📋 Plan pedido a ${leader} (líder). Propondrá el reparto sin editar nada.`
+              : `📋 Guardado para ${leader}; abre su terminal para que lo reciba.`,
+          );
+        } else if (shoot === "plan") {
+          const typed = await pushPlan(flat, "");
+          clear();
+          refresh();
+          say(
+            typed > 0
+              ? `📋 Plan pedido a ${typed} terminal(es): nadie edita hasta tu OK.`
+              : "📋 Publicado en el feed (sin terminales de agentes abiertas).",
+          );
+        } else {
+          const typed = await pushBroadcast(flat, leader);
+          clear();
+          refresh();
+          say(
+            typed > 0
+              ? `📣 Misión escrita en ${typed} terminal(es), con instrucciones de coordinación.`
+              : "📣 Publicada en el feed (sin terminales de agentes abiertas ahora).",
+          );
+        }
+        return;
+      }
+
+      // Mensaje directo a un agente.
+      const name = target.name;
+      const prompt = shoot === "plan" ? buildPlanPrompt(flat, leader) : flat;
+      const p = panelForAgent(layout.panels, name);
+      if (p?.sessionId) await termWrite(p.sessionId, `${prompt}\r`);
+      await teamDm(name, shoot === "plan" ? `📋 (modo plan) ${body}` : body);
+      clear();
       refresh();
       say(
         p?.sessionId
-          ? `✉ Enviado a ${name}.`
-          : `✉ Guardado en el feed; ábrele terminal para que ${name} lo reciba.`,
+          ? `✉ Enviado a ${name}${shoot === "plan" ? " (modo plan: propone sin editar)" : ""}.`
+          : `✉ Guardado en el feed; abre su terminal para que ${name} lo reciba.`,
       );
     } catch (e) {
       say(errMsg(e), true);
     }
+  };
+
+  const mention = (key: string) => {
+    setDraft((d) => {
+      const stripped = d.replace(/^@[\w\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1.-]+\s+/, "");
+      return `@${key} ${stripped}`;
+    });
+    areaRef.current?.focus();
   };
 
   const addTask = async () => {
@@ -245,6 +427,9 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     }
   };
 
+  const openDrawer = (agents = true) => setDrawer({ kind: "team", agents });
+  const onDiffCount = useCallback((n: number) => setChangeCount(n), []);
+
   const renderEvent = (e: TeamEvent) => {
     const mine = e.agent === "tú";
     if (e.kind === "message" || (mine && e.kind === "broadcast")) {
@@ -257,9 +442,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
             {e.to ? <span>→ {e.to}</span> : null}
             <span>{ago(e.ts_ms)}</span>
           </div>
-          <div className="cc-msg-body">
-            {e.kind === "broadcast" ? `📣 ${e.text}` : e.text}
-          </div>
+          <div className="cc-msg-body">{e.kind === "broadcast" ? `📣 ${e.text}` : e.text}</div>
         </div>
       );
     }
@@ -283,6 +466,118 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const agentRow = agentView ? agents.find((a) => a.name === agentView) : undefined;
   const agentTask = agentView ? claimedBy.get(agentView) : undefined;
   const termPanel = agentView ? panelForAgent(layout.panels, agentView) : undefined;
+  const termInlineId =
+    sel.kind === "agent" && tab === "term" && termPanel ? termPanel.id : null;
+
+  // Terminals not shown inline still live (mounted off-screen) so the agents
+  // keep working and are ready the moment you look at them.
+  const hiddenTerms = layout.panels.filter(
+    (p) => p.kind === "terminal" && !!p.cmd && p.id !== termInlineId,
+  );
+
+  const filteredTasks = tasks
+    .filter((t) =>
+      taskFilter === "all"
+        ? true
+        : taskFilter === "done"
+          ? t.status === "done"
+          : t.status !== "done",
+    )
+    .slice()
+    .reverse();
+
+  const teamHead = (
+    <div className="cc-chat-head">
+      <div className="cc-chat-tabs cc-chat-tabs-left">
+        <button data-active={view === "feed" ? "1" : "0"} onClick={() => setView("feed")}>
+          💬 Feed
+        </button>
+        <button data-active={view === "diff" ? "1" : "0"} onClick={() => setView("diff")}>
+          ± Cambios{changeCount ? ` (${changeCount})` : ""}
+        </button>
+        <button data-active={view === "preview" ? "1" : "0"} onClick={() => setView("preview")}>
+          👁 Preview
+        </button>
+        <button data-active={view === "files" ? "1" : "0"} onClick={() => setView("files")}>
+          📁 Archivos
+        </button>
+      </div>
+      <span className="cc-chat-sub">
+        {online.length} en línea
+        {leader ? ` · líder: ${leader}` : ""}
+        {project ? ` · ${shortPath(project)}` : ""}
+      </span>
+    </div>
+  );
+
+  const composer = (
+    <div className="cc-input-wrap">
+      <div className="cc-input-top">
+        <div className="cc-pills">
+          <button className="cc-pill" onClick={() => mention("todos")} title="Misión para todo el equipo">
+            👥 Todos
+          </button>
+          <button
+            className="cc-pill"
+            disabled={!leader}
+            onClick={() => mention("lider")}
+            title={leader ? `Solo para el líder (${leader})` : "Elige un líder para esto"}
+          >
+            👑 Líder
+          </button>
+          {agents.map((a) => (
+            <button
+              className="cc-pill"
+              key={a.session_id}
+              onClick={() => mention(a.name)}
+              title={`Solo para ${a.name}`}
+            >
+              @{a.name}
+            </button>
+          ))}
+        </div>
+        <div className="cc-shoot" title="Planificar = analiza y propone el reparto sin tocar código; Ejecutar = a trabajar ya">
+          <button data-active={shoot === "plan" ? "1" : "0"} onClick={() => setShootMode("plan")}>
+            📋 Planificar
+          </button>
+          <button data-active={shoot === "exec" ? "1" : "0"} onClick={() => setShootMode("exec")}>
+            ⚡ Ejecutar
+          </button>
+        </div>
+      </div>
+      <div className="cc-input">
+        <textarea
+          ref={areaRef}
+          rows={1}
+          value={draft}
+          placeholder={
+            sel.kind === "team"
+              ? shoot === "plan"
+                ? "Misión en modo plan: el líder propondrá el reparto y esperará tu OK…"
+                : "Misión para todo el equipo… (Enter envía, Shift+Enter salto de línea; @lider, @claude…)"
+              : shoot === "plan"
+                ? `Plan para ${sel.name}: analiza y propone sin editar nada…`
+                : `Mensaje para ${sel.name}… (se escribe en su terminal)`
+          }
+          onChange={(e) => {
+            setDraft(e.target.value);
+            const el = e.currentTarget;
+            el.style.height = "auto";
+            el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+        />
+        <button className="agent-btn cc-send" disabled={!draft.trim()} onClick={send}>
+          Enviar
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="cc">
@@ -291,7 +586,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
           <span className="cc-logo">⬒</span> lienzo
         </div>
         <div className="cc-modes">
-          <button data-active="1" title="Centro de mando: chat con tu equipo">
+          <button data-active="1" title="Centro de mando: chat, diffs, preview y archivos">
             ◫ Comando
           </button>
           <button
@@ -302,18 +597,32 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
             ⬚ Lienzo
           </button>
         </div>
+        <button
+          className="cc-proj"
+          data-warn={project ? "0" : "1"}
+          onClick={() => openDrawer(true)}
+          title={project ? `Proyecto: ${project}\nPulsa para cambiarlo` : "Elegir la carpeta del proyecto"}
+        >
+          {project ? `📁 ${shortPath(project)}` : "📁 sin carpeta"}
+          {info?.repo ? <span className="cc-branch"> · 🌿 {info.branch || "…"}</span> : null}
+        </button>
         <div className="cc-summary">
-          <span>{total > 0 ? `${done}/${total} tareas` : "sin tareas"}</span>
+          <button
+            className="cc-hub"
+            data-on={hubOk ? "1" : "0"}
+            onClick={() => say(hubUrl ? `Hub local: ${hubUrl}` : "Hub local: sin datos todavía.")}
+            title={hubUrl ? `Hub del equipo: ${hubUrl}` : "Hub del equipo"}
+          >
+            ● Hub
+          </button>
+          <span>
+            {done}/{total} tareas
+          </span>
           <span>·</span>
           <span>
             {online.length} agente{online.length === 1 ? "" : "s"}
           </span>
-          <button
-            className="agent-btn"
-            data-ghost="1"
-            onClick={() => setDrawer({ kind: "team", agents: true })}
-            title="Gestionar equipo: agentes, normas y proyecto"
-          >
+          <button className="agent-btn" data-ghost="1" onClick={() => openDrawer(true)}>
             ⚙ Equipo
           </button>
         </div>
@@ -326,77 +635,99 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
               className="cc-dest"
               data-active={sel.kind === "team" ? "1" : "0"}
               onClick={() => setSel({ kind: "team" })}
-              title="Chat del equipo: todo lo que hacen los agentes, en vivo"
+              title="Centro de artefactos + chat del equipo"
             >
               <span>💬 Equipo</span>
               <span className="cc-dest-sub">{online.length} en línea</span>
             </button>
 
+            {blocked.length > 0 && (
+              <>
+                <div className="cc-side-title">🚨 Bloqueos</div>
+                {blocked.map((a) => {
+                  const ev = lastByAgent.get(a.name);
+                  return (
+                    <div className="cc-block" key={a.session_id}>
+                      <div className="cc-block-text">🚨 {ev?.text ?? "pide tu respuesta"}</div>
+                      <div className="cc-block-actions">
+                        <button className="task-btn" onClick={() => selectAgent(a.name)}>
+                          Responder
+                        </button>
+                        <button className="task-btn" onClick={() => openTerm(a.name)}>
+                          ▸_ Terminal
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+
             <div className="cc-side-title">Agentes</div>
             {agents.length === 0 && (
               <div className="cc-side-empty">
-                Sin sesiones conectadas todavía. Usa «＋ Conectar» para traer a tu equipo.
+                Sin sesiones conectadas todavía. Usa «＋ Conectar» o lanza el escuadrón.
               </div>
             )}
             {agents.map((a) => (
-              <div
-                className="cc-side-agent"
+              <AgentCard
                 key={a.session_id}
-                data-active={
-                  sel.kind === "agent" && sel.name === a.name ? "1" : "0"
-                }
-                onClick={() => selectAgent(a.name)}
-                title={`Hablar con ${a.name}`}
-              >
-                <span className="agent-dot" data-on={a.online ? "1" : "0"} />
-                <span style={{ color: agentColor(a.name) }}>{a.name}</span>
-                {leader === a.name && <span className="prog-lead">líder</span>}
-                <span className="cc-side-seen">
-                  {a.online ? `hace ${ago(a.last_seen_ms)}` : "offline"}
-                </span>
-                <button
-                  className="cc-side-term"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openTerm(a.name);
-                  }}
-                  title={
-                    panelForAgent(layout.panels, a.name)
-                      ? "Ver su terminal aquí"
-                      : "Lanzar su terminal"
-                  }
-                >
-                  ▸_
-                </button>
-              </div>
+                agent={a}
+                leader={leader}
+                active={sel.kind === "agent" && sel.name === a.name}
+                task={claimedBy.get(a.name)}
+                last={lastByAgent.get(a.name)}
+                onSelect={() => selectAgent(a.name)}
+                onTerminal={() => openTerm(a.name)}
+                onCrown={() => toggleLeader(a.name)}
+                onCmd={(cmd, note) => writeAgent(a.name, cmd, note)}
+              />
             ))}
-            <button
-              className="cc-side-connect"
-              onClick={() => setDrawer({ kind: "team", agents: true })}
-            >
+            <button className="cc-side-connect" onClick={() => openDrawer(true)}>
               ＋ Conectar / abrir agentes
             </button>
 
             <div className="cc-side-title">
-              Tareas ({tasks.filter((t) => t.status !== "done").length})
+              Tareas ({openTasks} abiertas)
+            </div>
+            <div className="cc-filters">
+              <button data-active={taskFilter === "all" ? "1" : "0"} onClick={() => setTaskFilter("all")}>
+                Todas
+              </button>
+              <button
+                data-active={taskFilter === "active" ? "1" : "0"}
+                onClick={() => setTaskFilter("active")}
+              >
+                En curso
+              </button>
+              <button
+                data-active={taskFilter === "done" ? "1" : "0"}
+                onClick={() => setTaskFilter("done")}
+              >
+                Hechas
+              </button>
             </div>
             {tasks.length === 0 && (
               <div className="cc-side-empty">
                 Sin tareas. El equipo las crea al trabajar, o añade una aquí abajo.
               </div>
             )}
-            {[...tasks].reverse().map((t) => (
+            {filteredTasks.map((t) => (
               <div
                 className="cc-task"
                 key={t.id}
                 data-done={t.status === "done" ? "1" : "0"}
+                onClick={() => (project ? setView("diff") : openDrawer(true))}
+                title={
+                  project
+                    ? "Ver los cambios del proyecto en el centro"
+                    : "Elige la carpeta del proyecto para ver cambios"
+                }
               >
                 <span className="task-chip" data-s={t.status}>
                   #{t.id}
                 </span>
-                <span className="cc-task-title" title={t.title}>
-                  {t.title}
-                </span>
+                <span className="cc-task-title">{t.title}</span>
                 {t.owner && (
                   <span
                     className="cc-task-owner"
@@ -409,7 +740,10 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                 {t.status === "done" ? (
                   <button
                     className="cc-task-btn"
-                    onClick={() => taskOp(t.id, "reopen")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      taskOp(t.id, "reopen");
+                    }}
                     title="Reabrir"
                   >
                     ↺
@@ -417,7 +751,10 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                 ) : (
                   <button
                     className="cc-task-btn"
-                    onClick={() => taskOp(t.id, "done")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      taskOp(t.id, "done");
+                    }}
                     title="Marcar hecha"
                   >
                     ✓
@@ -444,122 +781,156 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
 
         <section className="cc-conv">
           {sel.kind === "team" ? (
-            <div className="cc-chat-head">
-              <span className="cc-chat-title">💬 Equipo</span>
-              <span className="cc-chat-sub">
-                {online.length} en línea
-                {leader ? ` · líder: ${leader}` : ""}
-                {state?.project ? ` · ${shortPath(state.project)}` : ""}
-              </span>
-            </div>
-          ) : (
-            <div className="cc-chat-head">
-              <span className="agent-dot" data-on={agentRow?.online ? "1" : "0"} />
-              <span className="cc-chat-title" style={{ color: agentColor(sel.name) }}>
-                {sel.name}
-              </span>
-              {leader === sel.name && <span className="prog-lead">líder</span>}
-              <span className="cc-chat-sub">
-                {agentTask
-                  ? `#${agentTask.id} ${agentTask.title}`
-                  : agentRow
-                    ? agentRow.online
-                      ? `en línea · visto hace ${ago(agentRow.last_seen_ms)}`
-                      : "sin sesión viva"
-                    : "sin sesión conectada"}
-              </span>
-              <div className="cc-chat-tabs">
-                <button
-                  data-active={tab === "chat" ? "1" : "0"}
-                  onClick={() => setTab("chat")}
-                >
-                  💬 Conversación
-                </button>
-                <button
-                  data-active={tab === "term" ? "1" : "0"}
-                  onClick={() => setTab("term")}
-                >
-                  ▸_ Terminal
-                </button>
-              </div>
-            </div>
-          )}
-
-          {sel.kind === "agent" && tab === "term" ? (
-            termPanel ? (
-              <div className="cc-termbox">
-                <TerminalPanel panel={termPanel} lod={false} />
-              </div>
-            ) : (
-              <div className="cc-empty">
-                <div>
-                  {sel.name} todavía no tiene terminal abierta.
-                  <br />
-                  Ábrela aquí y podrás verlo trabajar y escribirle directo.
-                </div>
-                <button
-                  className="agent-btn"
-                  disabled={opening === sel.name}
-                  onClick={() => launchAgent(sel.name, sel.name)}
-                >
-                  {opening === sel.name ? "Abriendo…" : "▸_ Lanzar terminal"}
-                </button>
-              </div>
-            )
-          ) : (
             <>
-              <div className="cc-chat" ref={chatRef} onScroll={onChatScroll}>
-                {msgs.length === 0 ? (
-                  <div className="cc-empty">
-                    {sel.kind === "team" ? (
-                      <>
-                        Aquí verás todo lo que hace el equipo: mensajes, tareas, avances y
-                        avisos, en vivo.
-                        <br />
-                        Escribe abajo una misión y se repartirá con instrucciones de
-                        coordinación.
-                      </>
+              {teamHead}
+              {view === "feed" && (
+                <>
+                  <div className="cc-chat" ref={chatRef} onScroll={onChatScroll}>
+                    {msgs.length === 0 ? (
+                      online.length === 0 ? (
+                        <div className="cc-empty">
+                          <div className="cc-empty-title">Tu equipo, en un clic</div>
+                          <div className="cc-quick">
+                            <button className="cc-quick-card" onClick={launchSquad}>
+                              <b>⚡ Lanzar escuadrón</b>
+                              <span>Abre los agentes instalados ya dentro del proyecto (en modo plan si lo tienes puesto).</span>
+                            </button>
+                            <button className="cc-quick-card" onClick={() => openDrawer(true)}>
+                              <b>📂 Carpeta del proyecto</b>
+                              <span>Elige dónde trabajan los agentes y de dónde salen los diffs y el preview.</span>
+                            </button>
+                            <button className="cc-quick-card" onClick={() => openDrawer(true)}>
+                              <b>📜 Normas del equipo</b>
+                              <span>Ajusta el Charter, elige líder y conecta cada CLI.</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="cc-empty">
+                          Aquí verás todo lo que hace el equipo: mensajes, tareas, avances y avisos,
+                          en vivo.
+                          <br />
+                          Escribe abajo una misión y se repartirá con instrucciones de coordinación.
+                        </div>
+                      )
                     ) : (
-                      <>
-                        Conversación con {sel.name}. Lo que escribas va directo a su
-                        terminal; sus avances y mensajes aparecerán aquí.
-                      </>
+                      msgs.map(renderEvent)
                     )}
                   </div>
-                ) : (
-                  msgs.map(renderEvent)
-                )}
-              </div>
-              <div className="cc-input">
-                <textarea
-                  ref={areaRef}
-                  rows={1}
-                  value={draft}
-                  placeholder={
-                    sel.kind === "team"
-                      ? "Misión para todo el equipo… (Enter envía, Shift+Enter salto de línea)"
-                      : `Mensaje para ${sel.name}… (se escribe en su terminal)`
-                  }
-                  onChange={(e) => {
-                    setDraft(e.target.value);
-                    const el = e.currentTarget;
-                    el.style.height = "auto";
-                    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
+                  {composer}
+                </>
+              )}
+              {view === "diff" && (
+                <DiffTab
+                  project={project}
+                  onChooseProject={() => openDrawer(true)}
+                  onCount={onDiffCount}
+                />
+              )}
+              {view === "preview" && (
+                <PreviewTab
+                  project={project}
+                  events={state?.events ?? []}
+                  openRel={previewRel}
+                  onChooseProject={() => openDrawer(true)}
+                />
+              )}
+              {view === "files" && (
+                <FilesTab
+                  project={project}
+                  onChooseProject={() => openDrawer(true)}
+                  onCharter={() => openDrawer(true)}
+                  onPreview={(rel) => {
+                    setPreviewRel(rel);
+                    setView("preview");
                   }}
                 />
-                <button className="agent-btn cc-send" disabled={!draft.trim()} onClick={send}>
-                  Enviar
-                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="cc-chat-head">
+                <span className="agent-dot" data-on={agentRow?.online ? "1" : "0"} />
+                <span className="cc-chat-title" style={{ color: agentColor(sel.name) }}>
+                  {sel.name}
+                </span>
+                {leader === sel.name && <span className="prog-lead">líder</span>}
+                <span className="cc-chat-sub">
+                  {agentTask
+                    ? `#${agentTask.id} ${agentTask.title}`
+                    : agentRow
+                      ? agentRow.online
+                        ? `en línea · visto hace ${ago(agentRow.last_seen_ms)}`
+                        : "sin sesión viva"
+                      : "sin sesión conectada"}
+                </span>
+                <div className="cc-chat-tabs">
+                  <button data-active={tab === "chat" ? "1" : "0"} onClick={() => setTab("chat")}>
+                    💬 Conversación
+                  </button>
+                  <button data-active={tab === "term" ? "1" : "0"} onClick={() => setTab("term")}>
+                    ▸_ Terminal
+                  </button>
+                </div>
               </div>
+
+              {tab === "term" ? (
+                termPanel ? (
+                  <div className="cc-termwrap">
+                    <div className="cc-term-bar">
+                      <AgentQuickCmds
+                        agent={sel.name}
+                        withEsc
+                        onCmd={(cmd, note) => writeAgent(sel.name, cmd, note)}
+                      />
+                      <span className="cc-term-hint">⌨ se escribe en su terminal</span>
+                    </div>
+                    <div className="cc-termbox">
+                      <TerminalPanel panel={termPanel} lod={false} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="cc-empty">
+                    <div>
+                      {sel.name} todavía no tiene terminal abierta.
+                      <br />
+                      Ábrela aquí y podrás verlo trabajar y escribirle directo.
+                    </div>
+                    <button
+                      className="agent-btn"
+                      disabled={opening === sel.name}
+                      onClick={() => launchAgent(sel.name, sel.name)}
+                    >
+                      {opening === sel.name ? "Abriendo…" : "▸_ Lanzar terminal"}
+                    </button>
+                  </div>
+                )
+              ) : (
+                <>
+                  <div className="cc-chat" ref={chatRef} onScroll={onChatScroll}>
+                    {msgs.length === 0 ? (
+                      <div className="cc-empty">
+                        Conversación con {sel.name}. Lo que escribas va directo a su terminal; sus
+                        avances y mensajes aparecerán aquí.
+                      </div>
+                    ) : (
+                      msgs.map(renderEvent)
+                    )}
+                  </div>
+                  {composer}
+                </>
+              )}
             </>
           )}
         </section>
+      </div>
+
+      {/* Terminales ocultas pero vivas: los agentes siguen corriendo aunque no
+          estés mirándolos, y aparecen al instante al abrir su pestaña. */}
+      <div className="cc-hideterms" aria-hidden="true">
+        {hiddenTerms.map((p) => (
+          <TerminalPanel key={p.id} panel={p} lod={false} />
+        ))}
       </div>
 
       {flash && (
@@ -574,17 +945,14 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
           <aside className="cc-drawer">
             <div className="cc-drawer-head">
               <span className="cc-drawer-title">Equipo — agentes, normas y proyecto</span>
-              <button
-                className="panel-close"
-                onClick={() => setDrawer(null)}
-                title="Cerrar (Esc)"
-              >
+              <button className="panel-close" onClick={() => setDrawer(null)} title="Cerrar (Esc)">
                 ✕
               </button>
             </div>
             <div className="cc-drawer-body">
               <TeamPanel
                 initialTab={drawer.agents ? "agents" : "feed"}
+                launchMode={shoot}
                 onTerminalOpen={(p) => {
                   selectAgent(agentKeyFromCmd(p.cmd ?? ""), "term");
                   setDrawer(null);

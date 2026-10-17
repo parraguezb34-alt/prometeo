@@ -79,13 +79,16 @@ export type ConnectResult = {
 
 export type OpenResult = { kind: "pty"; cmd: string } | { kind: "app" };
 
+/** How an agent is launched: `plan` arranca su modo de planificacion. */
+export type OpenMode = "plan" | "exec";
+
 export const teamState = () => invoke<TeamState>("team_state");
 export const teamDetails = () => invoke<TeamDetails>("team_details");
 export const teamDetect = () => invoke<DetectResult>("team_detect");
 export const teamConnect = (agent: string, project: string | null) =>
   invoke<ConnectResult>("team_connect", { agent, project });
-export const teamOpen = (agent: string) =>
-  invoke<OpenResult>("team_open", { agent });
+export const teamOpen = (agent: string, mode: OpenMode = "exec") =>
+  invoke<OpenResult>("team_open", { agent, mode });
 export const teamProjectSet = (path: string | null) =>
   invoke<void>("team_project_set", { path });
 /** Send a prompt to every connected agent (feed + terminal injection). */
@@ -95,6 +98,9 @@ export const teamBroadcastAck = (agents: string[]) => invoke<void>("team_broadca
 /** Save the shared team rules and/or pick the leader. */
 export const teamCharter = (charter: string | null, leader: string | null) =>
   invoke<void>("team_charter", { charter, leader });
+/** Change who coordinates the team (without touching the charter). */
+export const teamLeader = (leader: string | null) =>
+  invoke<void>("team_leader", { leader });
 export const teamAddTask = (title: string) =>
   invoke<void>("team_add_task", { title });
 export const teamTaskOp = (id: number, op: string) =>
@@ -169,19 +175,37 @@ export function buildBroadcastPrompt(text: string, leader: string): string {
   );
 }
 
-/** Publish a prompt to the whole team: feed + typed into every open agent
- * terminal (wrapped with the coordination protocol). Returns how many agents
- * received it directly in their terminal. */
-export async function pushBroadcast(text: string, leader: string): Promise<number> {
+/** Wrap a request in "plan first" mode: analyze, propose tasks, touch nothing. */
+export function buildPlanPrompt(text: string, leader: string): string {
+  return (
+    "📋 MODO PLAN (el usuario aprueba antes de tocar código) — petición: «" +
+    text +
+    "». " +
+    (leader ? `Líder del equipo: ${leader}; reparte tú. ` : "") +
+    "Analiza el proyecto (team_context, team_feed, los archivos) y NO edites ni reserves archivos " +
+    "todavía. Descompón el trabajo en tareas claras con team_task_create (una por parte, con título " +
+    "accionable) y publica tu plan con team_update: qué tarea, qué agente debería llevarla y en qué " +
+    "orden. Espera la aprobación del usuario para empezar."
+  );
+}
+
+/** Publish a plan request to the whole team: nobody edits until the user says so. */
+export function pushPlan(text: string, leader: string): Promise<number> {
+  return pushPrompt(text, buildPlanPrompt(text, leader));
+}
+
+/** Type a raw prompt into every open agent terminal (publishes `text` on the
+ * feed too, and acks the delivery so hooks don't repeat it). Returns how many
+ * agents got it directly in their terminal. */
+export async function pushPrompt(text: string, prompt: string): Promise<number> {
   await teamBroadcast(text);
-  const typedPrompt = buildBroadcastPrompt(text, leader);
   const panels = getLayout().panels.filter(
     (p) => p.kind === "terminal" && !!p.sessionId && !!p.cmd,
   );
   const agentsTyped = new Set<string>();
   for (const p of panels) {
     try {
-      await termWrite(p.sessionId!, `${typedPrompt}\r`);
+      await termWrite(p.sessionId!, `${prompt}\r`);
       agentsTyped.add(agentKeyFromCmd(p.cmd ?? ""));
     } catch {
       /* session may have died; the feed still has the message */
@@ -192,4 +216,64 @@ export async function pushBroadcast(text: string, leader: string): Promise<numbe
     await teamBroadcastAck([...agentsTyped]).catch(() => {});
   }
   return agentsTyped.size;
+}
+
+/** Publish a prompt to the whole team: feed + typed into every open agent
+ * terminal (wrapped with the coordination protocol). Returns how many agents
+ * received it directly in their terminal. */
+export function pushBroadcast(text: string, leader: string): Promise<number> {
+  return pushPrompt(text, buildBroadcastPrompt(text, leader));
+}
+
+/** Prompt asking an agent for a handover summary before compacting/relaying. */
+export const HANDOVER_PROMPT =
+  "Publica un relevo compacto con team_update: qué has hecho, qué falta, decisiones tomadas y " +
+  "dónde lo dejaste (para poder continuar después, incluso tras compactar).";
+
+export type AgentCommands = {
+  /** Slash commands to switch model (or open its picker). */
+  model: { label: string; cmd: string }[];
+  /** Keystroke that cycles its mode (Plan / permisos) in the TUI. */
+  modeSeq: string | null;
+  /** Command that compacts its context. */
+  compact: string | null;
+};
+
+/** What we know how to inject into each agent CLI (conservative: only what is
+ * verified for that CLI; unknown commands would end up as a prompt). */
+export function agentCommands(agent: string): AgentCommands {
+  switch (agent.toLowerCase()) {
+    case "claude":
+      return {
+        model: [
+          { label: "Abrir selector (/model)", cmd: "/model" },
+          { label: "Opus", cmd: "/model opus" },
+          { label: "Sonnet", cmd: "/model sonnet" },
+          { label: "Haiku", cmd: "/model haiku" },
+          { label: "Predeterminado", cmd: "/model default" },
+        ],
+        modeSeq: "\x1b[Z",
+        compact: "/compact",
+      };
+    case "opencode":
+      return {
+        model: [{ label: "Abrir selector (/models)", cmd: "/models" }],
+        modeSeq: "\t",
+        compact: null,
+      };
+    case "codex":
+      return {
+        model: [{ label: "Abrir selector (/model)", cmd: "/model" }],
+        modeSeq: null,
+        compact: "/compact",
+      };
+    case "antigravity":
+      return {
+        model: [{ label: "Abrir selector (/model)", cmd: "/model" }],
+        modeSeq: null,
+        compact: null,
+      };
+    default:
+      return { model: [], modeSeq: null, compact: null };
+  }
 }
