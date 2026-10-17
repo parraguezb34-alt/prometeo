@@ -100,7 +100,7 @@ fn handle(mut request: tiny_http::Request, app: &AppHandle) {
         ("POST", "/task") => cmd_task(app, &payload),
         ("POST", "/claim") => cmd_claim(app, &payload),
         ("POST", "/release") => cmd_release(app, &payload),
-        ("POST", "/connect") => cmd_connect(&payload),
+        ("POST", "/connect") => cmd_connect(app, &payload),
         _ => Err(format!("ruta desconocida: {} {}", method, path)),
     };
 
@@ -433,7 +433,7 @@ fn cmd_release(app: &AppHandle, payload: &Value) -> Result<Value, String> {
 }
 
 /// Connect an agent to the team by writing its config (scripts/CLI friendly).
-fn cmd_connect(payload: &Value) -> Result<Value, String> {
+fn cmd_connect(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     let agent = payload["agent"].as_str().unwrap_or("").to_string();
     let project = payload["project"].as_str().unwrap_or("").trim().to_string();
     if project.is_empty() {
@@ -444,6 +444,22 @@ fn cmd_connect(payload: &Value) -> Result<Value, String> {
         return Err(format!("la carpeta no existe: {}", path.display()));
     }
     let (files, notes) = crate::hub::connectors::connect_agent(&agent, &path)?;
+
+    // Remember the project so new terminals and the UI follow it.
+    let changed = hub::with_inner(app, |inner| {
+        if inner.project.as_deref() != Some(project.as_str()) {
+            inner.project = Some(project.clone());
+            hub::persist(inner);
+            true
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false);
+    if changed {
+        hub::notify_ui();
+    }
+
     Ok(json!({ "files": files, "notes": notes }))
 }
 

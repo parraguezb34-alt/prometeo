@@ -13,13 +13,29 @@ struct AgentDef {
     label: &'static str,
     cli: &'static str,
     dirs: &'static [&'static str], // home-relative dirs that indicate presence
+    extra_bins: &'static [&'static str], // LOCALAPPDATA-relative binaries that indicate presence
 }
 
 const AGENTS: &[AgentDef] = &[
-    AgentDef { id: "claude", label: "Claude Code", cli: "claude", dirs: &[".claude"] },
-    AgentDef { id: "codex", label: "Codex", cli: "codex", dirs: &[".codex"] },
-    AgentDef { id: "opencode", label: "OpenCode", cli: "opencode", dirs: &[".config/opencode"] },
-    AgentDef { id: "antigravity", label: "Antigravity", cli: "agy", dirs: &[".gemini"] },
+    AgentDef { id: "claude", label: "Claude Code", cli: "claude", dirs: &[".claude"], extra_bins: &[] },
+    AgentDef { id: "codex", label: "Codex", cli: "codex", dirs: &[".codex"], extra_bins: &[] },
+    AgentDef {
+        id: "opencode",
+        label: "OpenCode",
+        cli: "opencode",
+        dirs: &[".config/opencode"],
+        extra_bins: &[
+            r"Programs\@opencode-aidesktop\resources\opencode-cli.exe",
+            r"Programs\@opencode-aidesktop\OpenCode.exe",
+        ],
+    },
+    AgentDef {
+        id: "antigravity",
+        label: "Antigravity",
+        cli: "agy",
+        dirs: &[".gemini"],
+        extra_bins: &[r"Programs\antigravity\Antigravity.exe"],
+    },
 ];
 
 const BLOCK_START: &str = "<!-- lienzo-team:start -->";
@@ -50,9 +66,16 @@ fn cli_installed(def: &AgentDef) -> bool {
         .map(PathBuf::from)
         .unwrap_or_default()
         .join("npm");
-    ["cmd", "exe", "ps1", "bat"]
+    if ["cmd", "exe", "ps1", "bat"]
         .iter()
         .any(|ext| npm.join(format!("{}.{}", def.cli, ext)).exists())
+    {
+        return true;
+    }
+    let local = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    def.extra_bins.iter().any(|p| local.join(p).exists())
 }
 
 fn mcp_exe_path() -> Result<String, String> {
@@ -278,22 +301,41 @@ fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>)
 
 fn connect_opencode(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>), String> {
     let mut files = vec![];
-    let notes = vec!["OpenCode recarga su configuración al reiniciar la sesión.".to_string()];
+    let notes = vec![
+        "OpenCode v2: el servidor queda bajo mcp.servers.".to_string(),
+        "Reinicia la sesión de OpenCode para que lo cargue.".to_string(),
+    ];
 
     let cfg_path = project.join("opencode.json");
     let mut cfg = read_json(&cfg_path);
     if !cfg.is_object() {
         cfg = json!({});
     }
-    cfg.as_object_mut()
+    let root = cfg.as_object_mut().unwrap();
+    // Drop v1-style leftovers (a direct entry under `mcp` breaks v2 configs).
+    if let Some(mcp_obj) = root.get_mut("mcp").and_then(|m| m.as_object_mut()) {
+        mcp_obj.remove("lienzo-team");
+    }
+    let mcp = root.entry("mcp").or_insert_with(|| json!({}));
+    if !mcp.is_object() {
+        *mcp = json!({});
+    }
+    let servers = mcp
+        .as_object_mut()
         .unwrap()
-        .entry("mcp")
-        .or_insert_with(|| json!({}))["lienzo-team"] = json!({
-        "type": "local",
-        "command": [exe],
-        "environment": { "LIENZO_AGENT": "opencode" },
-        "enabled": true
-    });
+        .entry("servers")
+        .or_insert_with(|| json!({}));
+    if !servers.is_object() {
+        *servers = json!({});
+    }
+    servers.as_object_mut().unwrap().insert(
+        "lienzo-team".to_string(),
+        json!({
+            "type": "local",
+            "command": [exe],
+            "environment": { "LIENZO_AGENT": "opencode" }
+        }),
+    );
     write_json_pretty(&cfg_path, &cfg)?;
     files.push(cfg_path.display().to_string());
 
@@ -305,19 +347,41 @@ fn connect_opencode(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<Strin
 
 fn connect_antigravity(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>), String> {
     let mut files = vec![];
-    let notes = vec!["Antigravity usa la config del workspace; reábrelo para que la lea.".to_string()];
+    let mut notes = vec![
+        "Antigravity usa la config del workspace; reábrelo para que la lea.".to_string(),
+        "Los tools del equipo pedirán permiso la primera vez (modo Ask/permisos).".to_string(),
+    ];
 
-    let cfg_path = project.join(".agents").join("mcp_config.json");
-    let mut cfg = read_json(&cfg_path);
-    if !cfg.is_object() {
-        cfg = json!({});
+    let entry = mcp_server_entry(exe, "antigravity");
+
+    // Workspace config (active project).
+    let ws_path = project.join(".agents").join("mcp_config.json");
+    let mut ws = read_json(&ws_path);
+    if !ws.is_object() {
+        ws = json!({});
     }
-    cfg.as_object_mut()
+    ws.as_object_mut()
         .unwrap()
         .entry("mcpServers")
-        .or_insert_with(|| json!({}))["lienzo-team"] = mcp_server_entry(exe, "antigravity");
-    write_json_pretty(&cfg_path, &cfg)?;
-    files.push(cfg_path.display().to_string());
+        .or_insert_with(|| json!({}))["lienzo-team"] = entry.clone();
+    write_json_pretty(&ws_path, &ws)?;
+    files.push(ws_path.display().to_string());
+
+    // Global config (~/.gemini/config/mcp_config.json) as a fallback.
+    let global_path = home().join(".gemini").join("config").join("mcp_config.json");
+    if global_path.exists() || global_path.parent().map(|p| p.exists()).unwrap_or(false) {
+        let mut global = read_json(&global_path);
+        if !global.is_object() {
+            global = json!({});
+        }
+        global
+            .as_object_mut()
+            .unwrap()
+            .entry("mcpServers")
+            .or_insert_with(|| json!({}))["lienzo-team"] = entry;
+        write_json_pretty(&global_path, &global)?;
+        files.push(global_path.display().to_string());
+    }
 
     let p = project.join("AGENTS.md");
     write_managed_block(&p, &team_block())?;
