@@ -26,7 +26,7 @@ const LOD_ZOOM = 0.35;
 /** Grid spacing in world units. */
 const GRID = 26;
 
-export function Canvas() {
+export function Canvas({ onMode }: { onMode: (mode: "command" | "canvas") => void }) {
   const layout = useLayout();
   const containerRef = useRef<HTMLDivElement>(null);
   const panRef = useRef<{
@@ -207,6 +207,12 @@ export function Canvas() {
       </div>
 
       <div className="toolbar ui-overlay">
+        <button
+          onClick={() => onMode("command")}
+          title="Volver al Centro de Mando (misiones, tareas y actividad)"
+        >
+          ← Comando
+        </button>
         <button onClick={addAtCenter} title="Nueva terminal (o doble clic en el lienzo)">
           + Terminal
         </button>

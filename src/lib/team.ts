@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getLayout } from "../store";
+import { termWrite } from "./pty";
 
 export type TeamEvent = {
   seq: number;
@@ -134,4 +136,56 @@ export function errMsg(e: unknown): string {
 export function shortPath(path: string): string {
   const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts.length >= 2 ? parts.slice(-2).join("/") : path;
+}
+
+/** Map a terminal launch command to the agent id used by the hub. */
+export function agentKeyFromCmd(cmd: string): string {
+  const c = cmd.toLowerCase();
+  if (c.includes("opencode")) return "opencode";
+  if (c.includes("agy") || c.includes("antigravity")) return "antigravity";
+  if (c.includes("claude")) return "claude";
+  if (c.includes("codex")) return "codex";
+  return c.split(/[\\/]/).pop()?.replace(/\.(exe|cmd|bat|ps1)$/i, "") || "agente";
+}
+
+/** Wrap the user's message with the team protocol before typing it into each
+ * agent terminal. Single line on purpose: it is submitted as-is into their
+ * prompt box, and without this agents tend to just work alone. */
+export function buildBroadcastPrompt(text: string, leader: string): string {
+  return (
+    "📣 MENSAJE DEL USUARIO PARA TODO EL EQUIPO — varios agentes trabajáis juntos en este " +
+    "proyecto mediante el MCP «lienzo-team». Petición: «" +
+    text +
+    "». Antes de empezar, llama a team_context para ver compañeros, tareas y reservas. " +
+    (leader ? `Líder del equipo: ${leader}; respeta su reparto. ` : "") +
+    "Descompón el trabajo: crea tareas con team_task_create o reclama las abiertas con " +
+    "team_task_claim; publica tu plan y cada avance con team_update; reserva los archivos " +
+    "con team_claim_files antes de editarlos; y usa team_message para coordinarte con los " +
+    "demás agentes. Al terminar tu parte, publica un resumen con team_update."
+  );
+}
+
+/** Publish a prompt to the whole team: feed + typed into every open agent
+ * terminal (wrapped with the coordination protocol). Returns how many agents
+ * received it directly in their terminal. */
+export async function pushBroadcast(text: string, leader: string): Promise<number> {
+  await teamBroadcast(text);
+  const typedPrompt = buildBroadcastPrompt(text, leader);
+  const panels = getLayout().panels.filter(
+    (p) => p.kind === "terminal" && !!p.sessionId && !!p.cmd,
+  );
+  const agentsTyped = new Set<string>();
+  for (const p of panels) {
+    try {
+      await termWrite(p.sessionId!, `${typedPrompt}\r`);
+      agentsTyped.add(agentKeyFromCmd(p.cmd ?? ""));
+    } catch {
+      /* session may have died; the feed still has the message */
+    }
+  }
+  if (agentsTyped.size > 0) {
+    // Typed = delivered for those agents; skip duplicate hook delivery.
+    await teamBroadcastAck([...agentsTyped]).catch(() => {});
+  }
+  return agentsTyped.size;
 }

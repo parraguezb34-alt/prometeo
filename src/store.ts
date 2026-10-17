@@ -184,6 +184,12 @@ export function addAgentTerminal(
   return panel;
 }
 
+/** Cascade position for panels opened without explicit canvas coordinates. */
+export function autoSpot(): { x: number; y: number } {
+  const n = state.panels.length;
+  return { x: 60 + ((n * 46) % 480), y: 48 + ((n * 42) % 380) };
+}
+
 export function removePanel(id: string) {
   set({ panels: state.panels.filter((p) => p.id !== id) });
 }

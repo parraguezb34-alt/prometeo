@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Panel } from "../store";
-import { addAgentTerminal, getLayout } from "../store";
-import { termWrite } from "../lib/pty";
+import { addAgentTerminal, autoSpot } from "../store";
 import {
   agentColor,
   ago,
   errMsg,
   onTeamUpdate,
-  shortPath,
+  pushBroadcast,
   teamAddTask,
-  teamBroadcast,
-  teamBroadcastAck,
   teamCharter,
   teamConnect,
   teamDetect,
@@ -21,49 +18,9 @@ import {
   teamTaskOp,
 } from "../lib/team";
 import type { DetectResult, TeamDetails, TeamState } from "../lib/team";
+import { FeedList } from "./FeedList";
 
 type Tab = "feed" | "tasks" | "agents";
-
-const GLYPHS: Record<string, string> = {
-  join: "⊕",
-  leave: "⊖",
-  message: "✉",
-  prompt: "❯",
-  update: "●",
-  tool: "↳",
-  task: "☰",
-  claim: "⊙",
-  stop: "■",
-  session: "▶",
-  broadcast: "📣",
-};
-
-/** Map a terminal launch command to the agent id used by the hub. */
-function agentKeyFromCmd(cmd: string): string {
-  const c = cmd.toLowerCase();
-  if (c.includes("opencode")) return "opencode";
-  if (c.includes("agy") || c.includes("antigravity")) return "antigravity";
-  if (c.includes("claude")) return "claude";
-  if (c.includes("codex")) return "codex";
-  return c.split(/[\\/]/).pop()?.replace(/\.(exe|cmd|bat|ps1)$/i, "") || "agente";
-}
-
-/** Wrap the user's message with the team protocol before typing it into each
- * agent terminal. Single line on purpose: it is submitted as-is into their
- * prompt box, and without this agents tend to just work alone. */
-function buildBroadcastPrompt(text: string, leader: string): string {
-  return (
-    "📣 MENSAJE DEL USUARIO PARA TODO EL EQUIPO — varios agentes trabajáis juntos en este " +
-    "proyecto mediante el MCP «lienzo-team». Petición: «" +
-    text +
-    "». Antes de empezar, llama a team_context para ver compañeros, tareas y reservas. " +
-    (leader ? `Líder del equipo: ${leader}; respeta su reparto. ` : "") +
-    "Descompón el trabajo: crea tareas con team_task_create o reclama las abiertas con " +
-    "team_task_claim; publica tu plan y cada avance con team_update; reserva los archivos " +
-    "con team_claim_files antes de editarlos; y usa team_message para coordinarte con los " +
-    "demás agentes. Al terminar tu parte, publica un resumen con team_update."
-  );
-}
 
 const STATUS_LABEL: Record<string, string> = {
   open: "abierta",
@@ -71,8 +28,16 @@ const STATUS_LABEL: Record<string, string> = {
   done: "hecha",
 };
 
-export function TeamPanel({ panel }: { panel: Panel }) {
-  const [tab, setTab] = useState<Tab>("feed");
+export function TeamPanel({
+  panel,
+  initialTab,
+  onTerminalOpen,
+}: {
+  panel?: Panel;
+  initialTab?: Tab;
+  onTerminalOpen?: (panel: Panel) => void;
+}) {
+  const [tab, setTab] = useState<Tab>(initialTab ?? "feed");
   const [state, setState] = useState<TeamState | null>(null);
   const [detect, setDetect] = useState<DetectResult | null>(null);
   const [details, setDetails] = useState<TeamDetails | null>(null);
@@ -191,7 +156,9 @@ export function TeamPanel({ panel }: { panel: Panel }) {
       if (r.kind === "app") {
         say(`✓ ${label} abriéndose en la carpeta del equipo.`);
       } else {
-        addAgentTerminal(panel.x + panel.w + 28, panel.y, label, r.cmd);
+        const spot = panel ? { x: panel.x + panel.w + 28, y: panel.y } : autoSpot();
+        const created = addAgentTerminal(spot.x, spot.y, label, r.cmd);
+        onTerminalOpen?.(created);
         say(`✓ ${label} abriéndose en una terminal del lienzo…`);
       }
     } catch (e) {
@@ -206,31 +173,12 @@ export function TeamPanel({ panel }: { panel: Panel }) {
     const text = broadcastDraft.trim();
     if (!text) return;
     try {
-      await teamBroadcast(text);
-      // Type it into every agent terminal running on the canvas, wrapped with
-      // the team protocol so agents actually coordinate with each other.
-      const typedPrompt = buildBroadcastPrompt(text, (state?.leader ?? "").trim());
-      const panels = getLayout().panels.filter(
-        (p) => p.kind === "terminal" && !!p.sessionId && !!p.cmd,
-      );
-      const agentsTyped = new Set<string>();
-      for (const p of panels) {
-        try {
-          await termWrite(p.sessionId!, `${typedPrompt}\r`);
-          agentsTyped.add(agentKeyFromCmd(p.cmd ?? ""));
-        } catch {
-          /* session may have died; the feed still has the message */
-        }
-      }
-      if (agentsTyped.size > 0) {
-        // Typed = delivered for those agents; skip duplicate hook delivery.
-        await teamBroadcastAck([...agentsTyped]).catch(() => {});
-      }
+      const typed = await pushBroadcast(text, (state?.leader ?? "").trim());
       setBroadcastDraft("");
       refresh();
       say(
-        agentsTyped.size > 0
-          ? `📣 Enviado al feed y escrito en ${agentsTyped.size} terminal(es), con instrucciones de coordinación.`
+        typed > 0
+          ? `📣 Enviado al feed y escrito en ${typed} terminal(es), con instrucciones de coordinación.`
           : "📣 Publicado para el equipo (no hay terminales de agentes abiertas ahora mismo).",
       );
     } catch (e) {
@@ -320,33 +268,12 @@ export function TeamPanel({ panel }: { panel: Panel }) {
       )}
 
       <div className="team-body">
-        {tab === "feed" &&
-          (events.length === 0 ? (
-            <div className="team-empty">
-              Aún no hay actividad. Conecta agentes (pestaña Agentes) y verás aquí todo lo
-              que hacen, al momento.
-            </div>
-          ) : (
-            events.map((e) => (
-              <div className="feed-item" key={e.seq}>
-                <span className="feed-glyph">{GLYPHS[e.kind] ?? "•"}</span>
-                <span className="feed-main">
-                  <span className="feed-agent" style={{ color: agentColor(e.agent) }}>
-                    {e.agent}
-                    {e.to ? ` → ${e.to}` : ""}
-                  </span>
-                  <span className="feed-text" data-weak={e.kind === "tool" ? "1" : "0"}>
-                    {" "}
-                    {e.text}
-                  </span>
-                  {e.files.length > 0 && (
-                    <span className="feed-files"> · {e.files.map(shortPath).join(", ")}</span>
-                  )}
-                </span>
-                <span className="feed-time">{ago(e.ts_ms)}</span>
-              </div>
-            ))
-          ))}
+        {tab === "feed" && (
+          <FeedList
+            events={events}
+            empty="Aún no hay actividad. Conecta agentes (pestaña Agentes) y verás aquí todo lo que hacen, al momento."
+          />
+        )}
 
         {tab === "tasks" && (
           <>

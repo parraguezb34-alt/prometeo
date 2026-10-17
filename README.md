@@ -5,6 +5,7 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 
 ## Estado actual (F1 + Equipo) ✅
 
+- **Centro de Mando (vista principal)**: los agentes viven en un **dock** compacto (qué hace cada uno *ahora mismo* y qué tarea tiene), el centro es un **escenario** con Tareas + Actividad en tiempo real, y las **terminales se abren bajo demanda en un cajón lateral** (pulsa un agente; `Esc` cierra). El **lienzo espacial** sigue disponible como vista secundaria (`⬚ Lienzo` / `← Comando`); las terminales ocultas siguen vivas (PTY + scrollback).
 - **Lienzo infinito**: arrastra el fondo para mover, rueda del ratón para zoom al cursor, `Shift+rueda` para desplazarte en horizontal.
 - **Terminales reales** (ConPTY vía `portable-pty`) como paneles:
   - Doble clic en el lienzo → nueva terminal.
@@ -24,6 +25,7 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
   - **Prompt para todos** (📣 barra arriba del panel Equipo): publica el mensaje en el feed y lo **escribe en la terminal de cada agente abierto** en el lienzo (OpenCode/Antigravity/Claude la reciben al instante), y a Claude en cualquier ventana le llega como bloque del **hook Stop** cuando termina su turno. El texto viaja **envuelto con el protocolo de equipo** (llama a `team_context`, reparte/reclama tareas, publica avances con `team_update`, reserva archivos) para que los agentes coordinen de verdad en vez de trabajar cada uno por su cuenta.
   - **Normas del equipo (system prompt global)**: texto editable en la pestaña Agentes que se inyecta a los agentes en `team_context`, en las instrucciones del MCP y en cada prompt vía hooks — saben que trabajan juntos y cómo coordinarse.
   - **Jerarquía sin peleas**: un **líder** (el primero que conecta, o el que elijas) coordina y reparte; los demás proponen y ejecutan su parte.
+  - **Tareas huérfanas**: si el agente que reclamó una tarea deja de latir (su puente murió), el hub la **libera solo** — vuelve a *abierta* con un aviso `↺` en el feed. No hay tareas colgadas para siempre.
   - **Panel Progreso** (`+ Progreso`, arriba a la derecha): barra de % completado, una línea **«Ahora mismo» por agente** con su última actividad, agentes en línea con su líder y tareas pendientes/hechas de un vistazo.
 
 ## Arquitectura
@@ -40,8 +42,10 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 | Lienzo | `src/components/Canvas.tsx` | Paneo, zoom, LOD, barra de herramientas |
 | Marco de panel | `src/components/PanelFrame.tsx` | Mover, redimensionar, cerrar, traer al frente |
 | Terminal | `src/components/TerminalPanel.tsx` | xterm.js + re-attach a la sesión PTY |
-| Panel Equipo | `src/components/TeamPanel.tsx` | Actividad, tareas, agentes, prompt para todos (📣), normas y líder |
+| Panel Equipo | `src/components/TeamPanel.tsx` | Actividad, tareas, agentes, prompt para todos (📣), normas y líder (también en el cajón del Centro de Mando) |
 | Panel Progreso | `src/components/TasksPanel.tsx` | Barra de avance, agentes en línea y tablero compacto |
+| Centro de Mando | `src/components/CommandCenter.tsx` | Vista principal: dock de agentes, escenario (tareas + actividad), cajón de terminal y de equipo |
+| Feed compartido | `src/components/FeedList.tsx` | Lista de actividad reutilizada por el panel Equipo y el Centro de Mando |
 
 ## Conectar un agente (equipo)
 
