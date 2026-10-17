@@ -20,6 +20,8 @@ use tauri::{AppHandle, Emitter, Manager};
 pub const MAX_EVENTS: usize = 500;
 /// Agents are considered online when they checked in this recently.
 pub const AGENT_TTL_MS: u64 = 75_000;
+/// A task claimed by an agent with no session heartbeating this long is released.
+pub const TASK_ORPHAN_MS: u64 = AGENT_TTL_MS * 2;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AgentInfo {
@@ -340,7 +342,8 @@ pub fn touch_agent(inner: &mut HubInner, session_id: &str) {
     }
 }
 
-/// Drop agents that stopped heartbeating (and their file claims).
+/// Drop agents that stopped heartbeating (and their file claims). Also releases
+/// tasks whose owner no longer has any live session (orphaned work).
 pub fn expire_agents(inner: &mut HubInner) -> bool {
     let now = now_ms();
     let stale: Vec<String> = inner
@@ -349,12 +352,46 @@ pub fn expire_agents(inner: &mut HubInner) -> bool {
         .filter(|(_, a)| now.saturating_sub(a.last_seen_ms) > AGENT_TTL_MS * 4)
         .map(|(k, _)| k.clone())
         .collect();
-    let changed = !stale.is_empty();
+    let mut changed = !stale.is_empty();
     for id in stale {
         if let Some(agent) = inner.agents.remove(&id) {
             push_event(inner, &agent.name, &id, "leave", "desconectado", vec![], None);
             inner.claims.retain(|_, c| c.session_id != id);
         }
+    }
+
+    // Orphan tasks: a claimed task whose owner has no live session would stay
+    // claimed forever if the agent died mid-work (seen in the wild). Release it
+    // so another agent (or the user) can pick it up.
+    let live: std::collections::HashSet<String> = inner
+        .agents
+        .values()
+        .filter(|a| now.saturating_sub(a.last_seen_ms) < TASK_ORPHAN_MS)
+        .map(|a| a.name.clone())
+        .collect();
+    let mut released: Vec<(u64, String, String)> = Vec::new();
+    for task in inner.tasks.iter_mut() {
+        if task.status == "claimed"
+            && !task.owner.is_empty()
+            && task.owner != "tú"
+            && !live.contains(&task.owner)
+        {
+            released.push((task.id, task.owner.clone(), task.title.clone()));
+            task.status = "open".into();
+            task.owner = String::new();
+        }
+    }
+    for (id, owner, title) in released {
+        push_event(
+            inner,
+            &owner,
+            "hub",
+            "release",
+            &format!("tarea #{} liberada (el agente dejó de responder): {}", id, title),
+            vec![],
+            None,
+        );
+        changed = true;
     }
     changed
 }
