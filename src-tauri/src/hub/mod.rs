@@ -561,6 +561,23 @@ pub fn team_task_op(hub: tauri::State<'_, Hub>, id: u64, op: String) -> Result<(
     Ok(())
 }
 
+/// Log a direct user message to one agent in the feed (the text itself is typed
+/// into its terminal by the UI, so the agent receives it as a prompt).
+#[tauri::command]
+pub fn team_dm(hub: tauri::State<'_, Hub>, agent: String, text: String) -> Result<(), String> {
+    let agent = agent.trim().to_string();
+    let text = text.trim().to_string();
+    if agent.is_empty() || text.is_empty() {
+        return Err("el mensaje está vacío".into());
+    }
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    push_event(&mut inner, "tú", "ui", "message", &text, vec![], Some(agent));
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------

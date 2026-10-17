@@ -99,6 +99,10 @@ export const teamAddTask = (title: string) =>
   invoke<void>("team_add_task", { title });
 export const teamTaskOp = (id: number, op: string) =>
   invoke<void>("team_task_op", { id, op });
+/** Log a direct user message to one agent in the feed (the text is typed into
+ * its terminal by the caller). */
+export const teamDm = (agent: string, text: string) =>
+  invoke<void>("team_dm", { agent, text });
 
 /** Live updates pushed by the hub whenever team state changes. */
 export const onTeamUpdate = (fn: () => void) =>

@@ -1,7 +1,7 @@
 import { agentColor, ago, shortPath } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
 
-const GLYPHS: Record<string, string> = {
+export const GLYPHS: Record<string, string> = {
   join: "⊕",
   leave: "⊖",
   message: "✉",
