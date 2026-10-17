@@ -66,6 +66,13 @@ pub struct RecentFile {
     size: u64,
 }
 
+#[derive(Serialize)]
+pub struct TaskDiff {
+    diff: String,
+    files: Vec<GitFile>,
+    truncated: bool,
+}
+
 fn mtime_ms(meta: &std::fs::Metadata) -> u64 {
     meta.modified()
         .ok()
@@ -113,6 +120,69 @@ fn is_noise(name: &str) -> bool {
     NOISE_DIRS.contains(&name)
 }
 
+fn git_with_paths(path: &Path, pre: &[&str], paths: &[String]) -> Result<String, String> {
+    let mut args: Vec<&str> = pre.to_vec();
+    args.extend(paths.iter().map(|s| s.as_str()));
+    git(path, &args)
+}
+
+/// Normaliza y valida una lista de rutas relativas al proyecto (sin salirse de
+/// la raiz; si existen, tambien sin escapar por symlinks). Deduplica y acota.
+fn clean_paths(root: &Path, paths: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in paths.iter().take(300) {
+        let rel = raw.trim().replace('\\', "/");
+        if rel.is_empty() {
+            continue;
+        }
+        let Ok(abs) = join_rel(root, &rel) else { continue };
+        if let Ok(canon) = abs.canonicalize() {
+            if !canon.starts_with(root) {
+                continue;
+            }
+        }
+        if !out.contains(&rel) {
+            out.push(rel);
+        }
+    }
+    out
+}
+
+fn slice_diff(diff: &mut String) -> bool {
+    if diff.len() <= DIFF_CAP {
+        return false;
+    }
+    let mut cut = DIFF_CAP;
+    while cut > 0 && !diff.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    diff.truncate(cut);
+    true
+}
+
+fn status_files(root: &Path, paths: &[String]) -> Vec<GitFile> {
+    let mut files = Vec::new();
+    let Ok(porcelain) = git_with_paths(root, &["status", "--porcelain=v1", "-uall", "--"], paths)
+    else {
+        return files;
+    };
+    for line in porcelain.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let code = line[..2].trim().to_string();
+        let mut p = line[3..].to_string();
+        if let Some(idx) = p.find(" -> ") {
+            p = p[idx + 4..].to_string();
+        }
+        files.push(GitFile {
+            path: p,
+            status: if code.is_empty() { "?".into() } else { code },
+        });
+    }
+    files
+}
+
 /// Repo, rama actual y raiz canonica del proyecto.
 #[tauri::command]
 pub fn project_info(path: String) -> Result<Value, String> {
@@ -140,37 +210,13 @@ pub fn project_status(path: String) -> Result<GitStatus, String> {
             truncated: false,
         });
     }
-    let mut files = Vec::new();
-    if let Ok(porcelain) = git(&root, &["status", "--porcelain=v1", "-uall"]) {
-        for line in porcelain.lines() {
-            if line.len() < 4 {
-                continue;
-            }
-            let code = line[..2].trim().to_string();
-            let mut p = line[3..].to_string();
-            if let Some(idx) = p.find(" -> ") {
-                p = p[idx + 4..].to_string();
-            }
-            files.push(GitFile {
-                path: p,
-                status: if code.is_empty() { "?".into() } else { code },
-            });
-        }
-    }
+    let files = status_files(&root, &[]);
     // Diff contra HEAD (preparado + sin preparar). Si el repo aun no tiene
     // commits, cae al diff normal.
     let mut diff = git(&root, &["diff", "HEAD", "--no-color", "-U3"])
         .or_else(|_| git(&root, &["diff", "--no-color", "-U3"]))
         .unwrap_or_default();
-    let mut truncated = false;
-    if diff.len() > DIFF_CAP {
-        let mut cut = DIFF_CAP;
-        while cut > 0 && !diff.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        diff.truncate(cut);
-        truncated = true;
-    }
+    let truncated = slice_diff(&mut diff);
     Ok(GitStatus {
         repo: true,
         branch: branch.trim().to_string(),
@@ -178,6 +224,130 @@ pub fn project_status(path: String) -> Result<GitStatus, String> {
         diff,
         truncated,
     })
+}
+
+/// Diff + estado limitado a las rutas de una tarea (revision por tarea).
+#[tauri::command]
+pub fn project_diff_paths(path: String, paths: Vec<String>) -> Result<TaskDiff, String> {
+    let root = root_of(&path)?;
+    let clean = clean_paths(&root, &paths);
+    if clean.is_empty() {
+        return Ok(TaskDiff {
+            diff: String::new(),
+            files: vec![],
+            truncated: false,
+        });
+    }
+    let files = status_files(&root, &clean);
+    let mut diff = git_with_paths(&root, &["diff", "HEAD", "--no-color", "-U3", "--"], &clean)
+        .or_else(|_| git_with_paths(&root, &["diff", "--no-color", "-U3", "--"], &clean))
+        .unwrap_or_default();
+    let truncated = slice_diff(&mut diff);
+    Ok(TaskDiff {
+        diff,
+        files,
+        truncated,
+    })
+}
+
+/// Confirma (commit) los archivos de una tarea, solo esas rutas.
+#[tauri::command]
+pub fn project_commit_paths(
+    path: String,
+    paths: Vec<String>,
+    message: String,
+) -> Result<String, String> {
+    let root = root_of(&path)?;
+    let clean = clean_paths(&root, &paths);
+    let msg: String = message.trim().chars().take(200).collect();
+    if msg.is_empty() {
+        return Err("falta el mensaje del commit".into());
+    }
+    // Solo rutas que git puede confirmar: con seguimiento, o nuevas y no
+    // ignoradas.
+    let mut targets: Vec<String> = Vec::new();
+    for rel in &clean {
+        let tracked = git(&root, &["ls-files", "--error-unmatch", "--", rel]).is_ok();
+        let ignored = git(&root, &["check-ignore", "-q", "--", rel]).is_ok();
+        let exists = join_rel(&root, rel)
+            .map(|p| p.exists())
+            .unwrap_or(false);
+        if tracked || (exists && !ignored) {
+            targets.push(rel.clone());
+        }
+    }
+    if targets.is_empty() {
+        return Err("esos archivos no están bajo git (ignorados o ausentes)".into());
+    }
+    git_with_paths(&root, &["add", "-A", "--"], &targets)?;
+    match git_with_paths(&root, &["commit", "-m", &msg, "--"], &targets) {
+        Ok(out) => Ok(out
+            .lines()
+            .next()
+            .unwrap_or("commit hecho")
+            .trim()
+            .to_string()),
+        Err(e) if e.contains("nothing to commit") || e.contains("nada para hacer commit") => {
+            Err("esos archivos no tienen cambios nuevos que confirmar".into())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Devuelve los archivos de una tarea al ultimo commit (destructivo).
+#[tauri::command]
+pub fn project_revert_paths(path: String, paths: Vec<String>) -> Result<String, String> {
+    let root = root_of(&path)?;
+    let clean = clean_paths(&root, &paths);
+    if clean.is_empty() {
+        return Err("no hay archivos de la tarea para revertir".into());
+    }
+    let mut restored = 0usize;
+    let mut deleted = 0usize;
+    let mut failed = 0usize;
+    for rel in &clean {
+        let Ok(abs) = join_rel(&root, rel) else { continue };
+        let tracked = git(&root, &["ls-files", "--error-unmatch", "--", rel]).is_ok();
+        if tracked {
+            if git(&root, &["checkout", "HEAD", "--", rel]).is_ok() {
+                restored += 1;
+            } else {
+                // Nuevo aun sin commit: fuera del indice y del disco.
+                let _ = git(&root, &["rm", "--cached", "-f", "--", rel]);
+                if std::fs::remove_file(&abs).is_ok() {
+                    deleted += 1;
+                } else {
+                    failed += 1;
+                }
+            }
+        } else if abs.exists() {
+            if std::fs::remove_file(&abs).is_ok() {
+                deleted += 1;
+            } else {
+                failed += 1;
+            }
+        }
+    }
+    let mut bits = Vec::new();
+    if restored > 0 {
+        bits.push(format!(
+            "{restored} restaurado{}",
+            if restored == 1 { "" } else { "s" }
+        ));
+    }
+    if deleted > 0 {
+        bits.push(format!(
+            "{deleted} eliminado{}",
+            if deleted == 1 { "" } else { "s" }
+        ));
+    }
+    if bits.is_empty() && failed == 0 {
+        bits.push("nada que revertir".to_string());
+    }
+    if failed > 0 {
+        bits.push(format!("{failed} sin poder tocar"));
+    }
+    Ok(bits.join(", "))
 }
 
 /// Listado de una carpeta del proyecto (ordenado: carpetas primero).

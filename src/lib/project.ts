@@ -30,6 +30,8 @@ export type FileData = {
 
 export type RecentFile = { rel: string; mtime_ms: number; size: number };
 
+export type TaskDiff = { diff: string; files: GitFile[]; truncated: boolean };
+
 export const projectInfo = (path: string) => invoke<ProjectInfo>("project_info", { path });
 
 export const projectStatus = (path: string) =>
@@ -43,6 +45,18 @@ export const projectRead = (path: string, rel: string) =>
 
 export const projectRecent = (path: string, exts: string[], limit = 40) =>
   invoke<RecentFile[]>("project_recent", { path, exts, limit });
+
+/** Diff y estado limitados a las rutas de una tarea. */
+export const projectDiffPaths = (path: string, paths: string[]) =>
+  invoke<TaskDiff>("project_diff_paths", { path, paths });
+
+/** Confirma (commit) los archivos de una tarea; devuelve la línea del commit. */
+export const projectCommitPaths = (path: string, paths: string[], message: string) =>
+  invoke<string>("project_commit_paths", { path, paths, message });
+
+/** Revierte los archivos de una tarea al último commit (destructivo). */
+export const projectRevertPaths = (path: string, paths: string[]) =>
+  invoke<string>("project_revert_paths", { path, paths });
 
 /** "812 B", "4.2 kB", "1.3 MB" */
 export function friendlySize(bytes: number): string {

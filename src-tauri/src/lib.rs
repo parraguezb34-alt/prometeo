@@ -38,6 +38,9 @@ pub fn run() {
             project::project_list,
             project::project_read,
             project::project_recent,
+            project::project_diff_paths,
+            project::project_commit_paths,
+            project::project_revert_paths,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

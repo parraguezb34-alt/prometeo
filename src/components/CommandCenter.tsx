@@ -82,6 +82,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const [shoot, setShoot] = useState<Shoot>(loadShoot);
   const [taskFilter, setTaskFilter] = useState<"all" | "active" | "done">("all");
   const [changeCount, setChangeCount] = useState<number | null>(null);
+  const [diffTask, setDiffTask] = useState<number | null>(null);
   const [previewRel, setPreviewRel] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [taskDraft, setTaskDraft] = useState("");
@@ -717,10 +718,17 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                 className="cc-task"
                 key={t.id}
                 data-done={t.status === "done" ? "1" : "0"}
-                onClick={() => (project ? setView("diff") : openDrawer(true))}
+                onClick={() => {
+                  if (project) {
+                    setDiffTask(t.id);
+                    setView("diff");
+                  } else {
+                    openDrawer(true);
+                  }
+                }}
                 title={
                   project
-                    ? "Ver los cambios del proyecto en el centro"
+                    ? `Ver los cambios de la tarea #${t.id} en el centro`
                     : "Elige la carpeta del proyecto para ver cambios"
                 }
               >
@@ -825,6 +833,12 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                   project={project}
                   onChooseProject={() => openDrawer(true)}
                   onCount={onDiffCount}
+                  tasks={tasks}
+                  events={state?.events ?? []}
+                  claims={state?.claims ?? []}
+                  taskId={diffTask}
+                  onTaskChange={setDiffTask}
+                  onSay={say}
                 />
               )}
               {view === "preview" && (
