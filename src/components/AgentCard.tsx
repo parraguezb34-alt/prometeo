@@ -1,4 +1,4 @@
-import { agentColor, agentCommands, ago, HANDOVER_PROMPT } from "../lib/team";
+import { agentColor, agentCommands, ago, HANDOVER_SAVE_PROMPT } from "../lib/team";
 import type { TeamAgent, TeamEvent } from "../lib/team";
 
 /** Model selector + mode/compact/relevo buttons for one agent. Everything here
@@ -54,8 +54,8 @@ export function AgentQuickCmds({
       )}
       <button
         className="cc-mini-btn"
-        onClick={() => onCmd(`${HANDOVER_PROMPT}\r`, "relevo")}
-        title="Pídele un resumen de relevo (qué hizo, qué falta, decisiones). Útil antes de compactar o pasar la tarea a otro."
+        onClick={() => onCmd(`${HANDOVER_SAVE_PROMPT}\r`, "relevo con memoria")}
+        title="Relevo con memoria: guarda su resumen pegado a la tarea y lienzo compacta su contexto (sin amnesia)."
       >
         🔄
       </button>
@@ -162,6 +162,7 @@ export function AgentCard({
       {ctx && (
         <div
           className="cc-ctx"
+          data-hot={ctx.pct >= 75 ? "1" : "0"}
           title={`Contexto usado: ${fmtTokens(ctx.tokens)} de ${fmtTokens(ctx.window)} tokens (${ctx.pct}%)${
             agent.model ? ` · ${agent.model}` : ""
           }`}
@@ -176,6 +177,20 @@ export function AgentCard({
             Ctx {ctx.pct}%{ctx.pct >= 80 ? " ⚠️" : ""}
           </span>
           {agent.model ? <span className="cc-ctx-model">{shortModel(agent.model)}</span> : null}
+          <button
+            className="cc-ctx-refresh"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCmd(`${HANDOVER_SAVE_PROMPT}\r`, "relevo con memoria");
+            }}
+            title={
+              ctx.pct >= 75
+                ? `Contexto al ${ctx.pct}%: guarda su memoria y compacta para que baje sin amnesia.`
+                : "Relevo con memoria: guarda su resumen pegado a la tarea y compacta su contexto."
+            }
+          >
+            🔄
+          </button>
         </div>
       )}
       <AgentQuickCmds agent={name} onCmd={onCmd} />

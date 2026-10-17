@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { errMsg } from "../lib/team";
+import { agentColor, ago, errMsg } from "../lib/team";
 import type { TeamClaim, TeamEvent, TeamTask } from "../lib/team";
 import {
   friendlySize,
@@ -11,6 +11,9 @@ import {
 import type { GitFile, GitStatus, TaskDiff } from "../lib/project";
 
 const MAX_LINES = 2500;
+
+/** Extensiones que el Preview sabe renderizar (ver PreviewTab). */
+const PREVIEW_EXT = /\.(html?|svg|md|markdown)$/i;
 
 function lineKind(line: string): string {
   if (line.startsWith("+++") || line.startsWith("---")) return "h";
@@ -57,6 +60,7 @@ export function DiffTab({
   taskId,
   onTaskChange,
   onSay,
+  onPreview,
 }: {
   project: string | null;
   onChooseProject: () => void;
@@ -67,6 +71,7 @@ export function DiffTab({
   taskId: number | null;
   onTaskChange: (id: number | null) => void;
   onSay: (text: string, err?: boolean) => void;
+  onPreview: (rel: string) => void;
 }) {
   const [git, setGit] = useState<GitStatus | null>(null);
   const [tdiff, setTdiff] = useState<TaskDiff | null>(null);
@@ -74,6 +79,8 @@ export function DiffTab({
   const [err, setErr] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<null | "commit" | "revert">(null);
   const [busy, setBusy] = useState<null | "commit" | "revert">(null);
+  const [orphanConfirm, setOrphanConfirm] = useState<string | null>(null);
+  const [busyOrphan, setBusyOrphan] = useState<string | null>(null);
 
   const task = useMemo(
     () => (taskId != null ? (tasks.find((t) => t.id === taskId) ?? null) : null),
@@ -84,14 +91,30 @@ export function DiffTab({
     [task, events, claims],
   );
 
+  // Todos los archivos ligados a alguna tarea (para detectar scope creep).
+  const allPaths = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of tasks) for (const p of taskPaths(t, events, claims)) set.add(p);
+    return set;
+  }, [tasks, events, claims]);
+  const orphans = useMemo(
+    () => (task && git?.repo ? git.files.filter((f) => !allPaths.has(f.path)) : []),
+    [task, git, allPaths],
+  );
+
   const load = useCallback(() => {
     if (!project) return;
     setLoading(true);
     setErr(null);
     if (task) {
-      projectDiffPaths(project, paths)
-        .then((t) => {
+      // El diff de la tarea + estado global (scope creep: qué se tocó fuera).
+      Promise.all([
+        projectDiffPaths(project, paths),
+        projectStatus(project).catch(() => null),
+      ])
+        .then(([t, g]) => {
           setTdiff(t);
+          setGit(g);
           onCount(t.files.length);
         })
         .catch((e) => setErr(errMsg(e)))
@@ -141,6 +164,20 @@ export function DiffTab({
       .finally(() => setBusy(null));
   };
 
+  /** Devuelve a HEAD un archivo tocado fuera de reclamo (scope creep). */
+  const revertOrphan = (path: string) => {
+    if (!project) return;
+    setBusyOrphan(path);
+    projectRevertPaths(project, [path])
+      .then((out) => {
+        onSay(`↺ Fuera de reclamo revertido: ${path} (${out || "ok"})`);
+        setOrphanConfirm(null);
+        load();
+      })
+      .catch((e) => onSay(errMsg(e), true))
+      .finally(() => setBusyOrphan(null));
+  };
+
   if (!project) {
     return (
       <div className="cc-empty">
@@ -181,6 +218,12 @@ export function DiffTab({
   const truncated = task ? (tdiff?.truncated ?? false) : (git?.truncated ?? false);
   const lines = diff.split(/\r?\n/);
   const shown = lines.slice(0, MAX_LINES);
+  // Archivos de la tarea que el Preview sabe abrir (html/svg/md).
+  const previewCandidates = task
+    ? [...new Set([...paths, ...files.map((f) => f.path)])]
+        .filter((p) => PREVIEW_EXT.test(p))
+        .sort()
+    : [];
 
   return (
     <div className="cc-artcol">
@@ -262,6 +305,15 @@ export function DiffTab({
                 tarea
               </span>
               <span className="cc-review-spacer" />
+              {previewCandidates.length > 0 && (
+                <button
+                  className="cc-mini-btn"
+                  onClick={() => onPreview(previewCandidates[0])}
+                  title={`Abrir en Preview: ${previewCandidates.join(", ")}`}
+                >
+                  👁️ Ver Preview
+                </button>
+              )}
               <button
                 className="cc-mini-btn"
                 onClick={() => setConfirm("commit")}
@@ -282,14 +334,82 @@ export function DiffTab({
           )}
         </div>
       )}
+      {task?.handover && (
+        <div
+          className="cc-handover"
+          title="Memoria del relevo: el agente la guardó pegada a la tarea antes de compactar"
+        >
+          <div className="cc-handover-head">
+            📝 Relevo de{" "}
+            <span style={{ color: agentColor(task.handover.by) }}>{task.handover.by}</span> hace{" "}
+            {ago(task.handover.ts_ms)}
+            {task.handover.files.length > 0
+              ? ` · ${task.handover.files.length} archivo${task.handover.files.length === 1 ? "" : "s"}`
+              : ""}
+          </div>
+          <div className="cc-handover-text">{task.handover.text}</div>
+        </div>
+      )}
       <div className="cc-files-row">
-        {files.map((f) => (
-          <span className="cc-file-chip" key={f.path} title={`${f.status} · ${f.path}`}>
-            <b style={{ color: STATUS_COLOR[f.status[0]] ?? "#8b98b8" }}>{f.status}</b>
-            {f.path}
-          </span>
-        ))}
+        {files.map((f) => {
+          const canPreview = PREVIEW_EXT.test(f.path);
+          return (
+            <span
+              className="cc-file-chip"
+              key={f.path}
+              data-click={canPreview ? "1" : "0"}
+              onClick={canPreview ? () => onPreview(f.path) : undefined}
+              title={canPreview ? `👁 Ver ${f.path} · ${f.status}` : `${f.status} · ${f.path}`}
+            >
+              <b style={{ color: STATUS_COLOR[f.status[0]] ?? "#8b98b8" }}>{f.status}</b>
+              {f.path}
+            </span>
+          );
+        })}
       </div>
+      {task && orphans.length > 0 && (
+        <div className="cc-orphans">
+          <div className="cc-orphans-head">
+            ⚠️ Archivos tocados fuera de reclamo (scope creep): git los ve cambiados y no
+            pertenecen a ninguna tarea.
+          </div>
+          {orphans.map((f) => (
+            <div className="cc-orphan-row" key={f.path}>
+              <span className="cc-file-chip" title={`${f.status} · ${f.path}`}>
+                <b style={{ color: STATUS_COLOR[f.status[0]] ?? "#8b98b8" }}>{f.status}</b>
+                {f.path}
+              </span>
+              {orphanConfirm === f.path ? (
+                <>
+                  <span className="cc-review-q cc-danger-text">¿Volver a HEAD?</span>
+                  <button
+                    className="cc-mini-btn cc-danger"
+                    disabled={busyOrphan === f.path}
+                    onClick={() => revertOrphan(f.path)}
+                  >
+                    {busyOrphan === f.path ? "…" : "↺ Sí"}
+                  </button>
+                  <button
+                    className="cc-mini-btn"
+                    disabled={busyOrphan === f.path}
+                    onClick={() => setOrphanConfirm(null)}
+                  >
+                    No
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="cc-mini-btn"
+                  onClick={() => setOrphanConfirm(f.path)}
+                  title="Devolver este archivo a su último commit"
+                >
+                  ↺ Revertir
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       {files.length === 0 ? (
         <div className="cc-empty">
           <div>

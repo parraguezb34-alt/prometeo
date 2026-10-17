@@ -3,9 +3,11 @@ import { addAgentTerminal, autoSpot, useLayout } from "../store";
 import type { Panel } from "../store";
 import {
   agentColor,
+  agentCommands,
   agentKeyFromCmd,
   ago,
   buildPlanPrompt,
+  compactOpencode,
   errMsg,
   onTeamUpdate,
   pushBroadcast,
@@ -301,6 +303,62 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
       say(errMsg(e), true);
     }
   };
+
+  /** Relevo con memoria: cuando un agente guarda su handover, lienzo compacta
+   * su contexto — Claude/Codex por su terminal, OpenCode por su API local. */
+  const autoCompact = async (e: TeamEvent) => {
+    const name = e.agent;
+    const now = Date.now();
+    if (now - (compactedAt.current.get(name) ?? 0) < 30_000) return;
+    compactedAt.current.set(name, now);
+    const task = tasks.find((t) => t.id === e.task_id);
+    const files = (e.files ?? []).slice(0, 6);
+    const focus = task
+      ? `Mantén el contexto de la tarea #${task.id} y los archivos ${files.join(", ") || "que tocaste"}`
+      : "Mantén el contexto de tu tarea en curso y el hilo de trabajo";
+    const low = name.toLowerCase();
+    if (low === "opencode") {
+      const proj = agents.find((a) => a.name === name)?.project;
+      if (!proj) {
+        say(`🔄 Relevo de ${name} guardado (sin carpeta conocida para compactar vía API).`, true);
+        return;
+      }
+      try {
+        await compactOpencode(proj);
+        say(`🧠 Relevo de ${name} guardado · contexto compactado (API de OpenCode).`);
+      } catch (err) {
+        say(`🔄 Relevo de ${name} guardado, pero no pude compactar: ${errMsg(err)}`, true);
+      }
+      return;
+    }
+    const cmds = agentCommands(name);
+    if (cmds.compact) {
+      const text = low === "claude" ? `${cmds.compact} ${focus}` : cmds.compact;
+      say(`🧠 Relevo de ${name} guardado · compactando su contexto…`);
+      window.setTimeout(() => {
+        writeAgent(name, `${text}\r`, "compactar con memoria").catch(() => {});
+      }, 1200);
+    } else {
+      say(`🧠 Relevo de ${name} guardado (su CLI no tiene compactar conocido).`);
+    }
+  };
+
+  const handoverSeq = useRef<number | null>(null);
+  const compactedAt = useRef(new Map<string, number>());
+  useEffect(() => {
+    const hs = (state?.events ?? []).filter((e) => e.kind === "handover");
+    const max = hs.reduce((m, e) => Math.max(m, e.seq), 0);
+    if (handoverSeq.current === null) {
+      handoverSeq.current = max; // al abrir, no compactar relevos viejos
+      return;
+    }
+    for (const e of hs) {
+      if (e.seq <= handoverSeq.current) continue;
+      handoverSeq.current = Math.max(handoverSeq.current, e.seq);
+      void autoCompact(e);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
 
   const toggleLeader = async (name: string) => {
     try {
@@ -736,6 +794,14 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                   #{t.id}
                 </span>
                 <span className="cc-task-title">{t.title}</span>
+                {t.handover && (
+                  <span
+                    className="cc-task-handover"
+                    title={`Relevo de ${t.handover.by} hace ${ago(t.handover.ts_ms)}: ${t.handover.text}`}
+                  >
+                    📝
+                  </span>
+                )}
                 {t.owner && (
                   <span
                     className="cc-task-owner"
@@ -839,6 +905,10 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                   taskId={diffTask}
                   onTaskChange={setDiffTask}
                   onSay={say}
+                  onPreview={(rel) => {
+                    setPreviewRel(rel);
+                    setView("preview");
+                  }}
                 />
               )}
               {view === "preview" && (

@@ -12,6 +12,8 @@ export type TeamEvent = {
   text: string;
   files: string[];
   to?: string | null;
+  /** Tarea ligada al evento (p.ej. un relevo guardado con team_handover_save). */
+  task_id?: number | null;
 };
 
 export type TeamAgent = {
@@ -28,6 +30,13 @@ export type TeamAgent = {
   ctx_ms?: number | null;
 };
 
+export type TeamHandover = {
+  text: string;
+  by: string;
+  ts_ms: number;
+  files: string[];
+};
+
 export type TeamTask = {
   id: number;
   title: string;
@@ -35,6 +44,8 @@ export type TeamTask = {
   owner: string;
   notes: string;
   created_ms: number;
+  /** Último relevo con memoria guardado por su dueño (team_handover_save). */
+  handover?: TeamHandover | null;
 };
 
 export type TeamClaim = {
@@ -114,6 +125,11 @@ export const teamTaskOp = (id: number, op: string) =>
  * its terminal by the caller). */
 export const teamDm = (agent: string, text: string) =>
   invoke<void>("team_dm", { agent, text });
+
+/** Compacta la sesión de OpenCode de un proyecto con la API de su servidor
+ * local (sin teclear en la TUI: la vía fiable para el relevo con memoria). */
+export const compactOpencode = (project: string) =>
+  invoke<string>("opencode_compact", { project });
 
 /** Live updates pushed by the hub whenever team state changes. */
 export const onTeamUpdate = (fn: () => void) =>
@@ -230,10 +246,13 @@ export function pushBroadcast(text: string, leader: string): Promise<number> {
   return pushPrompt(text, buildBroadcastPrompt(text, leader));
 }
 
-/** Prompt asking an agent for a handover summary before compacting/relaying. */
-export const HANDOVER_PROMPT =
-  "Publica un relevo compacto con team_update: qué has hecho, qué falta, decisiones tomadas y " +
-  "dónde lo dejaste (para poder continuar después, incluso tras compactar).";
+/** Relevo con memoria: el agente guarda su resumen pegado a la tarea y lienzo
+ * compacta su contexto después (sin amnesia). */
+export const HANDOVER_SAVE_PROMPT =
+  "🔄 MEMORIA ANTES DE COMPACTAR: guarda ya tu relevo con la herramienta team_handover_save " +
+  "(task_id de tu tarea actual si la tienes; summary con: qué hiciste, decisiones tomadas y qué " +
+  "falta; files con lo que tocaste). En cuanto lo guardes, lienzo compactará tu contexto " +
+  "automáticamente: no hagas /compact tú, solo guarda el relevo y sigue.";
 
 export type AgentCommands = {
   /** Slash commands to switch model (or open its picker). */
