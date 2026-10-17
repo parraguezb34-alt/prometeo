@@ -601,3 +601,107 @@ pub fn team_open(app: tauri::AppHandle, agent: String, mode: Option<String>) -> 
         Ok(spec)
     }
 }
+
+/// El CLI de OpenCode: el incluido con su app de escritorio o el del PATH.
+fn opencode_cli() -> Option<PathBuf> {
+    let local = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let bundled = local.join(r"Programs\@opencode-aidesktop\resources\opencode-cli.exe");
+    if bundled.exists() {
+        return Some(bundled);
+    }
+    if which("opencode") {
+        return Some(PathBuf::from("opencode"));
+    }
+    None
+}
+
+/// Sesión viva de OpenCode para un directorio (la más reciente en su db).
+fn opencode_session_for(dir: &str) -> Result<String, String> {
+    let db = home().join(".local/share/opencode/opencode.db");
+    if !db.is_file() {
+        return Err("no encontré opencode.db (¿se usó OpenCode en este equipo?)".into());
+    }
+    let con = rusqlite::Connection::open_with_flags(
+        &db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| format!("no pude abrir opencode.db: {e}"))?;
+    let want = dir.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let sid: Option<String> = con
+        .query_row(
+            "select id from session_v2 where lower(replace(directory, '\\', '/')) = ?1 \
+             order by time_updated desc limit 1",
+            [&want],
+            |r| r.get(0),
+        )
+        .ok();
+    sid.ok_or_else(|| "OpenCode no tiene sesión registrada para esta carpeta".into())
+}
+
+/// Compacta la sesión de OpenCode de una carpeta con la API de su servidor
+/// local (`POST /api/session/:id/compact`): la vía fiable para el relevo con
+/// memoria, sin teclear nada en su TUI. La petición es duradera: aunque la
+/// respuesta tarde, el servidor la ejecuta al llegar al siguiente límite de paso.
+#[tauri::command]
+pub fn opencode_compact(project: String) -> Result<String, String> {
+    let dir = project.trim().to_string();
+    if dir.is_empty() {
+        return Err("sin carpeta de proyecto".into());
+    }
+    let sid = opencode_session_for(&dir)?;
+    let cli = opencode_cli().ok_or("no encontré el CLI de OpenCode")?;
+    let mut cmd = Command::new(&cli);
+    cmd.arg("api")
+        .arg("POST")
+        .arg(format!("/api/session/{sid}/compact"))
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("no pude invocar el CLI de OpenCode: {e}"))?;
+    let mut waited = 0u64;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) => {
+                if waited >= 8000 {
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+                waited += 200;
+            }
+            Err(e) => return Err(format!("error esperando al CLI de OpenCode: {e}")),
+        }
+    };
+    let short = sid.chars().take(14).collect::<String>();
+    match status {
+        None => {
+            let _ = child.kill();
+            Ok(format!("compactación aceptada por OpenCode ({short}…) — se aplicará en su siguiente límite de paso"))
+        }
+        Some(s) if s.success() => Ok(format!("contexto de OpenCode compactado ({short}…)")),
+        Some(_) => {
+            let out = child.wait_with_output().ok();
+            let msg = out
+                .as_ref()
+                .map(|o| {
+                    let so = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    let se = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                    if so.is_empty() { se } else { so }
+                })
+                .unwrap_or_default();
+            Err(format!(
+                "OpenCode rechazó la compactación: {}",
+                msg.chars().take(300).collect::<String>()
+            ))
+        }
+    }
+}

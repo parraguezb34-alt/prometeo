@@ -55,6 +55,23 @@ pub struct Event {
     pub files: Vec<String>,
     #[serde(default)]
     pub to: Option<String>,
+    /// Tarea a la que pertenece el evento (p.ej. un relevo guardado).
+    #[serde(default)]
+    pub task_id: Option<u64>,
+}
+
+/// Memoria de relevo que un agente guarda pegado a su tarea antes de compactar
+/// o pasar el testigo.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TaskHandover {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub by: String,
+    #[serde(default)]
+    pub ts_ms: u64,
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -68,6 +85,9 @@ pub struct Task {
     #[serde(default)]
     pub notes: String,
     pub created_ms: u64,
+    /// Último relevo guardado por su dueño (qué hizo, decisiones, qué falta).
+    #[serde(default)]
+    pub handover: Option<TaskHandover>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -220,6 +240,20 @@ pub fn push_event(
     files: Vec<String>,
     to: Option<String>,
 ) -> Event {
+    push_event_full(inner, agent, session_id, kind, text, files, to, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn push_event_full(
+    inner: &mut HubInner,
+    agent: &str,
+    session_id: &str,
+    kind: &str,
+    text: &str,
+    files: Vec<String>,
+    to: Option<String>,
+    task_id: Option<u64>,
+) -> Event {
     inner.seq += 1;
     let event = Event {
         seq: inner.seq,
@@ -230,12 +264,53 @@ pub fn push_event(
         text: text.to_string(),
         files,
         to,
+        task_id,
     };
     inner.events.push_back(event.clone());
     while inner.events.len() > MAX_EVENTS {
         inner.events.pop_front();
     }
     event
+}
+
+/// Guarda el relevo de un agente pegado a su tarea y lo anuncia en el feed.
+pub fn save_handover(
+    inner: &mut HubInner,
+    agent: &str,
+    session_id: &str,
+    task_id: Option<u64>,
+    summary: &str,
+    files: Vec<String>,
+) -> u64 {
+    let now = now_ms();
+    let mut attached = false;
+    if let Some(id) = task_id {
+        if let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) {
+            task.handover = Some(TaskHandover {
+                text: summary.to_string(),
+                by: agent.to_string(),
+                ts_ms: now,
+                files: files.clone(),
+            });
+            attached = true;
+        }
+    }
+    let label = match task_id {
+        Some(id) if attached => format!("#{id} · "),
+        Some(id) => format!("#{id} (sin tarea) · "),
+        None => String::new(),
+    };
+    let ev = push_event_full(
+        inner,
+        agent,
+        session_id,
+        "handover",
+        &format!("{label}{summary}"),
+        files,
+        None,
+        task_id,
+    );
+    ev.seq
 }
 
 /// Resolve (agent display name, session id) for an incoming event.
@@ -554,6 +629,7 @@ pub fn team_add_task(hub: tauri::State<'_, Hub>, title: String) -> Result<(), St
         owner: String::new(),
         notes: String::new(),
         created_ms: now_ms(),
+        handover: None,
     });
     push_event(
         &mut inner,

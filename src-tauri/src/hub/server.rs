@@ -95,6 +95,8 @@ fn handle(mut request: tiny_http::Request, app: &AppHandle) {
         ("POST", "/heartbeat") => cmd_heartbeat(app, &payload),
         ("POST", "/leave") => cmd_leave(app, &payload),
         ("POST", "/event") => cmd_event(app, &payload),
+        ("POST", "/handover") => cmd_handover(app, &payload),
+        ("POST", "/ctx") => cmd_ctx(app, &payload),
         ("GET", "/state") => cmd_state(app, &query),
         ("GET", "/feed") => cmd_feed(app, &query),
         ("POST", "/task") => cmd_task(app, &payload),
@@ -227,6 +229,61 @@ fn cmd_event(app: &AppHandle, payload: &Value) -> Result<Value, String> {
         }
         hub::persist(inner);
         json!({ "seq": ev.seq })
+    })
+    .ok_or("hub no inicializado")?;
+    hub::notify_ui();
+    Ok(out)
+}
+
+/// Relevo con memoria: guarda el resumen pegado a la tarea y lo publica.
+fn cmd_handover(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let sid = payload["session_id"].as_str().unwrap_or("").to_string();
+    let task_id = payload["task_id"].as_u64().filter(|v| *v > 0);
+    let summary: String = payload["summary"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(1500)
+        .collect();
+    if summary.is_empty() {
+        return Err("el relevo necesita un resumen".into());
+    }
+    let files: Vec<String> = payload["files"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .take(60)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let out = hub::with_inner(app, |inner| {
+        let (agent, sid) = hub::agent_label(inner, &sid, payload["agent"].as_str());
+        let seq = hub::save_handover(inner, &agent, &sid, task_id, &summary, files);
+        hub::persist(inner);
+        json!({ "ok": true, "seq": seq })
+    })
+    .ok_or("hub no inicializado")?;
+    hub::notify_ui();
+    Ok(out)
+}
+
+/// Telemetría de contexto sin evento de feed (la usan los muestreadores del
+/// puente para los CLIs sin hooks).
+fn cmd_ctx(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let sid = payload["session_id"].as_str().unwrap_or("").to_string();
+    let model = payload["model"].as_str().map(|s| s.to_string());
+    let ctx_tokens = payload["ctx_tokens"].as_u64();
+    let ctx_window = payload["ctx_window"].as_u64();
+    if model.is_none() && ctx_tokens.is_none() {
+        return Ok(json!({ "ok": false }));
+    }
+    let out = hub::with_inner(app, |inner| {
+        let (agent, sid) = hub::agent_label(inner, &sid, payload["agent"].as_str());
+        hub::report_ctx(inner, &sid, &agent, model, ctx_tokens, ctx_window);
+        json!({ "ok": true })
     })
     .ok_or("hub no inicializado")?;
     hub::notify_ui();
@@ -367,6 +424,7 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                     owner: String::new(),
                     notes,
                     created_ms: hub::now_ms(),
+                    handover: None,
                 };
                 inner.tasks.push(task.clone());
                 hub::push_event(

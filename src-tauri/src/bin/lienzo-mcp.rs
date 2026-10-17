@@ -227,7 +227,8 @@ fn render_tasks(state: &Value) -> String {
 fn initialize_result(params: &Value, client: Option<&HubClient>) -> Value {
     let mut instructions = String::from(
         "Herramientas del equipo compartido de lienzo: varios agentes de IA trabajan juntos en el mismo proyecto. \
-Empieza con team_context, publica avances con team_update, reserva archivos con team_claim_files antes de editarlos y revisa team_feed.",
+Empieza con team_context, publica avances con team_update, reserva archivos con team_claim_files antes de editarlos y revisa team_feed. \
+Cuando tu contexto esté muy lleno, guarda tu memoria con team_handover_save (incluye tu task_id): queda pegada a la tarea y la app compactará tu contexto sin perder el hilo.",
     );
     if let Some(c) = client {
         if let Ok(state) = c.get("/state?limit=1") {
@@ -355,6 +356,19 @@ fn tools_catalog() -> Value {
                     "files": { "type": "array", "items": { "type": "string" } }
                 },
                 "required": ["files"]
+            }
+        },
+        {
+            "name": "team_handover_save",
+            "description": "Guarda tu relevo con memoria pegado a tu tarea: qué hiciste, decisiones tomadas, qué falta y archivos tocados. Úsalo cuando el contexto esté lleno o al terminar tu turno; la app compactará tu contexto después sin perder el hilo.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "integer", "description": "Número de tu tarea actual (si la tienes)" },
+                    "summary": { "type": "string", "description": "Resumen: qué hiciste, decisiones y qué falta" },
+                    "files": { "type": "array", "items": { "type": "string" }, "description": "Archivos que tocaste (opcional)" }
+                },
+                "required": ["summary"]
             }
         }
     ])
@@ -504,6 +518,22 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                     )
                 })
         }
+        "team_handover_save" => {
+            let summary = trunc(args["summary"].as_str().unwrap_or(""), 1500);
+            let task_id = args["task_id"].as_u64().filter(|v| *v > 0);
+            let files = str_array(&args["files"]);
+            client
+                .post(
+                    "/handover",
+                    &json!({ "session_id": sid, "task_id": task_id, "summary": summary, "files": files }),
+                )
+                .map(|_| {
+                    text_result(
+                        "relevo guardado en la tarea; la app compactará tu contexto para liberar espacio (no hace falta que lo hagas tú)",
+                        false,
+                    )
+                })
+        }
         other => return Err((-32602, format!("herramienta desconocida: {other}"))),
     };
 
@@ -556,6 +586,41 @@ fn mcp_mode() {
             std::thread::sleep(std::time::Duration::from_secs(20));
             let _ = c.post("/heartbeat", &json!({ "session_id": sid }));
         });
+    }
+
+    // Telemetría de contexto para CLIs sin hooks (OpenCode, Codex): lee su
+    // almacén local cada 12 s y lo reporta al hub sin ruido en el feed.
+    if matches!(agent.as_str(), "opencode" | "codex") {
+        if let (Some(c), false) = (client.clone(), session_id.is_empty()) {
+            let sid = session_id.clone();
+            let agent_name = agent.clone();
+            let cwd = std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            std::thread::spawn(move || {
+                let mut win_cache: Option<(String, u64)> = None;
+                let mut last: Option<(u64, u64)> = None;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(12));
+                    let Some(sample) = sample_telemetry(&agent_name, &cwd, &mut win_cache) else {
+                        continue;
+                    };
+                    if last == Some((sample.used, sample.window)) {
+                        continue;
+                    }
+                    last = Some((sample.used, sample.window));
+                    let _ = c.post(
+                        "/ctx",
+                        &json!({
+                            "session_id": sid,
+                            "model": sample.model,
+                            "ctx_tokens": sample.used,
+                            "ctx_window": sample.window,
+                        }),
+                    );
+                }
+            });
+        }
     }
 
     let stdin = std::io::stdin();
@@ -765,34 +830,46 @@ fn hook_mode(args: &[String]) {
     }
 }
 
+/// Lee la cola de un archivo de texto (la primera línea puede venir cortada;
+/// los consumidores saltan JSON inválidos).
+fn read_tail(path: &std::path::Path, max: u64) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let start = meta.len().saturating_sub(max);
+    let mut file = std::fs::File::open(path).ok()?;
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// Lee la primera línea completa de un archivo de texto. La `session_meta` de
+/// Codex puede superar los 8 KB (instrucciones incluidas), así que nada de
+/// cabeceras de tamaño fijo que la trunquen.
+fn read_first_line(path: &std::path::Path) -> Option<String> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = String::new();
+    reader.read_line(&mut line).ok()?;
+    if line.is_empty() {
+        return None;
+    }
+    Some(line)
+}
+
 /// Uso de contexto del último turno de un transcript de Claude Code (JSONL).
 /// Devuelve (modelo, tokens de contexto usados, ventana del modelo).
 fn transcript_usage(path: &str) -> (Option<String>, Option<u64>, Option<u64>) {
     if path.is_empty() {
         return (None, None, None);
     }
-    let Ok(meta) = std::fs::metadata(path) else {
-        return (None, None, None);
-    };
-    if !meta.is_file() {
-        return (None, None, None);
-    }
     // Solo la cola: los transcripts crecen mucho (resultados de herramientas).
-    const TAIL: u64 = 512 * 1024;
-    let start = meta.len().saturating_sub(TAIL);
-    let Ok(mut file) = std::fs::File::open(path) else {
+    let Some(text) = read_tail(std::path::Path::new(path), 512 * 1024) else {
         return (None, None, None);
     };
-    if file.seek(SeekFrom::Start(start)).is_err() {
-        return (None, None, None);
-    }
-    let mut bytes = Vec::new();
-    if file.read_to_end(&mut bytes).is_err() {
-        return (None, None, None);
-    }
-    // La primera línea puede venir cortada (empezamos en mitad del archivo);
-    // los JSON inválidos se saltan solos.
-    let text = String::from_utf8_lossy(&bytes);
     for line in text.lines().rev() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -822,6 +899,205 @@ fn model_window(model: &str) -> u64 {
     } else {
         200_000
     }
+}
+
+// ---------------------------------------------------------------------------
+// Telemetría para CLIs sin hooks (OpenCode, Codex)
+// ---------------------------------------------------------------------------
+
+struct CtxSample {
+    model: Option<String>,
+    used: u64,
+    window: u64,
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+}
+
+/// Normaliza una ruta para comparar directorios entre CLIs.
+fn norm_dir(p: &str) -> String {
+    p.replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+fn sample_telemetry(
+    agent: &str,
+    cwd: &str,
+    win_cache: &mut Option<(String, u64)>,
+) -> Option<CtxSample> {
+    match agent {
+        "opencode" => opencode_ctx(cwd, win_cache),
+        "codex" => codex_ctx(cwd),
+        _ => None,
+    }
+}
+
+/// Contexto real de OpenCode: última sesión de este directorio en opencode.db
+/// (tokens del último mensaje del asistente) + ventana del catálogo kv.
+fn opencode_ctx(cwd: &str, win_cache: &mut Option<(String, u64)>) -> Option<CtxSample> {
+    let db = home_dir()?.join(".local/share/opencode/opencode.db");
+    if !db.is_file() {
+        return None;
+    }
+    let con = rusqlite::Connection::open_with_flags(
+        &db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let want = norm_dir(cwd);
+    let session: String = con
+        .query_row(
+            "select id from session_v2 where lower(replace(directory, '\\', '/')) = ?1 \
+             order by time_updated desc limit 1",
+            [&want],
+            |r| r.get(0),
+        )
+        .ok()?;
+    // El mensaje más nuevo puede estar en streaming (tokens: null), así que
+    // buscamos hacia atrás el último que ya tenga telemetría de tokens.
+    let mut stmt = con
+        .prepare(
+            "select data from session_message where session_id = ?1 and type = 'assistant' \
+             order by rowid desc limit 25",
+        )
+        .ok()?;
+    let rows = stmt
+        .query_map([&session], |r| r.get::<_, String>(0))
+        .ok()?;
+    let mut found: Option<Value> = None;
+    for row in rows.flatten() {
+        let Ok(v) = serde_json::from_str::<Value>(&row) else {
+            continue;
+        };
+        if v["tokens"].is_null() {
+            continue;
+        }
+        found = Some(v);
+        break;
+    }
+    let v = found?;
+    let t = &v["tokens"];
+    if t.is_null() {
+        return None;
+    }
+    let used = t["input"].as_u64().unwrap_or(0)
+        + t["cache"]["read"].as_u64().unwrap_or(0)
+        + t["cache"]["write"].as_u64().unwrap_or(0);
+    if used == 0 {
+        return None;
+    }
+    let model = v["model"]["id"].as_str().map(|s| s.to_string());
+    let window = match &model {
+        Some(id) => {
+            let cached = win_cache.as_ref().filter(|(c, _)| c == id).map(|(_, w)| *w);
+            match cached {
+                Some(w) => w,
+                None => {
+                    let w = opencode_window(&con, id).unwrap_or(200_000);
+                    *win_cache = Some((id.clone(), w));
+                    w
+                }
+            }
+        }
+        None => 200_000,
+    };
+    Some(CtxSample { model, used, window })
+}
+
+/// `limit.context` del modelo en el catálogo de OpenCode (tabla kv).
+fn opencode_window(con: &rusqlite::Connection, model_id: &str) -> Option<u64> {
+    let catalog: String = con
+        .query_row(
+            "select value from kv where key = 'models-dev:catalog'",
+            [],
+            |r| r.get(0),
+        )
+        .ok()?;
+    let v: Value = serde_json::from_str(&catalog).ok()?;
+    let body: Value = serde_json::from_str(v["body"].as_str()?).ok()?;
+    for (_, provider) in body.as_object()? {
+        if let Some(w) = provider["models"][model_id]["limit"]["context"].as_u64() {
+            return Some(w);
+        }
+    }
+    None
+}
+
+/// Contexto real de Codex: el rollout vivo más reciente cuyo cwd coincide,
+/// con el último `token_count` (prompt + salida del último turno).
+fn codex_ctx(cwd: &str) -> Option<CtxSample> {
+    let root = home_dir()?.join(".codex/sessions");
+    if !root.is_dir() {
+        return None;
+    }
+    let (mtime, path) = newest_jsonl(&root, 4)?;
+    if mtime.elapsed().map(|d| d.as_secs() > 900).unwrap_or(true) {
+        return None;
+    }
+    let first = read_first_line(&path)?;
+    let meta: Value = serde_json::from_str(&first).ok()?;
+    let cwd_meta = meta["payload"]["cwd"].as_str()?;
+    if norm_dir(cwd_meta) != norm_dir(cwd) {
+        return None;
+    }
+    let tail = read_tail(&path, 512 * 1024)?;
+    let mut model: Option<String> = None;
+    for line in tail.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if model.is_none() {
+            model = v["payload"]["model"].as_str().map(|s| s.to_string());
+        }
+        if v["type"].as_str() != Some("event_msg") {
+            continue;
+        }
+        let p = &v["payload"];
+        if p["type"].as_str() != Some("token_count") {
+            continue;
+        }
+        let used = p["info"]["last_token_usage"]["total_tokens"].as_u64()?;
+        if used == 0 {
+            continue;
+        }
+        let window = p["info"]["model_context_window"]
+            .as_u64()
+            .filter(|w| *w > 0)
+            .unwrap_or(200_000);
+        return Some(CtxSample { model, used, window });
+    }
+    None
+}
+
+/// El .jsonl más reciente bajo un árbol de carpetas (profundidad acotada).
+fn newest_jsonl(
+    dir: &std::path::Path,
+    depth: u32,
+) -> Option<(std::time::SystemTime, std::path::PathBuf)> {
+    if depth == 0 {
+        return None;
+    }
+    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = e.path();
+        let Ok(meta) = e.metadata() else { continue };
+        let cand = if meta.is_dir() {
+            newest_jsonl(&path, depth - 1)
+        } else if path.extension().map(|x| x == "jsonl").unwrap_or(false) {
+            meta.modified().ok().map(|t| (t, path))
+        } else {
+            None
+        };
+        if let Some((t, p)) = cand {
+            let better = best.as_ref().map(|(bt, _)| t > *bt).unwrap_or(true);
+            if better {
+                best = Some((t, p));
+            }
+        }
+    }
+    best
 }
 
 /// Team broadcasts not yet delivered to this hook session / agent.
