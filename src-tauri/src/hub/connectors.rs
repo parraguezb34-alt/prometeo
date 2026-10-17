@@ -505,11 +505,16 @@ pub fn launch_target(agent: &str) -> Option<Value> {
         "antigravity" => {
             // Prefer the Antigravity CLI (`agy`) so it runs inside a lienzo
             // terminal; fall back to opening its desktop app.
+            // `--dangerously-skip-permissions` stops the constant tool
+            // permission prompts — remove the flag here to get them back.
             let agy = local.join(r"agy\bin\agy.exe");
             if agy.exists() {
-                Some(json!({ "kind": "pty", "cmd": agy.display().to_string() }))
+                Some(json!({
+                    "kind": "pty",
+                    "cmd": format!("\"{}\" --dangerously-skip-permissions", agy.display())
+                }))
             } else if which("agy") {
-                Some(json!({ "kind": "pty", "cmd": "agy" }))
+                Some(json!({ "kind": "pty", "cmd": "agy --dangerously-skip-permissions" }))
             } else {
                 let app_exe = local.join(r"Programs\antigravity\Antigravity.exe");
                 if app_exe.exists() {

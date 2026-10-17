@@ -593,10 +593,22 @@ body,
 }
 
 .prog-agent {
+  padding: 4px 0;
+}
+
+.prog-agent-row {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 3px 0;
+}
+
+.prog-now {
+  margin-left: 14px;
+  color: #5c688b;
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .prog-lead {

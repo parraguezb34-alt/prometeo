@@ -703,7 +703,7 @@ fn hook_mode(args: &[String]) {
             json!({
                 "decision": "block",
                 "reason": format!(
-                    "📣 El usuario envió este mensaje a TODO el equipo (te llega ahora):\n{}\n\nActúa según tu rol: si eres el líder, reparte y coordina; si no, ejecuta tu parte y publícala con team_update. Mira team_context para el estado del equipo.",
+                    "📣 El usuario envió este mensaje a TODO el equipo (te llega ahora):\n{}\n\nActúa según tu rol: si eres el líder, reparte y coordina; si no, ejecuta tu parte y publícala con team_update. Mira team_context para el estado del equipo (compañeros, tareas y reservas); reserva los archivos con team_claim_files antes de editarlos y habla con los demás con team_message.",
                     joined.join("\n")
                 )
             })

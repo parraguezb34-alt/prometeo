@@ -48,6 +48,23 @@ function agentKeyFromCmd(cmd: string): string {
   return c.split(/[\\/]/).pop()?.replace(/\.(exe|cmd|bat|ps1)$/i, "") || "agente";
 }
 
+/** Wrap the user's message with the team protocol before typing it into each
+ * agent terminal. Single line on purpose: it is submitted as-is into their
+ * prompt box, and without this agents tend to just work alone. */
+function buildBroadcastPrompt(text: string, leader: string): string {
+  return (
+    "📣 MENSAJE DEL USUARIO PARA TODO EL EQUIPO — varios agentes trabajáis juntos en este " +
+    "proyecto mediante el MCP «lienzo-team». Petición: «" +
+    text +
+    "». Antes de empezar, llama a team_context para ver compañeros, tareas y reservas. " +
+    (leader ? `Líder del equipo: ${leader}; respeta su reparto. ` : "") +
+    "Descompón el trabajo: crea tareas con team_task_create o reclama las abiertas con " +
+    "team_task_claim; publica tu plan y cada avance con team_update; reserva los archivos " +
+    "con team_claim_files antes de editarlos; y usa team_message para coordinarte con los " +
+    "demás agentes. Al terminar tu parte, publica un resumen con team_update."
+  );
+}
+
 const STATUS_LABEL: Record<string, string> = {
   open: "abierta",
   claimed: "en curso",
@@ -190,14 +207,16 @@ export function TeamPanel({ panel }: { panel: Panel }) {
     if (!text) return;
     try {
       await teamBroadcast(text);
-      // Type it into every agent terminal running on the canvas.
+      // Type it into every agent terminal running on the canvas, wrapped with
+      // the team protocol so agents actually coordinate with each other.
+      const typedPrompt = buildBroadcastPrompt(text, (state?.leader ?? "").trim());
       const panels = getLayout().panels.filter(
         (p) => p.kind === "terminal" && !!p.sessionId && !!p.cmd,
       );
       const agentsTyped = new Set<string>();
       for (const p of panels) {
         try {
-          await termWrite(p.sessionId!, `${text}\r`);
+          await termWrite(p.sessionId!, `${typedPrompt}\r`);
           agentsTyped.add(agentKeyFromCmd(p.cmd ?? ""));
         } catch {
           /* session may have died; the feed still has the message */
@@ -211,7 +230,7 @@ export function TeamPanel({ panel }: { panel: Panel }) {
       refresh();
       say(
         agentsTyped.size > 0
-          ? `📣 Enviado al feed y escrito en ${agentsTyped.size} terminal(es) del lienzo.`
+          ? `📣 Enviado al feed y escrito en ${agentsTyped.size} terminal(es), con instrucciones de coordinación.`
           : "📣 Publicado para el equipo (no hay terminales de agentes abiertas ahora mismo).",
       );
     } catch (e) {

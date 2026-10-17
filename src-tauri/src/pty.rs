@@ -82,6 +82,95 @@ fn home_dir() -> Option<String> {
         .or_else(|| std::env::var("HOME").ok())
 }
 
+/// Compose a PowerShell `-Command` line for a launch command like
+/// `"C:\...\agy.exe" --dangerously-skip-permissions` (executable + flags).
+/// Only the executable part gets the call operator/quotes — wrapping the whole
+/// line in `& '...'` broke any command carrying arguments.
+fn ps_command_line(line: &str) -> String {
+    let t = line.trim();
+    // Split head (executable) from rest (arguments): explicit quotes, an
+    // executable suffix (`.exe`, `.cmd`, …) or the first space.
+    let (head, rest) = if t.starts_with('\'') || t.starts_with('"') {
+        let q = t.chars().next().unwrap();
+        match t[1..].find(q) {
+            Some(i) => (&t[..i + 2], t[i + 2..].trim()),
+            None => (t, ""),
+        }
+    } else {
+        let lower = t.to_ascii_lowercase();
+        let exe_end = [".exe", ".cmd", ".bat", ".ps1"]
+            .iter()
+            .filter_map(|ext| {
+                lower.find(ext).and_then(|i| {
+                    let end = i + ext.len();
+                    let after = &lower[end..];
+                    (after.is_empty() || after.starts_with(' ')).then_some(end)
+                })
+            })
+            .min();
+        match exe_end {
+            Some(end) => (&t[..end], t[end..].trim()),
+            None => match t.split_once(' ') {
+                Some((h, r)) => (h, r.trim()),
+                None => (t, ""),
+            },
+        }
+    };
+    let bare = head.trim_matches(|c| c == '\'' || c == '"');
+    if bare.contains(['\\', '/']) {
+        // A path needs the call operator (`&`) so PowerShell runs it literally.
+        let quoted = format!("& '{}'", bare.replace('\'', "''"));
+        if rest.is_empty() {
+            quoted
+        } else {
+            format!("{} {}", quoted, rest)
+        }
+    } else if rest.is_empty() {
+        bare.to_string()
+    } else {
+        format!("{} {}", bare, rest)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ps_command_line;
+
+    #[test]
+    fn ps_line_path_with_flag_uses_call_operator() {
+        assert_eq!(
+            ps_command_line("\"C:\\tools\\agy.exe\" --dangerously-skip-permissions"),
+            "& 'C:\\tools\\agy.exe' --dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn ps_line_bare_path_is_quoted() {
+        assert_eq!(
+            ps_command_line("C:\\tools\\opencode-cli.exe"),
+            "& 'C:\\tools\\opencode-cli.exe'"
+        );
+    }
+
+    #[test]
+    fn ps_line_spaced_path_with_args_splits_at_exe() {
+        assert_eq!(
+            ps_command_line("C:\\Program Files\\My App\\app.exe --x 1"),
+            "& 'C:\\Program Files\\My App\\app.exe' --x 1"
+        );
+    }
+
+    #[test]
+    fn ps_line_plain_command_passthrough() {
+        assert_eq!(ps_command_line("claude"), "claude");
+        assert_eq!(
+            ps_command_line("agy --dangerously-skip-permissions"),
+            "agy --dangerously-skip-permissions"
+        );
+        assert_eq!(ps_command_line("npm run dev"), "npm run dev");
+    }
+}
+
 fn append_scrollback(buffer: &Arc<Mutex<VecDeque<u8>>>, bytes: &[u8]) {
     if let Ok(mut b) = buffer.lock() {
         b.extend(bytes.iter().copied());
@@ -125,11 +214,7 @@ pub fn term_spawn(
             cmd.arg("-NoLogo");
             cmd.arg("-NoExit");
             cmd.arg("-Command");
-            cmd.arg(if needs_quote {
-                format!("& '{}'", line.replace('\'', "''"))
-            } else {
-                line.to_string()
-            });
+            cmd.arg(ps_command_line(line));
         } else {
             cmd.arg("/K");
             cmd.arg(if needs_quote {

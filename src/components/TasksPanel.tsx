@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { agentColor, ago, onTeamUpdate, teamState } from "../lib/team";
-import type { TeamState } from "../lib/team";
+import type { TeamEvent, TeamState } from "../lib/team";
 
 const STATUS_LABEL: Record<string, string> = {
   open: "abierta",
@@ -40,6 +40,14 @@ export function TasksPanel() {
 
   const pending = tasks.filter((t) => t.status !== "done");
 
+  // Latest activity per agent (what each one is doing right now).
+  const lastByAgent = new Map<string, TeamEvent>();
+  for (const e of state?.events ?? []) {
+    if (e.kind === "join" || e.kind === "leave") continue;
+    const prev = lastByAgent.get(e.agent);
+    if (!prev || e.ts_ms > prev.ts_ms) lastByAgent.set(e.agent, e);
+  }
+
   return (
     <div className="prog">
       <div className="prog-head">
@@ -50,27 +58,38 @@ export function TasksPanel() {
         <div className="prog-fill" style={{ width: `${pct}%` }} />
       </div>
       <div className="prog-sub">
-        {done}/{total} tareas · {agents.length} agente{agents.length === 1 ? "" : "s"} en línea
+        {total > 0 ? `${done}/${total} tareas` : "sin tareas aún"} · {agents.length} agente
+        {agents.length === 1 ? "" : "s"} en línea
       </div>
 
-      <div className="team-section-title">Agentes</div>
+      <div className="team-section-title">Agentes — ahora mismo</div>
       {agents.length === 0 ? (
         <div className="prog-empty">Ninguno conectado todavía.</div>
       ) : (
-        agents.map((a) => (
-          <div className="prog-agent" key={a.session_id}>
-            <span className="agent-dot" data-on="1" />
-            <span style={{ color: agentColor(a.name) }}>{a.name}</span>
-            {leader === a.name && <span className="prog-lead">líder</span>}
-            <span className="prog-seen">hace {ago(a.last_seen_ms)}</span>
-          </div>
-        ))
+        agents.map((a) => {
+          const last = lastByAgent.get(a.name);
+          return (
+            <div className="prog-agent" key={a.session_id}>
+              <div className="prog-agent-row">
+                <span className="agent-dot" data-on="1" />
+                <span style={{ color: agentColor(a.name) }}>{a.name}</span>
+                {leader === a.name && <span className="prog-lead">líder</span>}
+                <span className="prog-seen">hace {ago(a.last_seen_ms)}</span>
+              </div>
+              <div className="prog-now" title={last?.text}>
+                {last ? last.text : "en línea, sin actividad aún"}
+              </div>
+            </div>
+          );
+        })
       )}
 
       <div className="team-section-title">Tareas pendientes</div>
       {pending.length === 0 ? (
         <div className="prog-empty">
-          {total === 0 ? "Sin tareas todavía." : "¡Todo hecho! 🎉"}
+          {total === 0
+            ? "Sin tareas todavía. Manda un 📣 al equipo pidiendo que reparta el trabajo, o créalas en la pestaña Tareas."
+            : "¡Todo hecho! 🎉"}
         </div>
       ) : (
         pending.map((t) => (

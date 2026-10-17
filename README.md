@@ -21,10 +21,10 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
   - **Sin pisarse archivos**: `team_claim_files` reserva archivos y devuelve conflictos si otro agente ya los tiene.
   - **Hub local** (Rust, `127.0.0.1` + token): descubrimiento en `%APPDATA%\lienzo\hub.json`; las terminales que abre lienzo heredan `LIENZO_HUB` / `LIENZO_TOKEN`.
 - **Orquestador del equipo** 🎛️:
-  - **Prompt para todos** (📣 barra arriba del panel Equipo): publica el mensaje en el feed y lo **escribe en la terminal de cada agente abierto** en el lienzo (OpenCode/Antigravity/Claude la reciben al instante), y a Claude en cualquier ventana le llega como bloque del **hook Stop** cuando termina su turno.
+  - **Prompt para todos** (📣 barra arriba del panel Equipo): publica el mensaje en el feed y lo **escribe en la terminal de cada agente abierto** en el lienzo (OpenCode/Antigravity/Claude la reciben al instante), y a Claude en cualquier ventana le llega como bloque del **hook Stop** cuando termina su turno. El texto viaja **envuelto con el protocolo de equipo** (llama a `team_context`, reparte/reclama tareas, publica avances con `team_update`, reserva archivos) para que los agentes coordinen de verdad en vez de trabajar cada uno por su cuenta.
   - **Normas del equipo (system prompt global)**: texto editable en la pestaña Agentes que se inyecta a los agentes en `team_context`, en las instrucciones del MCP y en cada prompt vía hooks — saben que trabajan juntos y cómo coordinarse.
   - **Jerarquía sin peleas**: un **líder** (el primero que conecta, o el que elijas) coordina y reparte; los demás proponen y ejecutan su parte.
-  - **Panel Progreso** (`+ Progreso`, arriba a la derecha): barra de % completado, agentes en línea con su líder y tareas pendientes/hechas de un vistazo.
+  - **Panel Progreso** (`+ Progreso`, arriba a la derecha): barra de % completado, una línea **«Ahora mismo» por agente** con su última actividad, agentes en línea con su líder y tareas pendientes/hechas de un vistazo.
 
 ## Arquitectura
 
@@ -50,15 +50,18 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 3. Pulsa **Conectar** en el agente que quieras (Claude Code, Codex, OpenCode, Antigravity).
 4. Pulsa **Abrir** para lanzarlo ya dentro del proyecto: Claude/Codex/OpenCode **y Antigravity**
    se abren en una **terminal del lienzo** (OpenCode usa su CLI v2, `mcp.servers`;
-   Antigravity usa su CLI oficial `agy` — misma cuenta y misma config MCP; si no está,
-   se abre su app). También puedes abrirlo tú en una terminal — ya está en el equipo:
+   Antigravity usa su CLI oficial `agy` — misma cuenta y misma config MCP — lanzada con
+   `--dangerously-skip-permissions` para que no pida permiso en cada herramienta; quita la
+   bandera en `connectors.rs` si prefieres recuperar los avisos; si `agy` no está, se abre
+   su app). También puedes abrirlo tú en una terminal — ya está en el equipo:
    verás su actividad en el feed y él verá la tuya vía `team_context` / hooks.
 
 ## Orquestar al equipo
 
 1. **Prompt para todos** (barra 📣 arriba del panel Equipo): se publica en el feed y se
-   escribe en la terminal de cada agente abierto; a Claude le llega además como bloque
-   del hook al terminar su turno. Todos responden y lo ves en Actividad.
+   escribe en la terminal de cada agente abierto **con las instrucciones de coordinación**
+   (así se conectan al equipo, reparten tareas y se hablan entre sí); a Claude le llega
+   además como bloque del hook al terminar su turno. Todos responden y lo ves en Actividad.
 2. **Normas + líder** (pestaña Agentes → «Normas del equipo y líder»): el texto se inyecta
    en `team_context`, en las instrucciones del MCP y en cada prompt vía hooks. El líder
    coordina y reparte; elige uno o deja que sea el primero que conecte.
