@@ -69,6 +69,11 @@ export const TerminalPanel = memo(function TerminalPanel({
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
+    try {
+      fit.fit();
+    } catch {
+      /* host not measurable yet */
+    }
     const raf = requestAnimationFrame(() => {
       try {
         fit.fit();
@@ -108,6 +113,14 @@ export const TerminalPanel = memo(function TerminalPanel({
         setPanelSession(panel.id, sid);
       }
       if (disposedRef.current) return;
+      // Sync the PTY with the real panel size before the agent paints its TUI
+      // (OpenCode / Claude render cleanly from the first frame this way).
+      try {
+        fit.fit();
+      } catch {
+        /* ignore */
+      }
+      termResize(sid, term.cols, term.rows).catch(() => {});
       await addUn(
         listen<PtyDataEvent>("pty://data", (e) => {
           if (!disposedRef.current && e.payload.id === sessionRef.current) {

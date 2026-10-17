@@ -34,7 +34,10 @@ const AGENTS: &[AgentDef] = &[
         label: "Antigravity",
         cli: "agy",
         dirs: &[".gemini"],
-        extra_bins: &[r"Programs\antigravity\Antigravity.exe"],
+        extra_bins: &[
+            r"agy\bin\agy.exe",
+            r"Programs\antigravity\Antigravity.exe",
+        ],
     },
 ];
 
@@ -500,11 +503,20 @@ pub fn launch_target(agent: &str) -> Option<Value> {
             }
         }
         "antigravity" => {
-            let app_exe = local.join(r"Programs\antigravity\Antigravity.exe");
-            if app_exe.exists() {
-                Some(json!({ "kind": "app", "exe": app_exe.display().to_string() }))
+            // Prefer the Antigravity CLI (`agy`) so it runs inside a lienzo
+            // terminal; fall back to opening its desktop app.
+            let agy = local.join(r"agy\bin\agy.exe");
+            if agy.exists() {
+                Some(json!({ "kind": "pty", "cmd": agy.display().to_string() }))
+            } else if which("agy") {
+                Some(json!({ "kind": "pty", "cmd": "agy" }))
             } else {
-                None
+                let app_exe = local.join(r"Programs\antigravity\Antigravity.exe");
+                if app_exe.exists() {
+                    Some(json!({ "kind": "app", "exe": app_exe.display().to_string() }))
+                } else {
+                    None
+                }
             }
         }
         _ => None,
