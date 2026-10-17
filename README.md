@@ -70,6 +70,16 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
    `team_task_create`); los agentes las reclaman (`team_task_claim`) y las cierran
    (`team_task_done`) — el progreso se ve en el panel.
 
+## Si un agente no ve las herramientas del equipo
+
+- **OpenCode**: su servicio de fondo se queda con la conexión MCP muerta si el puente
+  muere de golpe (p. ej. reinicio brusco); la sesión se queda sin las `team_*`. Al pulsar
+  **Abrir**, lienzo lanza solo `opencode reload` para refrescarla. A mano: ejecuta
+  `opencode reload` en la carpeta del proyecto y comprueba con `opencode mcp list`.
+- **Puentes y reinicios**: los puentes (`lienzo-mcp.exe`) se re-descubren solos si la app
+  reinicia (leen el `hub.json` nuevo); si una sesión quedó rara, ciérrala y **vuelve a
+  abrirla** desde el panel Equipo.
+
 ## Ejecutar (desarrollo)
 
 ```powershell

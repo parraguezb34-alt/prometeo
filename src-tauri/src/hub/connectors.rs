@@ -6,6 +6,7 @@ use crate::hub::{self, Hub};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use tauri::Manager;
 
 struct AgentDef {
@@ -547,6 +548,36 @@ pub fn team_open(app: tauri::AppHandle, agent: String) -> Result<Value, String> 
             .map_err(|e| format!("no se pudo abrir {}: {e}", exe))?;
         Ok(json!({ "kind": "app" }))
     } else {
+        // The OpenCode background service caches its MCP connections: if lienzo
+        // restarted while a bridge was alive, it can be left with a dead
+        // `lienzo-team` connection and no session gets the team tools. A quick
+        // `opencode reload` makes it re-spawn the bridge before we open the TUI.
+        if agent == "opencode" {
+            if let Some(dir) = project_of(&app).filter(|p| !p.trim().is_empty()) {
+                let local = std::env::var("LOCALAPPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_default();
+                let cli = local.join(r"Programs\@opencode-aidesktop\resources\opencode-cli.exe");
+                if cli.exists() {
+                    if let Ok(mut child) = Command::new(cli)
+                        .arg("reload")
+                        .current_dir(&dir)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                    {
+                        // Best-effort: give it a moment, never block the UI for long.
+                        for _ in 0..20 {
+                            match child.try_wait() {
+                                Ok(Some(_)) | Err(_) => break,
+                                Ok(None) => std::thread::sleep(Duration::from_millis(150)),
+                            }
+                        }
+                        let _ = child.kill();
+                    }
+                }
+            }
+        }
         Ok(spec)
     }
 }

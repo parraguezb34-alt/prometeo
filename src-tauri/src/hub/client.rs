@@ -14,17 +14,23 @@ pub struct HubClient {
 }
 
 impl HubClient {
-    /// Find the hub: environment first (terminals spawned by lienzo), then the
-    /// discovery file written by the app.
-    pub fn discover() -> Option<HubClient> {
-        if let (Ok(url), Ok(token)) = (std::env::var("LIENZO_HUB"), std::env::var("LIENZO_TOKEN")) {
-            if !url.trim().is_empty() && !token.trim().is_empty() {
-                return Some(HubClient {
-                    url: url.trim().to_string(),
-                    token: token.trim().to_string(),
-                });
-            }
+    /// Hub from the environment (terminals spawned by lienzo).
+    fn from_env() -> Option<HubClient> {
+        let (Ok(url), Ok(token)) = (std::env::var("LIENZO_HUB"), std::env::var("LIENZO_TOKEN"))
+        else {
+            return None;
+        };
+        if url.trim().is_empty() || token.trim().is_empty() {
+            return None;
         }
+        Some(HubClient {
+            url: url.trim().to_string(),
+            token: token.trim().to_string(),
+        })
+    }
+
+    /// Hub from the discovery file the app rewrites on every launch.
+    fn from_file() -> Option<HubClient> {
         let base = std::env::var("APPDATA").ok()?;
         let path = std::path::PathBuf::from(base).join("lienzo").join("hub.json");
         let raw = std::fs::read_to_string(path).ok()?;
@@ -33,6 +39,12 @@ impl HubClient {
             url: v["url"].as_str()?.to_string(),
             token: v["token"].as_str()?.to_string(),
         })
+    }
+
+    /// Find the hub: environment first (terminals spawned by lienzo), then the
+    /// discovery file written by the app.
+    pub fn discover() -> Option<HubClient> {
+        Self::from_env().or_else(Self::from_file)
     }
 
     fn hostport(&self) -> Result<String, String> {
@@ -51,7 +63,25 @@ impl HubClient {
         self.request("POST", path, Some(body))
     }
 
+    /// Request with self-healing: if the call fails, the app may have been
+    /// restarted (new port + token), so re-read `hub.json` once and retry
+    /// against the fresh hub. Keeps long-lived bridges (agy, hooks) alive
+    /// across a lienzo restart.
     fn request(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, String> {
+        match self.request_once(method, path, body) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                if let Some(fresh) = Self::from_file() {
+                    if fresh.url != self.url || fresh.token != self.token {
+                        return fresh.request_once(method, path, body);
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn request_once(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, String> {
         let hostport = self.hostport()?;
         let mut stream = TcpStream::connect(&hostport)
             .map_err(|e| format!("no se pudo conectar al hub de lienzo ({e})"))?;
