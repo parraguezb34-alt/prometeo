@@ -351,7 +351,7 @@ fn connect_opencode(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<Strin
 
 fn connect_antigravity(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>), String> {
     let mut files = vec![];
-    let mut notes = vec![
+    let notes = vec![
         "Antigravity usa la config del workspace; reábrelo para que la lea.".to_string(),
         "Los tools del equipo pedirán permiso la primera vez (modo Ask/permisos).".to_string(),
     ];
