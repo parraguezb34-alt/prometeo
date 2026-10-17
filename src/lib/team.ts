@@ -40,6 +40,8 @@ export type TeamClaim = {
 export type TeamState = {
   seq: number;
   project: string | null;
+  charter: string | null;
+  leader: string | null;
   agents: TeamAgent[];
   events: TeamEvent[];
   tasks: TeamTask[];
@@ -84,6 +86,13 @@ export const teamOpen = (agent: string) =>
   invoke<OpenResult>("team_open", { agent });
 export const teamProjectSet = (path: string | null) =>
   invoke<void>("team_project_set", { path });
+/** Send a prompt to every connected agent (feed + terminal injection). */
+export const teamBroadcast = (text: string) => invoke<number>("team_broadcast", { text });
+/** Mark a broadcast as already typed into the terminals of these agents. */
+export const teamBroadcastAck = (agents: string[]) => invoke<void>("team_broadcast_ack", { agents });
+/** Save the shared team rules and/or pick the leader. */
+export const teamCharter = (charter: string | null, leader: string | null) =>
+  invoke<void>("team_charter", { charter, leader });
 export const teamAddTask = (title: string) =>
   invoke<void>("team_add_task", { title });
 export const teamTaskOp = (id: number, op: string) =>

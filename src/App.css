@@ -479,3 +479,162 @@ body,
   white-space: pre-wrap;
   line-height: 1.5;
 }
+
+/* --- Orquestador: prompt para todos, normas y progreso --- */
+
+.team-broadcast {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px 7px;
+  border-bottom: 1px solid #232a3d;
+  flex: none;
+}
+
+.team-broadcast input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  background: #0b0f19;
+  border: 1px solid #3b4d7a;
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: #c8d3e8;
+}
+
+.team-broadcast input:focus {
+  border-color: #7aa2f7;
+}
+
+.team-charter {
+  all: unset;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  background: #0b0f19;
+  border: 1px solid #232a3d;
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #c8d3e8;
+  min-height: 90px;
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.team-charter:focus {
+  border-color: #3b4d7a;
+}
+
+.team-select {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  background: #0b0f19;
+  border: 1px solid #232a3d;
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: #c8d3e8;
+  cursor: pointer;
+}
+
+.team-select:hover,
+.team-select:focus {
+  border-color: #3b4d7a;
+}
+
+/* Panel de progreso */
+.prog {
+  height: 100%;
+  overflow-y: auto;
+  padding: 10px 12px 14px;
+  font-size: 12px;
+}
+
+.prog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+
+.prog-title {
+  font-weight: 700;
+  color: #c8d3e8;
+}
+
+.prog-pct {
+  color: #9ece6a;
+  font-weight: 700;
+}
+
+.prog-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: #161d2e;
+  border: 1px solid #232a3d;
+  overflow: hidden;
+  margin-bottom: 7px;
+}
+
+.prog-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #7aa2f7, #9ece6a);
+  transition: width 0.35s ease;
+}
+
+.prog-sub {
+  color: #8b98b8;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.prog-agent {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 0;
+}
+
+.prog-lead {
+  font-size: 10px;
+  color: #e0af68;
+  border: 1px solid #5c4a22;
+  border-radius: 999px;
+  padding: 0 6px;
+  margin-left: 6px;
+}
+
+.prog-seen {
+  margin-left: auto;
+  color: #46527a;
+  font-size: 10.5px;
+}
+
+.prog-task {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid #161d2e;
+}
+
+.prog-task[data-done="1"] .prog-task-title {
+  color: #5c688b;
+  text-decoration: line-through;
+}
+
+.prog-task-title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.prog-empty {
+  color: #46527a;
+  font-size: 11.5px;
+  padding: 6px 2px;
+}

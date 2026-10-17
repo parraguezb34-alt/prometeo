@@ -79,6 +79,16 @@ fn render_context(state: &Value) -> String {
     let empty = vec![];
     let mut out = String::from("[Equipo lienzo]\n");
 
+    if let Some(leader) = state["leader"].as_str().filter(|s| !s.is_empty()) {
+        out.push_str(&format!(
+            "Líder del equipo: {} (coordina y reparte).\n",
+            leader
+        ));
+    }
+    if let Some(charter) = state["charter"].as_str().filter(|s| !s.is_empty()) {
+        out.push_str(&format!("Normas del equipo:\n{}\n", trunc(charter, 520)));
+    }
+
     let agents = state["agents"].as_array().unwrap_or(&empty);
     let names: Vec<String> = agents
         .iter()
@@ -131,9 +141,15 @@ fn render_context(state: &Value) -> String {
         .filter(|e| e["kind"].as_str().unwrap_or("") != "tool")
         .take(6)
         .map(|e| {
+            let mark = if e["kind"].as_str().unwrap_or("") == "broadcast" {
+                "📣 "
+            } else {
+                ""
+            };
             format!(
-                "- hace {} · {}: {}",
+                "- hace {} · {}{}: {}",
                 ago(e["ts_ms"].as_u64().unwrap_or(0)),
+                mark,
                 e["agent"].as_str().unwrap_or("?"),
                 trunc(e["text"].as_str().unwrap_or(""), 110)
             )
@@ -208,7 +224,25 @@ fn render_tasks(state: &Value) -> String {
 // Modo MCP (stdio)
 // ---------------------------------------------------------------------------
 
-fn initialize_result(params: &Value) -> Value {
+fn initialize_result(params: &Value, client: Option<&HubClient>) -> Value {
+    let mut instructions = String::from(
+        "Herramientas del equipo compartido de lienzo: varios agentes de IA trabajan juntos en el mismo proyecto. \
+Empieza con team_context, publica avances con team_update, reserva archivos con team_claim_files antes de editarlos y revisa team_feed.",
+    );
+    if let Some(c) = client {
+        if let Ok(state) = c.get("/state?limit=1") {
+            if let Some(leader) = state["leader"].as_str().filter(|s| !s.is_empty()) {
+                instructions.push_str(&format!(
+                    "\nLíder del equipo: {} (coordina y reparte; no compitas por el mando).",
+                    leader
+                ));
+            }
+            if let Some(charter) = state["charter"].as_str().filter(|s| !s.is_empty()) {
+                instructions.push_str("\nNormas del equipo:\n");
+                instructions.push_str(&trunc(charter, 600));
+            }
+        }
+    }
     let wanted = params["protocolVersion"].as_str().unwrap_or("2025-06-18");
     json!({
         "protocolVersion": if wanted.is_empty() { "2025-06-18" } else { wanted },
@@ -217,7 +251,7 @@ fn initialize_result(params: &Value) -> Value {
             "resources": { "subscribe": false, "listChanged": false }
         },
         "serverInfo": { "name": "lienzo-team", "version": "0.1.0" },
-        "instructions": "Herramientas del equipo compartido de lienzo. Empieza con team_context, publica avances con team_update, reserva archivos con team_claim_files antes de editarlos y revísalos con team_feed."
+        "instructions": instructions
     })
 }
 
@@ -539,7 +573,7 @@ fn mcp_mode() {
         let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
 
         let response: Option<Result<Value, (i64, String)>> = match method.as_str() {
-            "initialize" => Some(Ok(initialize_result(&params))),
+            "initialize" => Some(Ok(initialize_result(&params, client.as_ref()))),
             "notifications/initialized"
             | "notifications/cancelled"
             | "notifications/roots/list_changed" => None,
@@ -649,10 +683,33 @@ fn hook_mode(args: &[String]) {
         _ => ("event", event.clone(), vec![]),
     };
 
+    let session_key = payload["session_id"].as_str().unwrap_or("").to_string();
+
     let _ = client.post(
         "/event",
         &json!({ "agent": agent, "kind": kind, "text": text, "files": files }),
     );
+
+    // Broadcasts the user sent to the whole team that this session hasn't seen.
+    let pending = fetch_pending(&client, &agent, &session_key);
+
+    // On stop: if there are pending team messages, keep the turn alive with them.
+    if event == "stop" && !pending.is_empty() {
+        let joined: Vec<String> = pending.iter().map(|(_, t)| format!("- {}", t)).collect();
+        let max_seq = pending.iter().map(|(s, _)| *s).max().unwrap_or(0);
+        ack_pending(&client, &agent, &session_key, max_seq);
+        println!(
+            "{}",
+            json!({
+                "decision": "block",
+                "reason": format!(
+                    "📣 El usuario envió este mensaje a TODO el equipo (te llega ahora):\n{}\n\nActúa según tu rol: si eres el líder, reparte y coordina; si no, ejecuta tu parte y publícala con team_update. Mira team_context para el estado del equipo.",
+                    joined.join("\n")
+                )
+            })
+        );
+        return;
+    }
 
     // Inject team context on prompt/session start (Claude Code / Codex shape).
     if event == "prompt" || event == "session" {
@@ -662,15 +719,51 @@ fn hook_mode(args: &[String]) {
             } else {
                 "UserPromptSubmit"
             };
+            let mut ctx = render_context(&state);
+            if !pending.is_empty() {
+                ctx.push_str("\n📣 Mensajes del usuario para todo el equipo (nuevos):\n");
+                for (_, t) in &pending {
+                    ctx.push_str(&format!("- {}\n", t));
+                }
+                let max_seq = pending.iter().map(|(s, _)| *s).max().unwrap_or(0);
+                ack_pending(&client, &agent, &session_key, max_seq);
+            }
             println!(
                 "{}",
                 json!({
                     "hookSpecificOutput": {
                         "hookEventName": hook_event,
-                        "additionalContext": render_context(&state)
+                        "additionalContext": ctx
                     }
                 })
             );
         }
     }
+}
+
+/// Team broadcasts not yet delivered to this hook session / agent.
+fn fetch_pending(client: &HubClient, agent: &str, session: &str) -> Vec<(u64, String)> {
+    client
+        .get(&format!("/pending?agent={}&session={}", agent, session))
+        .ok()
+        .and_then(|v| {
+            v["broadcasts"].as_array().map(|arr| {
+                arr.iter()
+                    .map(|b| {
+                        (
+                            b["seq"].as_u64().unwrap_or(0),
+                            b["text"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn ack_pending(client: &HubClient, agent: &str, session: &str, seq: u64) {
+    let _ = client.post(
+        "/broadcast/ack",
+        &json!({ "agent": agent, "session": session, "seq": seq }),
+    );
 }

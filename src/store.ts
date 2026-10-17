@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-export type PanelKind = "terminal" | "team";
+export type PanelKind = "terminal" | "team" | "tasks";
 
 export type Panel = {
   id: string;
@@ -138,6 +138,23 @@ export function addTeam(x: number, y: number): Panel {
     w: 620,
     h: 470,
     title: "Equipo",
+    sessionId: null,
+  };
+  set({ panels: [...state.panels, panel], seq: n + 1 });
+  return panel;
+}
+
+/** Slim vertical panel: team progress — tasks + agents online. */
+export function addTasks(x: number, y: number): Panel {
+  const n = state.seq;
+  const panel: Panel = {
+    id: `p${n}`,
+    kind: "tasks",
+    x,
+    y,
+    w: 300,
+    h: 560,
+    title: "Progreso",
     sessionId: null,
   };
   set({ panels: [...state.panels, panel], seq: n + 1 });

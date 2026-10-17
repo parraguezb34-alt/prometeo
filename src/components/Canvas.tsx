@@ -5,6 +5,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import {
+  addTasks,
   addTeam,
   addTerminal,
   clampZoom,
@@ -16,6 +17,7 @@ import {
 } from "../store";
 import { termKill } from "../lib/pty";
 import { PanelFrame } from "./PanelFrame";
+import { TasksPanel } from "./TasksPanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { TeamPanel } from "./TeamPanel";
 
@@ -143,6 +145,17 @@ export function Canvas() {
     );
   };
 
+  /** Progress panel docks at the top-right corner of the current view. */
+  const addTasksAtTopRight = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const v = getLayout().view;
+    addTasks(
+      Math.round((el.clientWidth - 24 - v.x) / v.zoom) - 300,
+      Math.round((72 - v.y) / v.zoom),
+    );
+  };
+
   const closePanel = (id: string, sessionId: string | null) => {
     if (sessionId) termKill(sessionId).catch(() => {});
     removePanel(id);
@@ -184,6 +197,8 @@ export function Canvas() {
           >
             {p.kind === "team" ? (
               <TeamPanel panel={p} />
+            ) : p.kind === "tasks" ? (
+              <TasksPanel />
             ) : (
               <TerminalPanel panel={p} lod={lod} />
             )}
@@ -200,6 +215,12 @@ export function Canvas() {
           title="Panel del equipo: actividad, tareas y conexión de agentes"
         >
           + Equipo
+        </button>
+        <button
+          onClick={addTasksAtTopRight}
+          title="Panel de progreso: tareas del equipo y agentes en línea (arriba a la derecha)"
+        >
+          + Progreso
         </button>
         <button onClick={() => zoomAtCenter(1 / 1.25)} title="Alejar">
           −

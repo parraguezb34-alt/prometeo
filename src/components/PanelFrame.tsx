@@ -107,7 +107,9 @@ export const PanelFrame = memo(function PanelFrame({
         onPointerUp={onHeaderUp}
         onPointerCancel={onHeaderUp}
       >
-        <span className="panel-glyph">{panel.kind === "team" ? "◈" : ">_"}</span>
+        <span className="panel-glyph">
+          {panel.kind === "team" ? "◈" : panel.kind === "tasks" ? "▤" : ">_"}
+        </span>
         <span className="panel-title">{panel.title}</span>
         <button
           className="panel-close"

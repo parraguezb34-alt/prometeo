@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Panel } from "../store";
-import { addAgentTerminal } from "../store";
+import { addAgentTerminal, getLayout } from "../store";
+import { termWrite } from "../lib/pty";
 import {
   agentColor,
   ago,
@@ -8,6 +9,9 @@ import {
   onTeamUpdate,
   shortPath,
   teamAddTask,
+  teamBroadcast,
+  teamBroadcastAck,
+  teamCharter,
   teamConnect,
   teamDetect,
   teamDetails,
@@ -31,7 +35,18 @@ const GLYPHS: Record<string, string> = {
   claim: "⊙",
   stop: "■",
   session: "▶",
+  broadcast: "📣",
 };
+
+/** Map a terminal launch command to the agent id used by the hub. */
+function agentKeyFromCmd(cmd: string): string {
+  const c = cmd.toLowerCase();
+  if (c.includes("opencode")) return "opencode";
+  if (c.includes("agy") || c.includes("antigravity")) return "antigravity";
+  if (c.includes("claude")) return "claude";
+  if (c.includes("codex")) return "codex";
+  return c.split(/[\\/]/).pop()?.replace(/\.(exe|cmd|bat|ps1)$/i, "") || "agente";
+}
 
 const STATUS_LABEL: Record<string, string> = {
   open: "abierta",
@@ -46,6 +61,10 @@ export function TeamPanel({ panel }: { panel: Panel }) {
   const [details, setDetails] = useState<TeamDetails | null>(null);
   const [projectDraft, setProjectDraft] = useState("");
   const [taskDraft, setTaskDraft] = useState("");
+  const [broadcastDraft, setBroadcastDraft] = useState("");
+  const [charterDraft, setCharterDraft] = useState("");
+  const [leaderDraft, setLeaderDraft] = useState("");
+  const charterInit = useRef(false);
   const [flash, setFlash] = useState<{ text: string; err?: boolean } | null>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
@@ -84,6 +103,15 @@ export function TeamPanel({ panel }: { panel: Panel }) {
       if (flashTimer.current !== undefined) window.clearTimeout(flashTimer.current);
     };
   }, [refresh, refreshDetect]);
+
+  // Load the team charter / leader into the drafts once (don't clobber edits).
+  useEffect(() => {
+    if (state && !charterInit.current) {
+      charterInit.current = true;
+      setCharterDraft(state.charter ?? "");
+      setLeaderDraft(state.leader ?? "");
+    }
+  }, [state]);
 
   const saveProject = async () => {
     try {
@@ -156,12 +184,81 @@ export function TeamPanel({ panel }: { panel: Panel }) {
     }
   };
 
+  /** Broadcast a prompt to the whole team: feed + typing into agent terminals. */
+  const sendBroadcast = async () => {
+    const text = broadcastDraft.trim();
+    if (!text) return;
+    try {
+      await teamBroadcast(text);
+      // Type it into every agent terminal running on the canvas.
+      const panels = getLayout().panels.filter(
+        (p) => p.kind === "terminal" && !!p.sessionId && !!p.cmd,
+      );
+      const agentsTyped = new Set<string>();
+      for (const p of panels) {
+        try {
+          await termWrite(p.sessionId!, `${text}\r`);
+          agentsTyped.add(agentKeyFromCmd(p.cmd ?? ""));
+        } catch {
+          /* session may have died; the feed still has the message */
+        }
+      }
+      if (agentsTyped.size > 0) {
+        // Typed = delivered for those agents; skip duplicate hook delivery.
+        await teamBroadcastAck([...agentsTyped]).catch(() => {});
+      }
+      setBroadcastDraft("");
+      refresh();
+      say(
+        agentsTyped.size > 0
+          ? `📣 Enviado al feed y escrito en ${agentsTyped.size} terminal(es) del lienzo.`
+          : "📣 Publicado para el equipo (no hay terminales de agentes abiertas ahora mismo).",
+      );
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
+  const saveCharter = async () => {
+    try {
+      await teamCharter(
+        charterDraft.trim() ? charterDraft : null,
+        leaderDraft.trim() ? leaderDraft.trim() : null,
+      );
+      refresh();
+      say("✓ Normas del equipo y líder guardados.");
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
   const events = state?.events ?? [];
   const tasks = state?.tasks ?? [];
   const agents = state?.agents ?? [];
   const claims = state?.claims ?? [];
   const online = agents.filter((a) => a.online).length;
   const openTasks = tasks.filter((t) => t.status !== "done").length;
+
+  const leaderOptions = (() => {
+    const opts: { id: string; label: string }[] = [];
+    const seen = new Set<string>();
+    for (const a of detect?.agents ?? []) {
+      if (!seen.has(a.id)) {
+        seen.add(a.id);
+        opts.push({ id: a.id, label: a.label });
+      }
+    }
+    for (const a of agents) {
+      if (!seen.has(a.name)) {
+        seen.add(a.name);
+        opts.push({ id: a.name, label: a.name });
+      }
+    }
+    if (leaderDraft && !seen.has(leaderDraft)) {
+      opts.push({ id: leaderDraft, label: leaderDraft });
+    }
+    return opts;
+  })();
 
   return (
     <div className="team">
@@ -174,6 +271,26 @@ export function TeamPanel({ panel }: { panel: Panel }) {
         </button>
         <button data-active={tab === "agents" ? "1" : "0"} onClick={() => setTab("agents")}>
           Agentes{online ? ` (${online})` : ""}
+        </button>
+      </div>
+
+      <div className="team-broadcast">
+        <input
+          type="text"
+          value={broadcastDraft}
+          placeholder="Prompt para TODO el equipo (se escribe en sus terminales)…"
+          onChange={(e) => setBroadcastDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") sendBroadcast();
+          }}
+        />
+        <button
+          className="agent-btn"
+          disabled={!broadcastDraft.trim()}
+          onClick={sendBroadcast}
+          title="Publica el prompt en el feed y lo escribe en las terminales de agentes abiertas"
+        >
+          📣 Enviar
         </button>
       </div>
 
@@ -286,6 +403,33 @@ export function TeamPanel({ panel }: { panel: Panel }) {
               </button>
             </div>
 
+            <div className="team-section-title">Normas del equipo y líder</div>
+            <textarea
+              className="team-charter"
+              value={charterDraft}
+              rows={6}
+              placeholder="Instrucciones globales para todos los agentes (cómo trabajar juntos)…"
+              onChange={(e) => setCharterDraft(e.target.value)}
+            />
+            <div className="team-project">
+              <select
+                className="team-select"
+                value={leaderDraft}
+                onChange={(e) => setLeaderDraft(e.target.value)}
+                title="Quién coordina al equipo"
+              >
+                <option value="">— sin líder —</option>
+                {leaderOptions.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label} (líder)
+                  </option>
+                ))}
+              </select>
+              <button className="agent-btn" onClick={saveCharter}>
+                Guardar
+              </button>
+            </div>
+
             <div className="team-section-title">Conectar agentes</div>
             {(detect?.agents ?? []).map((a) => (
               <div className="agent-card" key={a.id}>
@@ -336,6 +480,7 @@ export function TeamPanel({ panel }: { panel: Panel }) {
                   <span className="agent-dot" data-on={a.online ? "1" : "0"} />
                   <span className="task-title" style={{ color: agentColor(a.name) }}>
                     {a.name}
+                    {state?.leader === a.name ? <span className="prog-lead">líder</span> : null}
                     <span className="agent-meta"> · pid {a.pid} · visto hace {ago(a.last_seen_ms)}</span>
                   </span>
                 </div>

@@ -20,6 +20,11 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
   - **Reporte automático**: los hooks de Claude Code (y Codex) publican cada edición/comando en el feed y **inyectan el contexto del equipo en cada prompt** — Claude ve lo que hizo otro agente antes de responder.
   - **Sin pisarse archivos**: `team_claim_files` reserva archivos y devuelve conflictos si otro agente ya los tiene.
   - **Hub local** (Rust, `127.0.0.1` + token): descubrimiento en `%APPDATA%\lienzo\hub.json`; las terminales que abre lienzo heredan `LIENZO_HUB` / `LIENZO_TOKEN`.
+- **Orquestador del equipo** 🎛️:
+  - **Prompt para todos** (📣 barra arriba del panel Equipo): publica el mensaje en el feed y lo **escribe en la terminal de cada agente abierto** en el lienzo (OpenCode/Antigravity/Claude la reciben al instante), y a Claude en cualquier ventana le llega como bloque del **hook Stop** cuando termina su turno.
+  - **Normas del equipo (system prompt global)**: texto editable en la pestaña Agentes que se inyecta a los agentes en `team_context`, en las instrucciones del MCP y en cada prompt vía hooks — saben que trabajan juntos y cómo coordinarse.
+  - **Jerarquía sin peleas**: un **líder** (el primero que conecta, o el que elijas) coordina y reparte; los demás proponen y ejecutan su parte.
+  - **Panel Progreso** (`+ Progreso`, arriba a la derecha): barra de % completado, agentes en línea con su líder y tareas pendientes/hechas de un vistazo.
 
 ## Arquitectura
 
@@ -27,26 +32,40 @@ Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Elec
 | --- | --- | --- |
 | Gestor PTY (Rust) | `src-tauri/src/pty.rs` | Spawn de shell, streaming base64 por eventos `pty://data` / `pty://exit`, scrollback ring buffer, inyecta env del hub |
 | Hub de equipo (Rust) | `src-tauri/src/hub/mod.rs` | Estado compartido: agentes, feed, tareas, reservas; persistencia en `%APPDATA%\lienzo\team-state.json` |
-| API HTTP del hub | `src-tauri/src/hub/server.rs` | `127.0.0.1` puerto aleatorio + token: `/join`, `/event`, `/feed`, `/state`, `/task`, `/claim`, `/release` |
+| API HTTP del hub | `src-tauri/src/hub/server.rs` | `127.0.0.1` puerto aleatorio + token: `/join`, `/event`, `/feed`, `/state`, `/task`, `/claim`, `/release`, `/broadcast`, `/pending`, `/charter` |
 | Conectores | `src-tauri/src/hub/connectors.rs` | Detección de agentes y escritura de configs (Claude/Codex/OpenCode/Antigravity) |
 | Puente MCP | `src-tauri/src/bin/lienzo-mcp.rs` | Servidor MCP por stdio (`team_*` + recursos `team://`) y modo `hook` para Claude Code / Codex |
 | Registro de comandos | `src-tauri/src/lib.rs` | `term_*` + `team_*` (estado, tareas, detectar/conectar agentes) |
-| Estado del lienzo | `src/store.ts` | Paneles (terminal/equipo) + vista con `useSyncExternalStore` y persistencia |
+| Estado del lienzo | `src/store.ts` | Paneles (terminal/equipo/progreso) + vista con `useSyncExternalStore` y persistencia |
 | Lienzo | `src/components/Canvas.tsx` | Paneo, zoom, LOD, barra de herramientas |
 | Marco de panel | `src/components/PanelFrame.tsx` | Mover, redimensionar, cerrar, traer al frente |
 | Terminal | `src/components/TerminalPanel.tsx` | xterm.js + re-attach a la sesión PTY |
-| Panel Equipo | `src/components/TeamPanel.tsx` | Actividad, tareas, agentes, proyecto del equipo |
+| Panel Equipo | `src/components/TeamPanel.tsx` | Actividad, tareas, agentes, prompt para todos (📣), normas y líder |
+| Panel Progreso | `src/components/TasksPanel.tsx` | Barra de avance, agentes en línea y tablero compacto |
 
 ## Conectar un agente (equipo)
 
 1. Abre el panel **Equipo** (`+ Equipo` en la barra) → pestaña **Agentes**.
 2. Escribe la carpeta del proyecto y pulsa **Guardar**.
 3. Pulsa **Conectar** en el agente que quieras (Claude Code, Codex, OpenCode, Antigravity).
-4. Pulsa **Abrir** para lanzarlo ya dentro del proyecto: Claude/Codex/OpenCode se abren
-   en una **terminal del lienzo** (OpenCode usa su CLI v2, `mcp.servers`); Antigravity
-   se abre en su app con la carpeta del equipo. También puedes abrirlo tú en una
-   terminal — ya está en el equipo: verás su actividad en el feed y él verá la tuya
-   vía `team_context` / hooks.
+4. Pulsa **Abrir** para lanzarlo ya dentro del proyecto: Claude/Codex/OpenCode **y Antigravity**
+   se abren en una **terminal del lienzo** (OpenCode usa su CLI v2, `mcp.servers`;
+   Antigravity usa su CLI oficial `agy` — misma cuenta y misma config MCP; si no está,
+   se abre su app). También puedes abrirlo tú en una terminal — ya está en el equipo:
+   verás su actividad en el feed y él verá la tuya vía `team_context` / hooks.
+
+## Orquestar al equipo
+
+1. **Prompt para todos** (barra 📣 arriba del panel Equipo): se publica en el feed y se
+   escribe en la terminal de cada agente abierto; a Claude le llega además como bloque
+   del hook al terminar su turno. Todos responden y lo ves en Actividad.
+2. **Normas + líder** (pestaña Agentes → «Normas del equipo y líder»): el texto se inyecta
+   en `team_context`, en las instrucciones del MCP y en cada prompt vía hooks. El líder
+   coordina y reparte; elige uno o deja que sea el primero que conecte.
+3. **Panel Progreso** (`+ Progreso`): mira el avance de todos sin abrir el panel Equipo.
+4. **Tareas**: crea tareas en la pestaña Tareas (o pídeselo a un agente con
+   `team_task_create`); los agentes las reclaman (`team_task_claim`) y las cierran
+   (`team_task_done`) — el progreso se ve en el panel.
 
 ## Ejecutar (desarrollo)
 

@@ -101,6 +101,10 @@ fn handle(mut request: tiny_http::Request, app: &AppHandle) {
         ("POST", "/claim") => cmd_claim(app, &payload),
         ("POST", "/release") => cmd_release(app, &payload),
         ("POST", "/connect") => cmd_connect(app, &payload),
+        ("POST", "/broadcast") => cmd_broadcast(app, &payload),
+        ("GET", "/pending") => cmd_pending(app, &query),
+        ("POST", "/broadcast/ack") => cmd_broadcast_ack(app, &payload),
+        ("POST", "/charter") => cmd_charter(app, &payload),
         _ => Err(format!("ruta desconocida: {} {}", method, path)),
     };
 
@@ -153,6 +157,10 @@ fn cmd_join(app: &AppHandle, payload: &Value) -> Result<Value, String> {
             format!("se conectó · {}", short)
         };
         hub::push_event(inner, &name, &sid, "join", &text, vec![], None);
+        // First real agent to join becomes the default leader until the user picks one.
+        if inner.leader.is_none() && name != "agente" {
+            inner.leader = Some(name.clone());
+        }
         hub::persist(inner);
     })
     .ok_or("hub no inicializado")?;
@@ -212,6 +220,80 @@ fn cmd_event(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     .ok_or("hub no inicializado")?;
     hub::notify_ui();
     Ok(out)
+}
+
+/// Send a prompt to the whole team (feed event + pending hook deliveries).
+fn cmd_broadcast(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let text: String = payload["text"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(4000)
+        .collect();
+    if text.is_empty() {
+        return Err("el mensaje está vacío".into());
+    }
+    let out = hub::with_inner(app, |inner| {
+        let ev = hub::broadcast(inner, &text);
+        hub::persist(inner);
+        json!({ "seq": ev.seq })
+    })
+    .ok_or("hub no inicializado")?;
+    hub::notify_ui();
+    Ok(out)
+}
+
+/// Broadcasts still pending for a hook session (checks session + agent marks).
+fn cmd_pending(app: &AppHandle, query: &std::collections::HashMap<String, String>) -> Result<Value, String> {
+    let agent = query.get("agent").cloned().unwrap_or_default();
+    let session = query.get("session").cloned().unwrap_or_default();
+    let list = hub::with_inner(app, |inner| {
+        hub::pending_broadcasts(inner, &session, &agent)
+            .into_iter()
+            .map(|(seq, text)| json!({ "seq": seq, "text": text }))
+            .collect::<Vec<Value>>()
+    })
+    .ok_or("hub no inicializado")?;
+    Ok(json!({ "broadcasts": list }))
+}
+
+fn cmd_broadcast_ack(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let agent = payload["agent"].as_str().unwrap_or("").trim().to_string();
+    let session = payload["session"].as_str().unwrap_or("").to_string();
+    let seq = payload["seq"].as_u64().unwrap_or(0);
+    hub::with_inner(app, |inner| {
+        if !agent.is_empty() {
+            hub::ack_broadcast(inner, &format!("agent:{}", agent), seq);
+        }
+        if !session.is_empty() {
+            hub::ack_broadcast(inner, &format!("session:{}", session), seq);
+        }
+    })
+    .ok_or("hub no inicializado")?;
+    Ok(json!({ "ok": true }))
+}
+
+/// Set the team charter and/or leader from scripts (the UI uses a Tauri command).
+fn cmd_charter(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    hub::with_inner(app, |inner| {
+        if let Some(c) = payload.get("charter") {
+            inner.charter = c
+                .as_str()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
+        if let Some(l) = payload.get("leader") {
+            inner.leader = l
+                .as_str()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
+        hub::persist(inner);
+    })
+    .ok_or("hub no inicializado")?;
+    hub::notify_ui();
+    Ok(json!({ "ok": true }))
 }
 
 fn cmd_state(app: &AppHandle, query: &std::collections::HashMap<String, String>) -> Result<Value, String> {
