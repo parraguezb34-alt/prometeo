@@ -968,7 +968,12 @@ fn transcript_usage(path: &str) -> (Option<String>, Option<u64>, Option<u64>) {
         }
         let model = v["message"]["model"].as_str().unwrap_or("").to_string();
         let model = if model.is_empty() { None } else { Some(model) };
-        let window = model.as_deref().map(model_window).unwrap_or(200_000);
+        let mut window = model.as_deref().map(model_window).unwrap_or(200_000);
+        // El transcript no dice si la sesión usa la variante de 1M de contexto: si el uso ya
+        // pasa de 200k, la ventana no puede ser de 200k (si no, saldría un 350 % absurdo).
+        if used > window {
+            window = 1_000_000;
+        }
         return (model, Some(used), Some(window));
     }
     (None, None, None)

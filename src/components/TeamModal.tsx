@@ -343,7 +343,9 @@ export function TeamModal({
                       <b>
                         {ctx
                           ? `${fmtTokens(ctx.tokens)} de ${fmtTokens(ctx.window)} · ${ctx.pct}%`
-                          : "sin medir"}
+                          : name === "antigravity"
+                            ? "no disponible"
+                            : "se mide tras su primer mensaje"}
                       </b>
                     </div>
                     <div className="cc-ctxbar">

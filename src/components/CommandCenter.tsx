@@ -1491,7 +1491,7 @@ export function CommandCenter() {
                   <span className="cc-term-hint">se escribe en su terminal</span>
                 </div>
                 <div className="cc-termbox">
-                  <TerminalPanel panel={teamTermPanel} />
+                  <TerminalPanel key={teamTermPanel.id} panel={teamTermPanel} />
                 </div>
               </div>
             ) : (
