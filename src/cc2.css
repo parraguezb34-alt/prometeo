@@ -2036,3 +2036,200 @@ button.cc-lead {
 .cc-grp-line {
   grid-template-columns: auto minmax(0, 1fr) auto;
 }
+
+/* ---- tablón de tareas y memoria del proyecto ------------------------------- */
+
+.cc-td-board {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.cc-td-board summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--muted);
+  list-style: none;
+}
+.cc-td-board summary::-webkit-details-marker {
+  display: none;
+}
+.cc-td-board summary::before {
+  content: "▸ ";
+}
+.cc-td-board[open] summary::before {
+  content: "▾ ";
+}
+.cc-td-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ac) 8%, var(--bg));
+}
+.cc-td-note b {
+  color: var(--ac);
+}
+.cc-td-note span {
+  color: var(--text);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.cc-td-note time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+.cc-td-noteinput {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.cc-td-noteinput::placeholder {
+  color: var(--faint);
+}
+.cc-count[data-hot="1"] {
+  background: var(--warn);
+  color: #241a00;
+}
+
+.cc-pm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cc-pm-sub {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.cc-pm-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cc-pm-sec h4 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.cc-pm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.cc-pm-card[data-pending="1"] {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: color-mix(in srgb, var(--warn) 8%, var(--raised));
+}
+.cc-pm-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.cc-pm-meta .cc-icon-btn {
+  margin-left: auto;
+}
+.cc-pm-kind {
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--raised-2);
+  color: var(--muted);
+  font-weight: 700;
+}
+.cc-pm-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+.cc-pm-edit {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  user-select: text;
+}
+.cc-pm-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 6px 6px 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+}
+.cc-pm-add input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  user-select: text;
+}
+.cc-pm-add input::placeholder {
+  color: var(--faint);
+}
+.cc-pm-kindsel {
+  all: unset;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--raised-2);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  color-scheme: dark;
+}
+
+/* notas del tablón: autor y hora arriba, texto a todo el ancho */
+.cc-td-note {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+}
+.cc-td-note span {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+.cc-tdrawer .cc-pilltabs {
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.cc-tdrawer .cc-pilltabs button {
+  padding: 6px 11px;
+}
+.cc-pilltabs button .cc-count[data-hot="1"],
+.cc-pilltabs [aria-selected="true"] .cc-count[data-hot="1"] {
+  background: var(--warn);
+  color: #241a00;
+}

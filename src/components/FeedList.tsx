@@ -15,6 +15,7 @@ export const GLYPHS: Record<string, string> = {
   broadcast: "📣",
   release: "↺",
   handover: "📝",
+  memory: "◆",
 };
 
 /** Activity feed shared by the team panel and the command center. Newest first. */

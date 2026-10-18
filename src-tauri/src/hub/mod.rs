@@ -74,6 +74,35 @@ pub struct TaskHandover {
     pub files: Vec<String>,
 }
 
+/// Nota en el tablón de una tarea: cómo se pasan datos entre agentes sin ensuciar el feed.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TaskComment {
+    #[serde(default)]
+    pub by: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub ts_ms: u64,
+}
+
+/// Entrada de la memoria del proyecto: la cura el líder (o tú); los demás proponen.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MemoryEntry {
+    pub id: u64,
+    #[serde(default)]
+    pub text: String,
+    /// decision | hecho | convencion | aviso
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub by: String,
+    #[serde(default)]
+    pub ts_ms: u64,
+    /// active (guardada) | proposed (pendiente de que el líder la acepte)
+    #[serde(default)]
+    pub status: String,
+}
+
 /// Entrega estructurada de una tarea: lo que su dueño deja al cerrarla para que
 /// las tareas que dependen de ella (y tú) sepan qué se hizo, dónde y con qué prueba.
 #[derive(Clone, Serialize, Deserialize)]
@@ -111,6 +140,9 @@ pub struct Task {
     /// Entrega al cerrarla (resumen, archivos y evidencia).
     #[serde(default)]
     pub result: Option<TaskResult>,
+    /// Tablón de la tarea: notas de los agentes y tuyas.
+    #[serde(default)]
+    pub comments: Vec<TaskComment>,
 }
 
 /// Padres de `task` que aún no están hechos (un padre que ya no existe cuenta como cumplido).
@@ -120,6 +152,143 @@ pub fn unmet_parents(tasks: &[Task], task: &Task) -> Vec<u64> {
         .copied()
         .filter(|p| tasks.iter().any(|t| t.id == *p && t.status != "done"))
         .collect()
+}
+
+pub const MAX_MEMORY: usize = 40;
+pub const MAX_PROPOSALS: usize = 20;
+const MEMORY_KINDS: [&str; 4] = ["decision", "hecho", "convencion", "aviso"];
+
+/// Aplana espacios y recorta a `max` caracteres.
+fn clean_text(text: &str, max: usize) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max).collect()
+}
+
+pub fn memory_kind(kind: &str) -> String {
+    let low = kind.trim().to_lowercase();
+    if MEMORY_KINDS.contains(&low.as_str()) {
+        low
+    } else {
+        "hecho".to_string()
+    }
+}
+
+/// ¿Puede guardar memoria directamente? Tú y el líder; sin líder elegido, cualquiera
+/// (para no dejar el equipo sin memoria). El resto propone.
+pub fn can_curate(inner: &HubInner, agent: &str) -> bool {
+    agent == "tú" || inner.leader.as_deref().map(|l| l == agent).unwrap_or(true)
+}
+
+/// Añade una entrada (guardada o propuesta). El llamador persiste y avisa a la UI.
+pub fn memory_add(
+    inner: &mut HubInner,
+    by: &str,
+    text: &str,
+    kind: &str,
+    active: bool,
+) -> Result<MemoryEntry, String> {
+    let text = clean_text(text, 400);
+    if text.is_empty() {
+        return Err("la memoria necesita un texto".into());
+    }
+    let low = text.to_lowercase();
+    if inner.memory.iter().any(|m| m.text.to_lowercase() == low) {
+        return Err("eso ya está en la memoria o en las propuestas".into());
+    }
+    let (act, prop) = inner
+        .memory
+        .iter()
+        .fold((0, 0), |(a, p), m| if m.status == "active" { (a + 1, p) } else { (a, p + 1) });
+    if active && act >= MAX_MEMORY {
+        return Err(format!("la memoria está llena ({MAX_MEMORY}): olvida algo antes de guardar más"));
+    }
+    if !active && prop >= MAX_PROPOSALS {
+        return Err("hay demasiadas propuestas pendientes: que el líder las revise primero".into());
+    }
+    inner.memory_seq += 1;
+    let entry = MemoryEntry {
+        id: inner.memory_seq,
+        text: text.clone(),
+        kind: memory_kind(kind),
+        by: by.to_string(),
+        ts_ms: now_ms(),
+        status: if active { "active" } else { "proposed" }.to_string(),
+    };
+    inner.memory.push(entry.clone());
+    let what = if active { "guardó en la memoria" } else { "propone para la memoria" };
+    push_event(inner, by, "", "memory", &format!("{what}: {}", clean_text(&text, 140)), vec![], None);
+    Ok(entry)
+}
+
+/// Resuelve una propuesta: aceptarla (opcionalmente reescrita) o descartarla.
+pub fn memory_resolve(
+    inner: &mut HubInner,
+    id: u64,
+    accept: bool,
+    new_text: Option<&str>,
+    by: &str,
+) -> Result<(), String> {
+    let Some(pos) = inner.memory.iter().position(|m| m.id == id && m.status == "proposed") else {
+        return Err(format!("no hay una propuesta #{id} pendiente"));
+    };
+    if !accept {
+        let gone = inner.memory.remove(pos);
+        push_event(inner, by, "", "memory", &format!("descartó la propuesta de {}: {}", gone.by, clean_text(&gone.text, 100)), vec![], None);
+        return Ok(());
+    }
+    let active = inner.memory.iter().filter(|m| m.status == "active").count();
+    if active >= MAX_MEMORY {
+        return Err(format!("la memoria está llena ({MAX_MEMORY}): olvida algo antes de aceptar más"));
+    }
+    if let Some(t) = new_text.map(|t| clean_text(t, 400)).filter(|t| !t.is_empty()) {
+        inner.memory[pos].text = t;
+    }
+    inner.memory[pos].status = "active".to_string();
+    inner.memory[pos].ts_ms = now_ms();
+    let text = clean_text(&inner.memory[pos].text, 140);
+    push_event(inner, by, "", "memory", &format!("aceptó en la memoria: {text}"), vec![], None);
+    Ok(())
+}
+
+pub fn memory_forget(inner: &mut HubInner, id: u64, by: &str) -> Result<(), String> {
+    let Some(pos) = inner.memory.iter().position(|m| m.id == id) else {
+        return Err(format!("no existe la entrada #{id}"));
+    };
+    let gone = inner.memory.remove(pos);
+    push_event(inner, by, "", "memory", &format!("olvidó: {}", clean_text(&gone.text, 100)), vec![], None);
+    Ok(())
+}
+
+/// Añade una nota al tablón de una tarea.
+pub fn add_task_comment(
+    inner: &mut HubInner,
+    id: u64,
+    by: &str,
+    session_id: &str,
+    text: &str,
+) -> Result<TaskComment, String> {
+    let text = clean_text(text, 800);
+    if text.is_empty() {
+        return Err("la nota está vacía".into());
+    }
+    let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) else {
+        return Err("tarea no encontrada".into());
+    };
+    let comment = TaskComment { by: by.to_string(), text: text.clone(), ts_ms: now_ms() };
+    task.comments.push(comment.clone());
+    if task.comments.len() > 60 {
+        task.comments.remove(0);
+    }
+    push_event_full(
+        inner,
+        by,
+        session_id,
+        "task",
+        &format!("nota en #{id}: {}", clean_text(&text, 140)),
+        vec![],
+        None,
+        Some(id),
+    );
+    Ok(comment)
 }
 
 /// Valida los padres de una tarea nueva: deben existir y no repetirse.
@@ -170,6 +339,10 @@ pub struct PersistedState {
     pub seq: u64,
     #[serde(default)]
     pub task_seq: u64,
+    #[serde(default)]
+    pub memory: Vec<MemoryEntry>,
+    #[serde(default)]
+    pub memory_seq: u64,
 }
 
 pub struct HubInner {
@@ -183,6 +356,8 @@ pub struct HubInner {
     pub charter: Option<String>,
     pub leader: Option<String>,
     pub broadcasts: VecDeque<Broadcast>,
+    pub memory: Vec<MemoryEntry>,
+    pub memory_seq: u64,
     /// Broadcast delivery marks: `session:<id>` (hooks) or `agent:<name>` (terminals).
     pub broadcast_marks: HashMap<String, u64>,
     pub seq: u64,
@@ -263,6 +438,8 @@ pub fn persist(inner: &HubInner) {
         leader: inner.leader.clone(),
         seq: inner.seq,
         task_seq: inner.task_seq,
+        memory: inner.memory.clone(),
+        memory_seq: inner.memory_seq,
     };
     if let Ok(raw) = serde_json::to_string(&state) {
         let _ = std::fs::write(state_file(), raw);
@@ -404,6 +581,7 @@ pub fn snapshot(inner: &HubInner, limit: usize) -> serde_json::Value {
         "agents": agents,
         "events": events,
         "tasks": inner.tasks,
+        "memory": inner.memory,
         "claims": inner.claims.values().collect::<Vec<&Claim>>(),
         "now_ms": now,
     })
@@ -683,6 +861,7 @@ pub fn team_add_task(
         handover: None,
         parents,
         result: None,
+        comments: vec![],
     });
     push_event(
         &mut inner,
@@ -693,6 +872,51 @@ pub fn team_add_task(
         vec![],
         None,
     );
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn team_task_comment(hub: tauri::State<'_, Hub>, id: u64, text: String) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    add_task_comment(&mut inner, id, "tú", "ui", &text)?;
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn team_memory_add(hub: tauri::State<'_, Hub>, text: String, kind: Option<String>) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    memory_add(&mut inner, "tú", &text, kind.as_deref().unwrap_or("hecho"), true)?;
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn team_memory_resolve(
+    hub: tauri::State<'_, Hub>,
+    id: u64,
+    accept: bool,
+    text: Option<String>,
+) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    memory_resolve(&mut inner, id, accept, text.as_deref(), "tú")?;
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn team_memory_forget(hub: tauri::State<'_, Hub>, id: u64) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    memory_forget(&mut inner, id, "tú")?;
     persist(&inner);
     drop(inner);
     notify_ui();
@@ -807,6 +1031,8 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         broadcast_marks: HashMap::new(),
         seq: persisted.seq,
         task_seq: persisted.task_seq,
+        memory: persisted.memory,
+        memory_seq: persisted.memory_seq,
     };
 
     // Publish hub address for terminal env injection + discovery file.
@@ -867,6 +1093,7 @@ mod task_tests {
             handover: None,
             parents: parents.to_vec(),
             result: None,
+            comments: vec![],
         }
     }
 

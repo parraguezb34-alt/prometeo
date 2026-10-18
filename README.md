@@ -104,6 +104,9 @@ lienzo es un **centro de mando conversacional para dirigir un equipo de agentes 
    - **Pausa de 5 min** para un agente que no responde a 3 avisos seguidos, y como mínimo 4 s entre dos avisos cualesquiera (nada de tormentas).
    La lógica está en `src/lib/dispatcher.ts` (pura, sin Tauri) y se prueba con `npm test`.
 
+6. **Tablón por tarea**: cada tarea tiene su tablón de notas (`team_task_comment`, o desde el panel de Tareas). Sirve para datos concretos entre quien la lleva, quien depende de ella y tú, sin ensuciar el feed. Al reclamar una tarea el agente recibe sus notas, y `team_context` resume las últimas de las tareas pendientes.
+7. **Memoria del proyecto, curada por el líder**: lo que todos deben recordar (decisiones, hechos, convenciones, avisos) vive en la pestaña Memoria del panel de Tareas y se inyecta en el contexto de todos los agentes en cada mensaje. **Solo el líder (o tú) escribe directamente** (`team_memory_save`, `team_memory_resolve`, `team_memory_forget`); los demás **proponen** con `team_memory_propose` y el líder las acepta (pudiendo reescribirlas), descarta o ignora. Sin líder elegido cualquiera puede guardar, para no dejar al equipo sin memoria. Límites: 40 entradas, 20 propuestas pendientes, 400 caracteres por entrada.
+
 ## Relevo con memoria (compactar sin amnesia)
 
 Cuando la barra de contexto de un agente se acerque al límite (o cuando quieras

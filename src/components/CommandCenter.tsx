@@ -22,8 +22,12 @@ import {
   teamDetect,
   teamDm,
   teamLeader,
+  teamMemoryAdd,
+  teamMemoryForget,
+  teamMemoryResolve,
   teamModels,
   teamOpen,
+  teamTaskComment,
   teamState,
   teamTaskOp,
 } from "../lib/team";
@@ -133,7 +137,7 @@ export function CommandCenter() {
   /** Destinatario del compositor (independiente de lo que mires en el escenario). */
   const [dest, setDest] = useState<Sel>({ kind: "team" });
   const [view, setView] = useState<CenterView>("feed");
-  const [drawerTab, setDrawerTab] = useState<"tasks" | "feed" | "memory">("tasks");
+  const [drawerTab, setDrawerTab] = useState<"tasks" | "feed" | "handover" | "memory">("tasks");
   const [shoot, setShoot] = useState<Shoot>(loadShoot);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [chatsMin, setChatsMin] = useState(() => loadFlag(CHATS_MIN_KEY, false));
@@ -371,7 +375,7 @@ export function CommandCenter() {
     setDest({ kind: "team" });
     setView("feed");
     if (choice.kind === "handover") {
-      setDrawerTab("memory");
+      setDrawerTab("handover");
       setOverlay("tasks");
     }
   };
@@ -969,7 +973,7 @@ export function CommandCenter() {
         ? "list"
         : e.kind === "update"
           ? "pulse"
-          : e.kind === "handover"
+          : e.kind === "handover" || e.kind === "memory"
             ? "book"
             : e.kind === "waiting"
               ? "warn"
@@ -1595,6 +1599,40 @@ export function CommandCenter() {
           activeTaskId={view === "diff" ? diffTask : null}
           hasProject={!!project}
           initialTab={drawerTab}
+          memory={state?.memory ?? []}
+          leader={leader}
+          onComment={async (id, text) => {
+            try {
+              await teamTaskComment(id, text);
+              refresh();
+            } catch (e) {
+              say(errMsg(e), true);
+            }
+          }}
+          onMemoryAdd={async (text, kind) => {
+            try {
+              await teamMemoryAdd(text, kind);
+              refresh();
+            } catch (e) {
+              say(errMsg(e), true);
+            }
+          }}
+          onMemoryResolve={async (id, accept, text) => {
+            try {
+              await teamMemoryResolve(id, accept, text);
+              refresh();
+            } catch (e) {
+              say(errMsg(e), true);
+            }
+          }}
+          onMemoryForget={async (id) => {
+            try {
+              await teamMemoryForget(id);
+              refresh();
+            } catch (e) {
+              say(errMsg(e), true);
+            }
+          }}
           dispatch={{ enabled: dispatchOn, state: dispatchView, onToggle: toggleDispatch, onRetry: retryDispatch }}
           onPreview={(rel) => {
             setPreviewRel(rel);

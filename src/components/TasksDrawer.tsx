@@ -4,10 +4,11 @@ import { agentColor, agentInitial, agentLabel, ago, shortPath } from "../lib/tea
 import { waitingFor } from "../lib/team";
 import { isParked } from "../lib/dispatcher";
 import type { DispatchState } from "../lib/dispatcher";
-import type { TeamEvent, TeamTask } from "../lib/team";
+import type { MemoryEntry, TeamEvent, TeamTask } from "../lib/team";
 import { GLYPHS } from "./FeedList";
 import { Icon } from "./Icon";
 import { MemoryTab } from "./MemoryTab";
+import { ProjectMemory } from "./ProjectMemory";
 
 type Filter = "all" | "active" | "done";
 
@@ -25,6 +26,12 @@ export function TasksDrawer({
   activeTaskId,
   hasProject,
   initialTab = "tasks",
+  memory,
+  leader,
+  onComment,
+  onMemoryAdd,
+  onMemoryResolve,
+  onMemoryForget,
   dispatch,
   onPreview,
   onClose,
@@ -43,7 +50,14 @@ export function TasksDrawer({
   taskFileCount: Map<number, number>;
   activeTaskId: number | null;
   hasProject: boolean;
-  initialTab?: "tasks" | "feed" | "memory";
+  initialTab?: "tasks" | "feed" | "handover" | "memory";
+  /** Memoria del proyecto (guardada y propuestas). */
+  memory: MemoryEntry[];
+  leader: string;
+  onComment: (id: number, text: string) => Promise<void>;
+  onMemoryAdd: (text: string, kind: string) => Promise<void>;
+  onMemoryResolve: (id: number, accept: boolean, text?: string) => Promise<void>;
+  onMemoryForget: (id: number) => Promise<void>;
   /** Despacho automático: interruptor, estado de los avisos y reintento de tareas paradas. */
   dispatch: {
     enabled: boolean;
@@ -60,10 +74,11 @@ export function TasksDrawer({
   onTerminal: (name: string) => void;
   onSelectAgent: (name: string) => void;
 }) {
-  const [tab, setTab] = useState<"tasks" | "feed" | "memory">(initialTab);
+  const [tab, setTab] = useState<"tasks" | "feed" | "handover" | "memory">(initialTab);
   const [filter, setFilter] = useState<Filter>("all");
   const [draft, setDraft] = useState("");
   const [deps, setDeps] = useState<number[]>([]);
+  const [notes, setNotes] = useState<Record<number, string>>({});
   const [depsOpen, setDepsOpen] = useState(false);
 
   const pausedAgents = Object.entries(dispatch.state.agentPausedUntil)
@@ -143,9 +158,17 @@ export function TasksDrawer({
             <Icon name="pulse" size={14} />
             Actividad
           </button>
+          <button role="tab" aria-selected={tab === "handover"} onClick={() => setTab("handover")}>
+            <Icon name="refresh" size={14} />
+            Relevos <span className="cc-count">{tasks.filter((t) => t.handover).length}</span>
+          </button>
           <button role="tab" aria-selected={tab === "memory"} onClick={() => setTab("memory")}>
             <Icon name="book" size={14} />
-            Relevos <span className="cc-count">{tasks.filter((t) => t.handover).length}</span>
+            Memoria{" "}
+            <span className="cc-count" data-hot={memory.some((m) => m.status === "proposed") ? "1" : "0"}>
+              {memory.filter((m) => m.status === "active").length}
+              {memory.some((m) => m.status === "proposed") ? "+" : ""}
+            </span>
           </button>
         </div>
 
@@ -270,6 +293,31 @@ export function TasksDrawer({
                         </span>
                       )}
                     </div>
+                    <details className="cc-td-board" onClick={(e) => e.stopPropagation()}>
+                      <summary>
+                        Tablón{(t.comments ?? []).length > 0 ? ` (${(t.comments ?? []).length})` : ""}
+                      </summary>
+                      {(t.comments ?? []).map((c, i) => (
+                        <div className="cc-td-note" key={i} style={{ "--ac": agentColor(c.by) } as CSSProperties}>
+                          <b>{c.by === "tú" ? "Tú" : agentLabel(c.by)}</b>
+                          <span>{c.text}</span>
+                          <time>{ago(c.ts_ms)}</time>
+                        </div>
+                      ))}
+                      <input
+                        className="cc-td-noteinput"
+                        type="text"
+                        placeholder="Dejar una nota para quien la lleve…"
+                        value={notes[t.id] ?? ""}
+                        onChange={(e) => setNotes((cur) => ({ ...cur, [t.id]: e.target.value }))}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter") return;
+                          const text = (notes[t.id] ?? "").trim();
+                          if (!text) return;
+                          void onComment(t.id, text).then(() => setNotes((cur) => ({ ...cur, [t.id]: "" })));
+                        }}
+                      />
+                    </details>
                     {t.result && (
                       <details className="cc-td-result" onClick={(e) => e.stopPropagation()}>
                         <summary>Entrega de {agentLabel(t.result.by)}</summary>
@@ -308,8 +356,16 @@ export function TasksDrawer({
                 );
               })}
             </>
-          ) : tab === "memory" ? (
+          ) : tab === "handover" ? (
             <MemoryTab tasks={tasks} onOpenTask={onOpenTask} onPreview={onPreview} />
+          ) : tab === "memory" ? (
+            <ProjectMemory
+              memory={memory}
+              leader={leader}
+              onAdd={onMemoryAdd}
+              onResolve={onMemoryResolve}
+              onForget={onMemoryForget}
+            />
           ) : (
             <>
               {feed.length === 0 && <div className="cc-td-empty">Aún no hay actividad del equipo.</div>}

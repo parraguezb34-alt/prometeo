@@ -75,7 +75,7 @@ fn text_result(text: &str, is_error: bool) -> Value {
 // Renderizado de estado (mismo formato para contexto inyectado y tools)
 // ---------------------------------------------------------------------------
 
-fn render_context(state: &Value) -> String {
+fn render_context(state: &Value, me: &str) -> String {
     let empty = vec![];
     let mut out = String::from("[Equipo lienzo]\n");
 
@@ -140,6 +140,50 @@ fn render_context(state: &Value) -> String {
         .collect();
     if !delivered.is_empty() {
         out.push_str(&format!("Entregas previas: {}\n", delivered.join(" · ")));
+    }
+
+    // Notas cruzadas: lo último que se dijo en el tablón de las tareas pendientes.
+    let mut notes: Vec<(u64, String)> = vec![];
+    for t in tasks.iter().filter(|t| t["status"].as_str().unwrap_or("") != "done") {
+        for c in t["comments"].as_array().unwrap_or(&empty) {
+            notes.push((
+                c["ts_ms"].as_u64().unwrap_or(0),
+                format!(
+                    "#{} {}: {}",
+                    t["id"].as_u64().unwrap_or(0),
+                    c["by"].as_str().unwrap_or("?"),
+                    trunc(c["text"].as_str().unwrap_or(""), 120)
+                ),
+            ));
+        }
+    }
+    notes.sort_by(|a, b| b.0.cmp(&a.0));
+    if !notes.is_empty() {
+        let list: Vec<String> = notes.into_iter().take(3).map(|n| n.1).collect();
+        out.push_str(&format!("Notas del tablón: {}\n", list.join(" · ")));
+    }
+
+    // Memoria del proyecto: lo que el líder decidió que todos deben recordar.
+    let memory = state["memory"].as_array().unwrap_or(&empty);
+    let active: Vec<&Value> = memory.iter().filter(|m| m["status"].as_str() == Some("active")).collect();
+    if !active.is_empty() {
+        out.push_str("Memoria del proyecto (curada por el líder):\n");
+        let mut budget = 900usize;
+        for m in active.iter().rev() {
+            let line = format!("- [{}] {}\n", m["kind"].as_str().unwrap_or("hecho"), trunc(m["text"].as_str().unwrap_or(""), 200));
+            if line.len() > budget {
+                break;
+            }
+            budget -= line.len();
+            out.push_str(&line);
+        }
+    }
+    let pending = memory.iter().filter(|m| m["status"].as_str() == Some("proposed")).count();
+    let leader_name = state["leader"].as_str().unwrap_or("");
+    if pending > 0 && (leader_name.is_empty() || leader_name == me) {
+        out.push_str(&format!(
+            "Tienes {pending} propuesta(s) de memoria por revisar: mira team_memory_list y decide con team_memory_resolve.\n"
+        ));
     }
 
     let claims = state["claims"].as_array().unwrap_or(&empty);
@@ -240,6 +284,42 @@ fn task_flag(t: &Value, tasks: &[Value]) -> String {
     } else {
         format!("open·bloqueada por {}", unmet.join(","))
     }
+}
+
+fn render_memory(v: &Value) -> String {
+    let empty = vec![];
+    let all = v["memory"].as_array().unwrap_or(&empty);
+    if all.is_empty() {
+        return "La memoria del proyecto está vacía. Propón algo con team_memory_propose.".to_string();
+    }
+    let mut out = String::new();
+    let active: Vec<&Value> = all.iter().filter(|m| m["status"].as_str() == Some("active")).collect();
+    let proposed: Vec<&Value> = all.iter().filter(|m| m["status"].as_str() == Some("proposed")).collect();
+    if !active.is_empty() {
+        out.push_str("Memoria del proyecto:\n");
+        for m in active {
+            out.push_str(&format!(
+                "#{} [{}] {} (por {})\n",
+                m["id"].as_u64().unwrap_or(0),
+                m["kind"].as_str().unwrap_or("hecho"),
+                m["text"].as_str().unwrap_or(""),
+                m["by"].as_str().unwrap_or("?")
+            ));
+        }
+    }
+    if !proposed.is_empty() {
+        out.push_str("Propuestas pendientes:\n");
+        for m in proposed {
+            out.push_str(&format!(
+                "#{} [{}] {} (propone {})\n",
+                m["id"].as_u64().unwrap_or(0),
+                m["kind"].as_str().unwrap_or("hecho"),
+                m["text"].as_str().unwrap_or(""),
+                m["by"].as_str().unwrap_or("?")
+            ));
+        }
+    }
+    out
 }
 
 fn render_tasks(state: &Value) -> String {
@@ -390,6 +470,69 @@ fn tools_catalog() -> Value {
             }
         },
         {
+            "name": "team_task_comment",
+            "description": "Deja una nota en el tablón de una tarea: datos, decisiones o avisos para quien la lleve o dependa de ella. Mejor que el feed para cosas concretas de la tarea.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer" },
+                    "text": { "type": "string", "description": "La nota (hasta 800 caracteres)" }
+                },
+                "required": ["id", "text"]
+            }
+        },
+        {
+            "name": "team_memory_list",
+            "description": "Lista la memoria del proyecto (lo que el líder decidió que todos recuerden) y las propuestas pendientes.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "team_memory_propose",
+            "description": "Propone algo para la memoria del proyecto (una decisión, un hecho, una convención o un aviso que valga para todos). El líder decide si se guarda. Si eres el líder, se guarda directamente.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "Una frase clara y autosuficiente (hasta 400 caracteres)" },
+                    "kind": { "type": "string", "enum": ["decision", "hecho", "convencion", "aviso"] }
+                },
+                "required": ["text"]
+            }
+        },
+        {
+            "name": "team_memory_save",
+            "description": "Solo líder: guarda una entrada en la memoria del proyecto.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string" },
+                    "kind": { "type": "string", "enum": ["decision", "hecho", "convencion", "aviso"] }
+                },
+                "required": ["text"]
+            }
+        },
+        {
+            "name": "team_memory_resolve",
+            "description": "Solo líder: acepta (opcionalmente reescribiéndola con `text`) o descarta una propuesta de memoria.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer" },
+                    "accept": { "type": "boolean" },
+                    "text": { "type": "string", "description": "Texto reescrito (opcional)" }
+                },
+                "required": ["id", "accept"]
+            }
+        },
+        {
+            "name": "team_memory_forget",
+            "description": "Solo líder: quita una entrada de la memoria del proyecto (porque ya no vale).",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "id": { "type": "integer" } },
+                "required": ["id"]
+            }
+        },
+        {
             "name": "team_claim_files",
             "description": "Reserva archivos antes de editarlos para que otros agentes no los toquen. Devuelve un aviso si alguien ya los tiene reservados.",
             "inputSchema": {
@@ -443,7 +586,7 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
     let result: Result<Value, String> = match name {
         "team_context" => client
             .get("/state?limit=40")
-            .map(|v| text_result(&render_context(&v), false)),
+            .map(|v| text_result(&render_context(&v, &std::env::var("LIENZO_AGENT").unwrap_or_default()), false)),
         "team_feed" => {
             let since = args["since_seq"].as_u64().unwrap_or(0);
             let limit = args["limit"].as_u64().unwrap_or(40).min(200);
@@ -544,8 +687,57 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                             }
                         }
                     }
+                    if let Some(list) = v["comments"].as_array().filter(|l| !l.is_empty() && name == "team_task_claim") {
+                        msg.push_str("\n\nNotas del tablón de esta tarea:");
+                        for c in list.iter().rev().take(6).rev() {
+                            msg.push_str(&format!(
+                                "\n- {}: {}",
+                                c["by"].as_str().unwrap_or("?"),
+                                trunc(c["text"].as_str().unwrap_or(""), 400)
+                            ));
+                        }
+                    }
                     text_result(&msg, false)
                 })
+        }
+        "team_task_comment" => {
+            let id = args["id"].as_u64().unwrap_or(0);
+            let text = trunc(args["text"].as_str().unwrap_or(""), 800);
+            client
+                .post("/task", &json!({ "session_id": sid, "op": "comment", "id": id, "text": text }))
+                .map(|_| text_result(&format!("nota añadida al tablón de la tarea #{id}"), false))
+        }
+        "team_memory_list" => client
+            .post("/memory", &json!({ "session_id": sid, "op": "list" }))
+            .map(|v| text_result(&render_memory(&v), false)),
+        "team_memory_propose" | "team_memory_save" => {
+            let op = if name == "team_memory_save" { "save" } else { "propose" };
+            let text = trunc(args["text"].as_str().unwrap_or(""), 400);
+            let kind = args["kind"].as_str().unwrap_or("hecho").to_string();
+            client
+                .post("/memory", &json!({ "session_id": sid, "op": op, "text": text, "kind": kind }))
+                .map(|v| {
+                    let id = v["entry"]["id"].as_u64().unwrap_or(0);
+                    if v["saved"].as_bool().unwrap_or(false) {
+                        text_result(&format!("guardado en la memoria del proyecto (#{id})"), false)
+                    } else {
+                        text_result(&format!("propuesta #{id} enviada: el líder decidirá si entra en la memoria"), false)
+                    }
+                })
+        }
+        "team_memory_resolve" => {
+            let id = args["id"].as_u64().unwrap_or(0);
+            let accept = args["accept"].as_bool().unwrap_or(true);
+            let text = trunc(args["text"].as_str().unwrap_or(""), 400);
+            client
+                .post("/memory", &json!({ "session_id": sid, "op": "resolve", "id": id, "accept": accept, "text": text }))
+                .map(|_| text_result(&format!("propuesta #{id} {}", if accept { "aceptada" } else { "descartada" }), false))
+        }
+        "team_memory_forget" => {
+            let id = args["id"].as_u64().unwrap_or(0);
+            client
+                .post("/memory", &json!({ "session_id": sid, "op": "forget", "id": id }))
+                .map(|_| text_result(&format!("entrada #{id} olvidada"), false))
         }
         "team_claim_files" => {
             let files = str_array(&args["files"]);
@@ -634,7 +826,7 @@ fn read_resource(client: &HubClient, params: &Value) -> Result<Value, (i64, Stri
     let uri = params["uri"].as_str().unwrap_or("").to_string();
     let state = client.get("/state?limit=40").map_err(|e| (-32000, e))?;
     let text = match uri.as_str() {
-        "team://context" => render_context(&state),
+        "team://context" => render_context(&state, &std::env::var("LIENZO_AGENT").unwrap_or_default()),
         "team://feed" => render_feed(&json!({ "events": state["events"] })),
         "team://tasks" => render_tasks(&state),
         _ => return Err((-32602, format!("recurso desconocido: {uri}"))),
@@ -890,7 +1082,7 @@ fn hook_mode(args: &[String]) {
             } else {
                 "UserPromptSubmit"
             };
-            let mut ctx = render_context(&state);
+            let mut ctx = render_context(&state, &agent);
             if !pending.is_empty() {
                 ctx.push_str("\n📣 Mensajes del usuario para todo el equipo (nuevos):\n");
                 for (_, t) in &pending {

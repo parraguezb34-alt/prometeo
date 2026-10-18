@@ -47,6 +47,19 @@ export type TeamTaskResult = {
   ts_ms: number;
 };
 
+/** Nota en el tablón de una tarea. */
+export type TeamTaskComment = { by: string; text: string; ts_ms: number };
+
+/** Entrada de la memoria del proyecto (active = guardada, proposed = pendiente del líder). */
+export type MemoryEntry = {
+  id: number;
+  text: string;
+  kind: string;
+  by: string;
+  ts_ms: number;
+  status: string;
+};
+
 export type TeamTask = {
   id: number;
   title: string;
@@ -60,6 +73,8 @@ export type TeamTask = {
   parents?: number[];
   /** Entrega al cerrarla. */
   result?: TeamTaskResult | null;
+  /** Tablón de la tarea. */
+  comments?: TeamTaskComment[];
 };
 
 /** Ids de los padres de una tarea que aún no están hechos. */
@@ -83,6 +98,7 @@ export type TeamState = {
   events: TeamEvent[];
   tasks: TeamTask[];
   claims: TeamClaim[];
+  memory?: MemoryEntry[];
   now_ms: number;
 };
 
@@ -160,6 +176,13 @@ export const teamLeader = (leader: string | null) =>
   invoke<void>("team_leader", { leader });
 export const teamAddTask = (title: string, parents: number[] = []) =>
   invoke<void>("team_add_task", { title, parents });
+export const teamTaskComment = (id: number, text: string) =>
+  invoke<void>("team_task_comment", { id, text });
+export const teamMemoryAdd = (text: string, kind: string) =>
+  invoke<void>("team_memory_add", { text, kind });
+export const teamMemoryResolve = (id: number, accept: boolean, text?: string) =>
+  invoke<void>("team_memory_resolve", { id, accept, text: text ?? null });
+export const teamMemoryForget = (id: number) => invoke<void>("team_memory_forget", { id });
 export const teamTaskOp = (id: number, op: string) =>
   invoke<void>("team_task_op", { id, op });
 /** Log a direct user message to one agent in the feed (the text is typed into

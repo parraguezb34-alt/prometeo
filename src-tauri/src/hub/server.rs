@@ -100,6 +100,7 @@ fn handle(mut request: tiny_http::Request, app: &AppHandle) {
         ("GET", "/state") => cmd_state(app, &query),
         ("GET", "/feed") => cmd_feed(app, &query),
         ("POST", "/task") => cmd_task(app, &payload),
+        ("POST", "/memory") => cmd_memory(app, &payload),
         ("POST", "/claim") => cmd_claim(app, &payload),
         ("POST", "/release") => cmd_release(app, &payload),
         ("POST", "/connect") => cmd_connect(app, &payload),
@@ -452,6 +453,7 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                     handover: None,
                     parents,
                     result: None,
+                    comments: vec![],
                 };
                 inner.tasks.push(task.clone());
                 hub::push_event(
@@ -474,6 +476,12 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 );
                 hub::persist(inner);
                 Ok(json!({ "task": task }))
+            }
+            "comment" => {
+                let text = payload["text"].as_str().unwrap_or("");
+                let c = hub::add_task_comment(inner, id, &agent, &sid, text)?;
+                hub::persist(inner);
+                Ok(json!({ "comment": c }))
             }
             "claim" | "done" | "reopen" => {
                 let Some(pos) = inner.tasks.iter().position(|t| t.id == id) else {
@@ -588,11 +596,68 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 } else {
                     vec![]
                 };
-                Ok(json!({ "task": task, "parents_results": parents_results }))
+                Ok(json!({ "task": task, "parents_results": parents_results, "comments": task.comments }))
             }
             "list" => Ok(json!({ "tasks": inner.tasks })),
             _ => Err("operación de tarea desconocida".into()),
         }
+    })
+    .ok_or("hub no inicializado")??;
+    hub::notify_ui();
+    Ok(out)
+}
+
+/// Memoria del proyecto: el líder (o tú) la cura; los demás proponen y el líder decide.
+fn cmd_memory(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let op = payload["op"].as_str().unwrap_or("").to_string();
+    let sid = payload["session_id"].as_str().unwrap_or("").to_string();
+    let text = payload["text"].as_str().unwrap_or("").to_string();
+    let kind = payload["kind"].as_str().unwrap_or("hecho").to_string();
+    let id = payload["id"].as_u64().unwrap_or(0);
+    let accept = payload["accept"].as_bool().unwrap_or(true);
+
+    let out = hub::with_inner(app, |inner| -> Result<Value, String> {
+        let (agent, _sid) = hub::agent_label(inner, &sid, payload["agent"].as_str());
+        let curator = hub::can_curate(inner, &agent);
+        let leader = inner.leader.clone().unwrap_or_default();
+        let need_leader = |what: &str| -> String {
+            format!("solo el líder ({leader}) puede {what}; propón con team_memory_propose y él decidirá")
+        };
+        let result = match op.as_str() {
+            "list" => Ok(json!({ "memory": inner.memory })),
+            "propose" => {
+                // El líder (o tú) no necesita pasar por propuesta: se guarda directo.
+                let entry = hub::memory_add(inner, &agent, &text, &kind, curator)?;
+                Ok(json!({ "entry": entry, "saved": curator }))
+            }
+            "save" => {
+                if !curator {
+                    return Err(need_leader("guardar memoria"));
+                }
+                let entry = hub::memory_add(inner, &agent, &text, &kind, true)?;
+                Ok(json!({ "entry": entry, "saved": true }))
+            }
+            "resolve" => {
+                if !curator {
+                    return Err(need_leader("aceptar o descartar propuestas"));
+                }
+                let new_text = Some(text.as_str()).filter(|t| !t.trim().is_empty());
+                hub::memory_resolve(inner, id, accept, new_text, &agent)?;
+                Ok(json!({ "ok": true }))
+            }
+            "forget" => {
+                if !curator {
+                    return Err(need_leader("olvidar entradas"));
+                }
+                hub::memory_forget(inner, id, &agent)?;
+                Ok(json!({ "ok": true }))
+            }
+            _ => Err("operación de memoria desconocida".into()),
+        };
+        if result.is_ok() && op != "list" {
+            hub::persist(inner);
+        }
+        result
     })
     .ok_or("hub no inicializado")??;
     hub::notify_ui();
