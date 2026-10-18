@@ -29,8 +29,9 @@ import { projectInfo } from "../lib/project";
 import type { ProjectInfo } from "../lib/project";
 import { GLYPHS } from "./FeedList";
 import { AgentCard, AgentQuickCmds } from "./AgentCard";
-import { DiffTab } from "./DiffTab";
+import { DiffTab, taskPaths } from "./DiffTab";
 import { FilesTab } from "./FilesTab";
+import { MemoryTab } from "./MemoryTab";
 import { PreviewTab } from "./PreviewTab";
 import { TeamPanel } from "./TeamPanel";
 import { TerminalPanel } from "./TerminalPanel";
@@ -40,8 +41,8 @@ type Mode = "command" | "canvas";
 /** Conversation shown in the central chat: the whole team or one agent. */
 type Sel = { kind: "team" } | { kind: "agent"; name: string };
 
-/** What the center shows for the team destination. */
-type CenterView = "feed" | "diff" | "preview" | "files";
+/** What the stage shows for the team destination. */
+type CenterView = "feed" | "diff" | "preview" | "split" | "term" | "files" | "memory";
 
 /** Mission trigger mode: plan-first or straight to execution. */
 type Shoot = "plan" | "exec";
@@ -79,9 +80,13 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const [info, setInfo] = useState<ProjectInfo | null>(null);
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [sel, setSel] = useState<Sel>({ kind: "team" });
+  /** Destinatario del compositor (independiente de lo que mires en el escenario). */
+  const [dest, setDest] = useState<Sel>({ kind: "team" });
   const [view, setView] = useState<CenterView>("feed");
   const [tab, setTab] = useState<"chat" | "term">("chat");
   const [shoot, setShoot] = useState<Shoot>(loadShoot);
+  const [sideTab, setSideTab] = useState<"tasks" | "feed">("tasks");
+  const [termPick, setTermPick] = useState<string | null>(null);
   const [taskFilter, setTaskFilter] = useState<"all" | "active" | "done">("all");
   const [changeCount, setChangeCount] = useState<number | null>(null);
   const [diffTask, setDiffTask] = useState<number | null>(null);
@@ -95,6 +100,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const flashTimer = useRef<number | undefined>(undefined);
   const chatRef = useRef<HTMLDivElement>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const taskInputRef = useRef<HTMLInputElement>(null);
   const stickRef = useRef(true);
 
   const say = useCallback((text: string, err = false) => {
@@ -220,6 +226,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
 
   const selectAgent = (name: string, to: "chat" | "term" = "chat") => {
     setSel({ kind: "agent", name });
+    setDest({ kind: "agent", name });
     setTab(to);
   };
 
@@ -375,7 +382,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     const raw = draft.trim();
     if (!raw) return;
 
-    let target: Sel = sel;
+    let target: Sel = dest;
     let body = raw;
     const m = /^@([\w\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1.-]+)\s+([\s\S]+)$/.exec(raw);
     if (m) {
@@ -457,13 +464,14 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     }
   };
 
-  const mention = (key: string) => {
-    setDraft((d) => {
-      const stripped = d.replace(/^@[\w\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1.-]+\s+/, "");
-      return `@${key} ${stripped}`;
-    });
-    areaRef.current?.focus();
-  };
+  /** Opciones del selector de destino del compositor (@equipo, líder y agentes). */
+  const destNames = useMemo(() => {
+    const names: string[] = [];
+    if (leader) names.push(leader);
+    for (const a of agents) if (a.name !== leader) names.push(a.name);
+    if (dest.kind === "agent" && !names.includes(dest.name)) names.unshift(dest.name);
+    return names;
+  }, [agents, leader, dest]);
 
   const addTask = async () => {
     const t = taskDraft.trim();
@@ -525,8 +533,24 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const agentRow = agentView ? agents.find((a) => a.name === agentView) : undefined;
   const agentTask = agentView ? claimedBy.get(agentView) : undefined;
   const termPanel = agentView ? panelForAgent(layout.panels, agentView) : undefined;
+
+  // Terminal del escenario (vista Terminal del equipo): sesiones PTY abiertas.
+  const termPanels = layout.panels.filter((p) => p.kind === "terminal" && !!p.cmd);
+  const teamTermName =
+    termPick ?? (termPanels[0] ? agentKeyFromCmd(termPanels[0].cmd ?? "") : null);
+  const teamTermPanel = teamTermName
+    ? termPanels.find((p) => agentKeyFromCmd(p.cmd ?? "") === teamTermName)
+    : undefined;
+
+  // La terminal que se está viendo inline (no duplicar montajes de xterm).
   const termInlineId =
-    sel.kind === "agent" && tab === "term" && termPanel ? termPanel.id : null;
+    sel.kind === "agent"
+      ? tab === "term" && termPanel
+        ? termPanel.id
+        : null
+      : view === "term" && teamTermPanel
+        ? teamTermPanel.id
+        : null;
 
   // Terminals not shown inline still live (mounted off-screen) so the agents
   // keep working and are ready the moment you look at them.
@@ -545,93 +569,122 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     .slice()
     .reverse();
 
-  const teamHead = (
+  // Archivos ligados a cada tarea (reclamos + avisos de su dueño desde que nació).
+  const taskFileCount = useMemo(() => {
+    const m = new Map<number, number>();
+    const evs = state?.events ?? [];
+    const cls = state?.claims ?? [];
+    for (const t of tasks) m.set(t.id, taskPaths(t, evs, cls).length);
+    return m;
+  }, [tasks, state]);
+
+  // Actividad reciente para la pestaña «Actividad en vivo» (ya viene nueva→vieja).
+  const feedTop = useMemo(() => (state?.events ?? []).slice(0, 120), [state]);
+
+  const STAGE_TITLE: Record<CenterView, string> = {
+    feed: "Comando",
+    diff: "Cambios",
+    preview: "Preview",
+    split: "Split",
+    term: "Terminal",
+    files: "Archivos",
+    memory: "Memoria",
+  };
+  const stageTask =
+    view === "diff" && diffTask != null ? tasks.find((t) => t.id === diffTask) : undefined;
+  const stageHead = (
     <div className="cc-chat-head">
-      <div className="cc-chat-tabs cc-chat-tabs-left">
-        <button data-active={view === "feed" ? "1" : "0"} onClick={() => setView("feed")}>
-          💬 Feed
+      <div className="cc-stage-title">
+        <span className="cc-stage-badge">{stageTask ? `#${stageTask.id}` : "💬"}</span>
+        <span className="cc-stage-name">{stageTask ? stageTask.title : STAGE_TITLE[view]}</span>
+      </div>
+      <div className="cc-seg">
+        <button data-active={view === "feed" ? "1" : "0"} onClick={() => setView("feed")} title="Chat y actividad del equipo">
+          💬 Comando
         </button>
-        <button data-active={view === "diff" ? "1" : "0"} onClick={() => setView("diff")}>
-          ± Cambios{changeCount ? ` (${changeCount})` : ""}
+        <button data-active={view === "diff" ? "1" : "0"} onClick={() => setView("diff")} title="Revisar los cambios en git">
+          ± Cambios{changeCount ? ` ${changeCount}` : ""}
         </button>
-        <button data-active={view === "preview" ? "1" : "0"} onClick={() => setView("preview")}>
+        <button data-active={view === "preview" ? "1" : "0"} onClick={() => setView("preview")} title="Vista previa de html/svg/md en vivo">
           👁 Preview
         </button>
-        <button data-active={view === "files" ? "1" : "0"} onClick={() => setView("files")}>
+        <button data-active={view === "split" ? "1" : "0"} onClick={() => setView("split")} title="Diff y Preview a la vez">
+          ⫻ Split
+        </button>
+        <button data-active={view === "term" ? "1" : "0"} onClick={() => setView("term")} title="Terminal de un agente a pantalla completa">
+          ▸_ Terminal
+        </button>
+        <button data-active={view === "files" ? "1" : "0"} onClick={() => setView("files")} title="Explorar los archivos del proyecto">
           📁 Archivos
         </button>
+        <button data-active={view === "memory" ? "1" : "0"} onClick={() => setView("memory")} title="Relevos guardados por los agentes (sin amnesia)">
+          📝 Memoria
+        </button>
       </div>
-      <span className="cc-chat-sub">
-        {online.length} en línea
-        {leader ? ` · líder: ${leader}` : ""}
-        {project ? ` · ${shortPath(project)}` : ""}
+      <span className="cc-stage-info">
+        {online.length} en línea{leader ? ` · 👑 ${leader}` : ""}
       </span>
     </div>
   );
 
   const composer = (
-    <div className="cc-input-wrap">
-      <div className="cc-input-top">
-        <div className="cc-pills">
-          <button className="cc-pill" onClick={() => mention("todos")} title="Misión para todo el equipo">
-            👥 Todos
-          </button>
-          <button
-            className="cc-pill"
-            disabled={!leader}
-            onClick={() => mention("lider")}
-            title={leader ? `Solo para el líder (${leader})` : "Elige un líder para esto"}
-          >
-            👑 Líder
-          </button>
-          {agents.map((a) => (
-            <button
-              className="cc-pill"
-              key={a.session_id}
-              onClick={() => mention(a.name)}
-              title={`Solo para ${a.name}`}
-            >
-              @{a.name}
-            </button>
-          ))}
-        </div>
-        <div className="cc-shoot" title="Planificar = analiza y propone el reparto sin tocar código; Ejecutar = a trabajar ya">
+    <div className="cc-compose">
+      <textarea
+        ref={areaRef}
+        rows={2}
+        value={draft}
+        placeholder={
+          dest.kind === "team"
+            ? shoot === "plan"
+              ? "Misión en modo plan: nadie edita hasta tu OK…"
+              : "Enviar misión al equipo o @agente… (Enter envía, Shift+Enter salto)"
+            : shoot === "plan"
+              ? `Plan para ${dest.name}: analiza y propone sin editar nada…`
+              : `Mensaje para ${dest.name}… (se escribe en su terminal)`
+        }
+        onChange={(e) => {
+          setDraft(e.target.value);
+          const el = e.currentTarget;
+          el.style.height = "auto";
+          el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            send();
+          }
+        }}
+      />
+      <div className="cc-compose-row">
+        <div
+          className="cc-shoot"
+          title="Planificar = analiza y propone sin tocar código; Directo = a trabajar ya"
+        >
           <button data-active={shoot === "plan" ? "1" : "0"} onClick={() => setShootMode("plan")}>
             📋 Planificar
           </button>
           <button data-active={shoot === "exec" ? "1" : "0"} onClick={() => setShootMode("exec")}>
-            ⚡ Ejecutar
+            ⚡ Directo
           </button>
         </div>
-      </div>
-      <div className="cc-input">
-        <textarea
-          ref={areaRef}
-          rows={1}
-          value={draft}
-          placeholder={
-            sel.kind === "team"
-              ? shoot === "plan"
-                ? "Misión en modo plan: el líder propondrá el reparto y esperará tu OK…"
-                : "Misión para todo el equipo… (Enter envía, Shift+Enter salto de línea; @lider, @claude…)"
-              : shoot === "plan"
-                ? `Plan para ${sel.name}: analiza y propone sin editar nada…`
-                : `Mensaje para ${sel.name}… (se escribe en su terminal)`
-          }
+        <select
+          className="cc-dest-select"
+          value={dest.kind === "team" ? "team" : dest.name}
           onChange={(e) => {
-            setDraft(e.target.value);
-            const el = e.currentTarget;
-            el.style.height = "auto";
-            el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+            const v = e.target.value;
+            setDest(v === "team" ? { kind: "team" } : { kind: "agent", name: v });
           }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-        />
-        <button className="agent-btn cc-send" disabled={!draft.trim()} onClick={send}>
+          title="A quién va este mensaje (también puedes empezar con @lider, @claude…)"
+        >
+          <option value="team">@equipo</option>
+          {destNames.map((n) => (
+            <option key={n} value={n}>
+              @{n}
+              {n === leader ? " (líder)" : ""}
+            </option>
+          ))}
+        </select>
+        <button className="cc-send2" disabled={!draft.trim()} onClick={send}>
           Enviar
         </button>
       </div>
@@ -641,31 +694,23 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   return (
     <div className="cc">
       <header className="cc-top">
-        <div className="cc-brand">
-          <span className="cc-logo">⬒</span> lienzo
-        </div>
-        <div className="cc-modes">
-          <button data-active="1" title="Centro de mando: chat, diffs, preview y archivos">
-            ◫ Comando
-          </button>
-          <button
-            data-active="0"
-            onClick={() => onMode("canvas")}
-            title="Lienzo: terminales y paneles en el espacio (depuración / topología)"
-          >
-            ⬚ Lienzo
-          </button>
-        </div>
-        <button
-          className="cc-proj"
-          data-warn={project ? "0" : "1"}
+        <div
+          className="cc-projwrap"
           onClick={() => openDrawer(true)}
-          title={project ? `Proyecto: ${project}\nPulsa para cambiarlo` : "Elegir la carpeta del proyecto"}
+          title={
+            project
+              ? `Proyecto: ${project}\nPulsa para cambiarlo`
+              : "Elegir la carpeta del proyecto"
+          }
         >
-          {project ? `📁 ${shortPath(project)}` : "📁 sin carpeta"}
-          {info?.repo ? <span className="cc-branch"> · 🌿 {info.branch || "…"}</span> : null}
-        </button>
-        <div className="cc-summary">
+          <span className="cc-logobox">L</span>
+          <span className="cc-brandname">lienzo</span>
+          <span className="cc-slash">/</span>
+          <span className="cc-branch-name" data-warn={project ? "0" : "1"}>
+            {info?.repo ? info.branch || "…" : project ? shortPath(project) : "sin carpeta"}
+          </span>
+        </div>
+        <div className="cc-topinfo">
           <button
             className="cc-hub"
             data-on={hubOk ? "1" : "0"}
@@ -681,182 +726,263 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
           <span>
             {online.length} agente{online.length === 1 ? "" : "s"}
           </span>
-          <button className="agent-btn" data-ghost="1" onClick={() => openDrawer(true)}>
-            ⚙ Equipo
+        </div>
+        <div className="cc-modes">
+          <button
+            onClick={() => onMode("canvas")}
+            title="Lienzo: terminales y paneles en el espacio (topología / depuración)"
+          >
+            ⬚ Lienzo
+          </button>
+          <button onClick={() => openDrawer(true)} title="Equipo — agentes, normas y proyecto">
+            ⚙
           </button>
         </div>
       </header>
 
       <div className="cc-main">
         <aside className="cc-side">
-          <div className="cc-side-scroll">
-            <button
-              className="cc-dest"
-              data-active={sel.kind === "team" ? "1" : "0"}
-              onClick={() => setSel({ kind: "team" })}
-              title="Centro de artefactos + chat del equipo"
-            >
-              <span>💬 Equipo</span>
-              <span className="cc-dest-sub">{online.length} en línea</span>
-            </button>
+          <div className="cc-squad">
+            <div className="cc-side-sec">
+              <span className="cc-side-label">Equipo activo</span>
+              <button
+                className="cc-side-add"
+                onClick={() => openDrawer(true)}
+                title="Conectar CLIs, abrir agentes, normas y proyecto"
+              >
+                ＋ Añadir agente
+              </button>
+            </div>
 
-            {blocked.length > 0 && (
+            {blocked.map((a) => {
+              const ev = lastByAgent.get(a.name);
+              return (
+                <div className="cc-block" key={a.session_id}>
+                  <div className="cc-block-head">
+                    <span className="cc-block-name">{a.name} consulta</span>
+                    {ev ? <span className="cc-block-ago">hace {ago(ev.ts_ms)}</span> : null}
+                  </div>
+                  <div className="cc-block-text">{ev?.text ?? "pide tu respuesta"}</div>
+                  <div className="cc-block-actions">
+                    <button className="cc-task-btn cc-primary" onClick={() => selectAgent(a.name)}>
+                      Responder
+                    </button>
+                    <button className="cc-task-btn" onClick={() => openTerm(a.name)}>
+                      ▸_ Terminal
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+
+            {agents.length === 0 ? (
+              <button className="cc-side-connect" onClick={() => openDrawer(true)}>
+                ＋ Conectar / abrir agentes
+              </button>
+            ) : (
+              agents.map((a) => (
+                <AgentCard
+                  key={a.session_id}
+                  agent={a}
+                  leader={leader}
+                  active={sel.kind === "agent" && sel.name === a.name}
+                  task={claimedBy.get(a.name)}
+                  last={lastByAgent.get(a.name)}
+                  onSelect={() => selectAgent(a.name)}
+                  onTerminal={() => openTerm(a.name)}
+                  onCrown={() => toggleLeader(a.name)}
+                  onCmd={(cmd, note) => writeAgent(a.name, cmd, note)}
+                />
+              ))
+            )}
+          </div>
+
+          <div className="cc-side-tabs">
+            <button data-active={sideTab === "tasks" ? "1" : "0"} onClick={() => setSideTab("tasks")}>
+              Tareas <span className="cc-tab-n">{openTasks}</span>
+            </button>
+            <button data-active={sideTab === "feed" ? "1" : "0"} onClick={() => setSideTab("feed")}>
+              Actividad en vivo
+            </button>
+            <button
+              className="cc-side-add"
+              onClick={() => {
+                setSideTab("tasks");
+                window.setTimeout(() => taskInputRef.current?.focus(), 0);
+              }}
+              title="Añadir una tarea al equipo"
+            >
+              ＋ Nueva
+            </button>
+          </div>
+
+          <div className="cc-side-body">
+            {sideTab === "tasks" ? (
               <>
-                <div className="cc-side-title">🚨 Bloqueos</div>
-                {blocked.map((a) => {
-                  const ev = lastByAgent.get(a.name);
-                  return (
-                    <div className="cc-block" key={a.session_id}>
-                      <div className="cc-block-text">🚨 {ev?.text ?? "pide tu respuesta"}</div>
-                      <div className="cc-block-actions">
-                        <button className="task-btn" onClick={() => selectAgent(a.name)}>
-                          Responder
-                        </button>
-                        <button className="task-btn" onClick={() => openTerm(a.name)}>
-                          ▸_ Terminal
-                        </button>
-                      </div>
+                <div className="cc-filters">
+                  <button data-active={taskFilter === "all" ? "1" : "0"} onClick={() => setTaskFilter("all")}>
+                    Todas
+                  </button>
+                  <button
+                    data-active={taskFilter === "active" ? "1" : "0"}
+                    onClick={() => setTaskFilter("active")}
+                  >
+                    En curso
+                  </button>
+                  <button
+                    data-active={taskFilter === "done" ? "1" : "0"}
+                    onClick={() => setTaskFilter("done")}
+                  >
+                    Hechas
+                  </button>
+                </div>
+                {tasks.length === 0 && (
+                  <div className="cc-side-empty">
+                    Sin tareas. El equipo las crea al trabajar, o añade una aquí abajo.
+                  </div>
+                )}
+                {filteredTasks.map((t) => (
+                  <div
+                    className="cc-task"
+                    key={t.id}
+                    data-done={t.status === "done" ? "1" : "0"}
+                    data-active={diffTask === t.id && view === "diff" ? "1" : "0"}
+                    onClick={() => {
+                      if (project) {
+                        setDiffTask(t.id);
+                        setView("diff");
+                      } else {
+                        openDrawer(true);
+                      }
+                    }}
+                    title={
+                      project
+                        ? `Ver los cambios de la tarea #${t.id} en el escenario`
+                        : "Elige la carpeta del proyecto para ver cambios"
+                    }
+                  >
+                    <div className="cc-task-line">
+                      <span className="cc-task-dot" data-s={t.status} />
+                      <span className="cc-task-id">#{t.id}</span>
+                      <span className="cc-task-status" data-s={t.status}>
+                        {t.status === "done"
+                          ? "Hecha"
+                          : t.status === "claimed"
+                            ? "En curso"
+                            : "Abierta"}
+                      </span>
+                      {t.owner ? (
+                        <span
+                          className="cc-task-owner"
+                          style={{ color: agentColor(t.owner) }}
+                          title={`en manos de ${t.owner}`}
+                        >
+                          {t.owner}
+                        </span>
+                      ) : null}
                     </div>
-                  );
-                })}
+                    <div className="cc-task-title">{t.title}</div>
+                    <div className="cc-task-foot">
+                      <span className="cc-task-files">
+                        {taskFileCount.get(t.id)
+                          ? `${taskFileCount.get(t.id)} archivo${taskFileCount.get(t.id) === 1 ? "" : "s"}`
+                          : "sin archivos aún"}
+                      </span>
+                      <span className="cc-task-foot-r">
+                        {t.handover && (
+                          <span
+                            className="cc-task-handover"
+                            title={`Relevo de ${t.handover.by} hace ${ago(t.handover.ts_ms)}: ${t.handover.text}`}
+                          >
+                            📝
+                          </span>
+                        )}
+                        {t.status === "done" ? (
+                          <button
+                            className="cc-task-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              taskOp(t.id, "reopen");
+                            }}
+                            title="Reabrir"
+                          >
+                            ↺
+                          </button>
+                        ) : (
+                          <button
+                            className="cc-task-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              taskOp(t.id, "done");
+                            }}
+                            title="Marcar hecha"
+                          >
+                            ✓
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                <div className="team-task-add cc-task-add">
+                  <input
+                    ref={taskInputRef}
+                    type="text"
+                    value={taskDraft}
+                    placeholder="Nueva tarea…"
+                    onChange={(e) => setTaskDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addTask();
+                    }}
+                  />
+                  <button className="agent-btn" onClick={addTask} disabled={!taskDraft.trim()}>
+                    ＋
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                {feedTop.length === 0 && (
+                  <div className="cc-side-empty">Aún no hay actividad del equipo.</div>
+                )}
+                {feedTop.map((e) => (
+                  <div className="cc-feed-item" key={e.seq}>
+                    <div className="cc-feed-l1">
+                      <button
+                        className="cc-feed-agent"
+                        style={{ color: agentColor(e.agent) }}
+                        onClick={() => {
+                          if (agents.some((a) => a.name === e.agent)) selectAgent(e.agent);
+                        }}
+                        title={
+                          agents.some((a) => a.name === e.agent)
+                            ? `Abrir la conversación con ${e.agent}`
+                            : e.agent
+                        }
+                      >
+                        {e.agent}
+                      </button>
+                      <span className="cc-feed-t">hace {ago(e.ts_ms)}</span>
+                    </div>
+                    <div className="cc-feed-txt">
+                      {GLYPHS[e.kind] ?? "•"} {e.text}
+                      {e.files.length > 0 && (
+                        <span className="feed-files"> · {e.files.map(shortPath).join(", ")}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </>
             )}
-
-            <div className="cc-side-title">Agentes</div>
-            {agents.length === 0 && (
-              <div className="cc-side-empty">
-                Sin sesiones conectadas todavía. Usa «＋ Conectar» o lanza el escuadrón.
-              </div>
-            )}
-            {agents.map((a) => (
-              <AgentCard
-                key={a.session_id}
-                agent={a}
-                leader={leader}
-                active={sel.kind === "agent" && sel.name === a.name}
-                task={claimedBy.get(a.name)}
-                last={lastByAgent.get(a.name)}
-                onSelect={() => selectAgent(a.name)}
-                onTerminal={() => openTerm(a.name)}
-                onCrown={() => toggleLeader(a.name)}
-                onCmd={(cmd, note) => writeAgent(a.name, cmd, note)}
-              />
-            ))}
-            <button className="cc-side-connect" onClick={() => openDrawer(true)}>
-              ＋ Conectar / abrir agentes
-            </button>
-
-            <div className="cc-side-title">
-              Tareas ({openTasks} abiertas)
-            </div>
-            <div className="cc-filters">
-              <button data-active={taskFilter === "all" ? "1" : "0"} onClick={() => setTaskFilter("all")}>
-                Todas
-              </button>
-              <button
-                data-active={taskFilter === "active" ? "1" : "0"}
-                onClick={() => setTaskFilter("active")}
-              >
-                En curso
-              </button>
-              <button
-                data-active={taskFilter === "done" ? "1" : "0"}
-                onClick={() => setTaskFilter("done")}
-              >
-                Hechas
-              </button>
-            </div>
-            {tasks.length === 0 && (
-              <div className="cc-side-empty">
-                Sin tareas. El equipo las crea al trabajar, o añade una aquí abajo.
-              </div>
-            )}
-            {filteredTasks.map((t) => (
-              <div
-                className="cc-task"
-                key={t.id}
-                data-done={t.status === "done" ? "1" : "0"}
-                onClick={() => {
-                  if (project) {
-                    setDiffTask(t.id);
-                    setView("diff");
-                  } else {
-                    openDrawer(true);
-                  }
-                }}
-                title={
-                  project
-                    ? `Ver los cambios de la tarea #${t.id} en el centro`
-                    : "Elige la carpeta del proyecto para ver cambios"
-                }
-              >
-                <span className="task-chip" data-s={t.status}>
-                  #{t.id}
-                </span>
-                <span className="cc-task-title">{t.title}</span>
-                {t.handover && (
-                  <span
-                    className="cc-task-handover"
-                    title={`Relevo de ${t.handover.by} hace ${ago(t.handover.ts_ms)}: ${t.handover.text}`}
-                  >
-                    📝
-                  </span>
-                )}
-                {t.owner && (
-                  <span
-                    className="cc-task-owner"
-                    style={{ color: agentColor(t.owner) }}
-                    title={`en manos de ${t.owner}`}
-                  >
-                    {t.owner}
-                  </span>
-                )}
-                {t.status === "done" ? (
-                  <button
-                    className="cc-task-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      taskOp(t.id, "reopen");
-                    }}
-                    title="Reabrir"
-                  >
-                    ↺
-                  </button>
-                ) : (
-                  <button
-                    className="cc-task-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      taskOp(t.id, "done");
-                    }}
-                    title="Marcar hecha"
-                  >
-                    ✓
-                  </button>
-                )}
-              </div>
-            ))}
-            <div className="team-task-add cc-task-add">
-              <input
-                type="text"
-                value={taskDraft}
-                placeholder="Nueva tarea…"
-                onChange={(e) => setTaskDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") addTask();
-                }}
-              />
-              <button className="agent-btn" onClick={addTask} disabled={!taskDraft.trim()}>
-                ＋
-              </button>
-            </div>
           </div>
+
+          {composer}
         </aside>
 
         <section className="cc-conv">
           {sel.kind === "team" ? (
             <>
-              {teamHead}
+              {stageHead}
               {view === "feed" && (
                 <>
                   <div className="cc-chat" ref={chatRef} onScroll={onChatScroll}>
@@ -891,7 +1017,6 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                       msgs.map(renderEvent)
                     )}
                   </div>
-                  {composer}
                 </>
               )}
               {view === "diff" && (
@@ -930,10 +1055,100 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                   }}
                 />
               )}
+              {view === "split" && (
+                <div className="cc-split">
+                  <div className="cc-split-pane">
+                    <DiffTab
+                      project={project}
+                      onChooseProject={() => openDrawer(true)}
+                      onCount={onDiffCount}
+                      tasks={tasks}
+                      events={state?.events ?? []}
+                      claims={state?.claims ?? []}
+                      taskId={diffTask}
+                      onTaskChange={setDiffTask}
+                      onSay={say}
+                      onPreview={(rel) => {
+                        setPreviewRel(rel);
+                        setView("preview");
+                      }}
+                    />
+                  </div>
+                  <div className="cc-split-pane">
+                    <PreviewTab
+                      project={project}
+                      events={state?.events ?? []}
+                      openRel={previewRel}
+                      onChooseProject={() => openDrawer(true)}
+                    />
+                  </div>
+                </div>
+              )}
+              {view === "term" &&
+                (teamTermPanel ? (
+                  <div className="cc-termwrap">
+                    <div className="cc-term-bar">
+                      <span className="cc-term-pick-label">Sesión PTY:</span>
+                      <select
+                        className="cc-mini-select"
+                        value={teamTermName ?? ""}
+                        onChange={(e) => setTermPick(e.target.value)}
+                      >
+                        {termPanels.map((p) => (
+                          <option key={p.id} value={agentKeyFromCmd(p.cmd ?? "")}>
+                            {agentKeyFromCmd(p.cmd ?? "")}
+                          </option>
+                        ))}
+                      </select>
+                      <AgentQuickCmds
+                        agent={teamTermName ?? ""}
+                        withEsc
+                        onCmd={(cmd, note) => {
+                          if (teamTermName) writeAgent(teamTermName, cmd, note);
+                        }}
+                      />
+                      <span className="cc-term-hint">⌨ se escribe en su terminal</span>
+                    </div>
+                    <div className="cc-termbox">
+                      <TerminalPanel panel={teamTermPanel} lod={false} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="cc-empty">
+                    <div>
+                      Sin terminales abiertas todavía.
+                      <br />
+                      Conecta y abre a los agentes para verlos trabajar aquí mismo.
+                    </div>
+                    <button className="agent-btn" onClick={() => openDrawer(true)}>
+                      ＋ Conectar / abrir agentes
+                    </button>
+                  </div>
+                ))}
+              {view === "memory" && (
+                <MemoryTab
+                  tasks={tasks}
+                  onOpenTask={(id) => {
+                    setDiffTask(id);
+                    setView("diff");
+                  }}
+                  onPreview={(rel) => {
+                    setPreviewRel(rel);
+                    setView("preview");
+                  }}
+                />
+              )}
             </>
           ) : (
             <>
               <div className="cc-chat-head">
+                <button
+                  className="cc-back"
+                  onClick={() => setSel({ kind: "team" })}
+                  title="Volver al escenario del equipo"
+                >
+                  ←
+                </button>
                 <span className="agent-dot" data-on={agentRow?.online ? "1" : "0"} />
                 <span className="cc-chat-title" style={{ color: agentColor(sel.name) }}>
                   {sel.name}
@@ -948,7 +1163,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                         : "sin sesión viva"
                       : "sin sesión conectada"}
                 </span>
-                <div className="cc-chat-tabs">
+                <div className="cc-seg">
                   <button data-active={tab === "chat" ? "1" : "0"} onClick={() => setTab("chat")}>
                     💬 Conversación
                   </button>
@@ -1001,7 +1216,6 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                       msgs.map(renderEvent)
                     )}
                   </div>
-                  {composer}
                 </>
               )}
             </>

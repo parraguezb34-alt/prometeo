@@ -35,7 +35,7 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 /** Archivos asociados a una tarea: reclamos y avisos de su dueño desde que nació. */
-function taskPaths(task: TeamTask, events: TeamEvent[], claims: TeamClaim[]): string[] {
+export function taskPaths(task: TeamTask, events: TeamEvent[], claims: TeamClaim[]): string[] {
   const set = new Set<string>();
   if (task.owner) {
     for (const c of claims) {
@@ -218,6 +218,25 @@ export function DiffTab({
   const truncated = task ? (tdiff?.truncated ?? false) : (git?.truncated ?? false);
   const lines = diff.split(/\r?\n/);
   const shown = lines.slice(0, MAX_LINES);
+
+  // +A / −D reales por archivo, contados del propio diff (por su cabecera +++).
+  const stats = new Map<string, { a: number; d: number }>();
+  {
+    let cur: string | null = null;
+    for (const line of lines) {
+      if (line.startsWith("+++ ")) {
+        const p = line.slice(4).trim().replace(/^[ab]\//, "");
+        cur = p === "/dev/null" ? null : p;
+        if (cur && !stats.has(cur)) stats.set(cur, { a: 0, d: 0 });
+        continue;
+      }
+      if (!cur) continue;
+      if (line.startsWith("---")) continue; // cabecera del archivo viejo, no es un borrado
+      const s = stats.get(cur)!;
+      if (line.startsWith("+")) s.a++;
+      else if (line.startsWith("-")) s.d++;
+    }
+  }
   // Archivos de la tarea que el Preview sabe abrir (html/svg/md).
   const previewCandidates = task
     ? [...new Set([...paths, ...files.map((f) => f.path)])]
@@ -353,6 +372,7 @@ export function DiffTab({
       <div className="cc-files-row">
         {files.map((f) => {
           const canPreview = PREVIEW_EXT.test(f.path);
+          const st = stats.get(f.path);
           return (
             <span
               className="cc-file-chip"
@@ -361,8 +381,14 @@ export function DiffTab({
               onClick={canPreview ? () => onPreview(f.path) : undefined}
               title={canPreview ? `👁 Ver ${f.path} · ${f.status}` : `${f.status} · ${f.path}`}
             >
-              <b style={{ color: STATUS_COLOR[f.status[0]] ?? "#8b98b8" }}>{f.status}</b>
+              <b style={{ color: STATUS_COLOR[f.status[0]] ?? "#a1a1aa" }}>{f.status}</b>
               {f.path}
+              {st && (st.a > 0 || st.d > 0) ? (
+                <em className="cc-chip-stats">
+                  {st.a > 0 && <span className="cc-add">+{st.a}</span>}
+                  {st.d > 0 && <span className="cc-del">−{st.d}</span>}
+                </em>
+              ) : null}
             </span>
           );
         })}

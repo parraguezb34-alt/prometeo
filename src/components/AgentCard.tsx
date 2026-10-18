@@ -80,9 +80,7 @@ function fmtTokens(n: number): string {
   if (n >= 10_000) return `${Math.round(n / 1000)}k`;
   if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
   return `${n}`;
-}
-
-/** "claude-opus-4-5-20260101" → "opus-4-5" */
+}/** "claude-opus-4-5-20260101" → "opus-4-5" */
 function shortModel(m: string): string {
   return m.replace(/^claude-/, "").replace(/-\d{8}$/, "");
 }
@@ -174,7 +172,8 @@ export function AgentCard({
             />
           </div>
           <span className="cc-ctx-label">
-            Ctx {ctx.pct}%{ctx.pct >= 80 ? " ⚠️" : ""}
+            {ctx.pct}% · {fmtTokens(ctx.tokens)}
+            {ctx.pct >= 80 ? " ⚠️" : ""}
           </span>
           {agent.model ? <span className="cc-ctx-model">{shortModel(agent.model)}</span> : null}
           <button
