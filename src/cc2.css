@@ -1597,3 +1597,69 @@ button.cc-lead {
   text-align: left;
   align-items: flex-start;
 }
+
+/* ---- modelo y esfuerzo por agente (modal de equipo) ---------------------- */
+
+.cc-acard-start {
+  margin-left: auto;
+}
+.cc-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.cc-field-l {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.cc-field .cc-select {
+  font-family: var(--font, inherit);
+  font-size: 12.5px;
+  min-width: 0;
+}
+.cc-field .cc-select select {
+  max-width: 190px;
+  text-overflow: ellipsis;
+}
+.cc-field .cc-select select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.cc-field-note {
+  font-size: 11.5px;
+  color: var(--faint);
+  line-height: 1.4;
+}
+.cc-acard-opts {
+  align-items: flex-end;
+}
+.cc-apply {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cc-apply-note {
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.cc-autostart {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.cc-check {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}

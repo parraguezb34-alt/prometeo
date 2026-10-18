@@ -66,6 +66,10 @@ fn cli_installed(def: &AgentDef) -> bool {
     if which(def.cli) {
         return true;
     }
+    // Codex de escritorio: su CLI vive en %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\ y no está en el PATH.
+    if def.id == "codex" && codex_cli().is_some() {
+        return true;
+    }
     let npm = std::env::var("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_default()
@@ -484,53 +488,147 @@ pub fn team_connect(app: tauri::AppHandle, agent: String, project: Option<String
     Ok(json!({ "files": files, "notes": notes }))
 }
 
+/// Opciones al abrir un agente: modo plan, modelo, esfuerzo y si debe retomar
+/// la conversación anterior de la carpeta (al reiniciar para cambiar de modelo).
+#[derive(Default, Clone)]
+pub struct LaunchOpts {
+    pub plan: bool,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub resume: bool,
+}
+
+/// Valores que acaban en una línea de comandos: solo caracteres inocuos.
+fn safe_token(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() || t.len() > 120 {
+        return None;
+    }
+    if t.chars().all(|c| c.is_ascii_alphanumeric() || "._:/#@+-".contains(c)) {
+        Some(t.to_string())
+    } else {
+        None
+    }
+}
+
+/// El CLI de Codex: el de la app de escritorio (el más reciente) o el del PATH.
+fn codex_cli() -> Option<PathBuf> {
+    let bin = std::env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join("OpenAI")
+        .join("Codex")
+        .join("bin");
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    if let Ok(rd) = std::fs::read_dir(&bin) {
+        for entry in rd.flatten() {
+            let exe = entry.path().join("codex.exe");
+            if let Ok(meta) = exe.metadata() {
+                let t = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                if best.as_ref().map(|(bt, _)| t > *bt).unwrap_or(true) {
+                    best = Some((t, exe));
+                }
+            }
+        }
+    }
+    best.map(|(_, p)| p).or_else(|| {
+        if which("codex") {
+            Some(PathBuf::from("codex"))
+        } else {
+            None
+        }
+    })
+}
+
+fn quoted(p: &Path) -> String {
+    let s = p.display().to_string();
+    if s.contains([' ', '\\', '/']) {
+        format!("\"{s}\"")
+    } else {
+        s
+    }
+}
+
 /// Where to open an agent: a terminal command (`pty`) or its desktop app (`app`).
-/// `plan` starts the CLI read-only in its planning mode when it has one.
-pub fn launch_target(agent: &str, plan: bool) -> Option<Value> {
+/// `opts.plan` starts the CLI read-only in its planning mode when it has one;
+/// `model` / `effort` / `resume` se traducen a las flags de cada CLI.
+pub fn launch_target(agent: &str, opts: &LaunchOpts) -> Option<Value> {
     let local = std::env::var("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_default();
+    let model = opts.model.as_deref().and_then(safe_token);
+    let effort = opts.effort.as_deref().and_then(safe_token);
     match agent {
-        "claude" | "codex" => {
+        "claude" => {
             let def = AGENTS.iter().find(|d| d.id == agent)?;
-            if cli_installed(def) {
-                // Claude Code: `--permission-mode plan` lo arranca en plan.
-                let cmd = if plan && agent == "claude" {
-                    "claude --permission-mode plan".to_string()
-                } else {
-                    agent.to_string()
-                };
-                Some(json!({ "kind": "pty", "cmd": cmd }))
-            } else {
-                None
+            if !cli_installed(def) {
+                return None;
             }
+            // Claude Code: `--permission-mode plan` lo arranca en plan.
+            let mut cmd = String::from("claude");
+            if opts.plan {
+                cmd.push_str(" --permission-mode plan");
+            }
+            if let Some(m) = &model {
+                cmd.push_str(&format!(" --model {m}"));
+            }
+            if let Some(e) = &effort {
+                cmd.push_str(&format!(" --effort {e}"));
+            }
+            if opts.resume {
+                cmd.push_str(" --continue");
+            }
+            Some(json!({ "kind": "pty", "cmd": cmd }))
+        }
+        "codex" => {
+            let exe = codex_cli()?;
+            let mut cmd = quoted(&exe);
+            if let Some(m) = &model {
+                cmd.push_str(&format!(" -m {m}"));
+            }
+            if let Some(e) = &effort {
+                cmd.push_str(&format!(" -c model_reasoning_effort={e}"));
+            }
+            if opts.resume {
+                cmd.push_str(" resume --last");
+            }
+            Some(json!({ "kind": "pty", "cmd": cmd }))
         }
         "opencode" => {
             let bundled = local.join(r"Programs\@opencode-aidesktop\resources\opencode-cli.exe");
-            if bundled.exists() {
-                Some(json!({ "kind": "pty", "cmd": bundled.display().to_string() }))
+            let mut cmd = if bundled.exists() {
+                quoted(&bundled)
             } else if which("opencode") {
-                Some(json!({ "kind": "pty", "cmd": "opencode" }))
+                "opencode".to_string()
             } else {
-                None
+                return None;
+            };
+            if opts.resume {
+                cmd.push_str(" --continue");
             }
+            Some(json!({ "kind": "pty", "cmd": cmd }))
         }
         "antigravity" => {
             // Prefer the Antigravity CLI (`agy`) so it runs inside a lienzo
             // terminal; fall back to opening its desktop app.
             // `--dangerously-skip-permissions` stops the constant tool
             // permission prompts — remove the flag here to get them back.
-            let flags = if plan {
-                "--dangerously-skip-permissions --mode plan"
-            } else {
-                "--dangerously-skip-permissions"
-            };
+            let mut flags = String::from("--dangerously-skip-permissions");
+            if opts.plan {
+                flags.push_str(" --mode plan");
+            }
+            if let Some(m) = &model {
+                flags.push_str(&format!(" --model {m}"));
+            }
+            if let Some(e) = &effort {
+                flags.push_str(&format!(" --effort {e}"));
+            }
+            if opts.resume {
+                flags.push_str(" --continue");
+            }
             let agy = local.join(r"agy\bin\agy.exe");
             if agy.exists() {
-                Some(json!({
-                    "kind": "pty",
-                    "cmd": format!("\"{}\" {}", agy.display(), flags)
-                }))
+                Some(json!({ "kind": "pty", "cmd": format!("{} {}", quoted(&agy), flags) }))
             } else if which("agy") {
                 Some(json!({ "kind": "pty", "cmd": format!("agy {}", flags) }))
             } else {
@@ -546,14 +644,49 @@ pub fn launch_target(agent: &str, plan: bool) -> Option<Value> {
     }
 }
 
+/// OpenCode no acepta modelo por flag al abrir la TUI: se fija en la config del
+/// proyecto (`model`, con la variante tras `#`, p. ej. `proveedor/modelo#alto`).
+fn set_opencode_model(project: &Path, model: &str) -> Result<(), String> {
+    let cfg_path = project.join("opencode.json");
+    let mut cfg = read_json(&cfg_path);
+    if !cfg.is_object() {
+        cfg = json!({});
+    }
+    cfg.as_object_mut()
+        .unwrap()
+        .insert("model".into(), json!(model));
+    write_json_pretty(&cfg_path, &cfg)
+}
+
 /// Open an agent: returns `{kind:"pty", cmd}` for the frontend to spawn in a
 /// terminal panel, or launches its desktop app (`kind:"app"`) directly.
 /// `mode = "plan"` starts the CLI in its read-only planning mode when it
 /// supports one.
 #[tauri::command]
-pub fn team_open(app: tauri::AppHandle, agent: String, mode: Option<String>) -> Result<Value, String> {
-    let plan = mode.as_deref() == Some("plan");
-    let spec = launch_target(&agent, plan)
+pub fn team_open(
+    app: tauri::AppHandle,
+    agent: String,
+    mode: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    resume: Option<bool>,
+) -> Result<Value, String> {
+    let opts = LaunchOpts {
+        plan: mode.as_deref() == Some("plan"),
+        model,
+        effort,
+        resume: resume.unwrap_or(false),
+    };
+    // OpenCode: el modelo va en la config del proyecto, no en la línea de comandos.
+    if agent == "opencode" {
+        if let (Some(m), Some(dir)) = (
+            opts.model.as_deref().and_then(safe_token),
+            project_of(&app).filter(|p| !p.trim().is_empty()),
+        ) {
+            let _ = set_opencode_model(Path::new(dir.trim()), &m);
+        }
+    }
+    let spec = launch_target(&agent, &opts)
         .ok_or_else(|| format!("no encontré cómo abrir «{}» — ¿está instalado?", agent))?;
     if spec.get("kind").and_then(|k| k.as_str()) == Some("app") {
         let exe = spec
@@ -703,5 +836,168 @@ pub fn opencode_compact(project: String) -> Result<String, String> {
                 msg.chars().take(300).collect::<String>()
             ))
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Catálogo de modelos y esfuerzo por agente
+// ---------------------------------------------------------------------------
+
+const EFFORTS_STD: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
+/// Ejecuta un CLI sin ventana y devuelve su stdout, con tope de espera.
+fn run_capture(exe: &Path, args: &[&str], wait_ms: u64) -> Option<String> {
+    let mut cmd = Command::new(exe);
+    cmd.args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd.spawn().ok()?;
+    let mut waited = 0u64;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if waited >= wait_ms {
+                    let _ = child.kill();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                waited += 100;
+            }
+            Err(_) => return None,
+        }
+    }
+    let out = child.wait_with_output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+fn model_entry(id: &str, label: &str, efforts: &[String]) -> Value {
+    json!({ "id": id, "label": label, "efforts": efforts })
+}
+
+fn std_efforts() -> Vec<String> {
+    EFFORTS_STD.iter().map(|s| s.to_string()).collect()
+}
+
+/// Valor de una clave de primer nivel en un TOML sencillo (`key = "valor"`).
+fn toml_top_value(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        let l = line.trim();
+        if l.starts_with('[') {
+            break; // solo las claves anteriores a la primera tabla
+        }
+        if let Some(rest) = l.strip_prefix(key) {
+            let rest = rest.trim_start();
+            if let Some(v) = rest.strip_prefix('=') {
+                return Some(v.trim().trim_matches('"').to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Modelos y niveles de esfuerzo que admite cada agente, para el selector del
+/// modal de equipo. `current` es lo que el propio agente tiene configurado.
+#[tauri::command]
+pub fn team_models(agent: String) -> Result<Value, String> {
+    match agent.as_str() {
+        "claude" => {
+            let efforts = std_efforts();
+            Ok(json!({
+                "models": [
+                    model_entry("opus", "Opus", &efforts),
+                    model_entry("sonnet", "Sonnet", &efforts),
+                    model_entry("haiku", "Haiku", &efforts),
+                    model_entry("fable", "Fable", &efforts),
+                ],
+                "efforts": efforts,
+                "current": { "model": null, "effort": null },
+                "live": true,
+            }))
+        }
+        "codex" => {
+            let cfg = std::fs::read_to_string(home().join(".codex").join("config.toml")).unwrap_or_default();
+            let current_model = toml_top_value(&cfg, "model");
+            let current_effort = toml_top_value(&cfg, "model_reasoning_effort");
+            let mut models: Vec<Value> = vec![];
+            let cache = std::fs::read_to_string(home().join(".codex").join("models_cache.json")).unwrap_or_default();
+            if let Ok(v) = serde_json::from_str::<Value>(&cache) {
+                if let Some(list) = v.get("models").and_then(|m| m.as_array()) {
+                    for m in list {
+                        if m.get("visibility").and_then(|x| x.as_str()) != Some("list") {
+                            continue;
+                        }
+                        let slug = m.get("slug").and_then(|x| x.as_str()).unwrap_or("");
+                        if slug.is_empty() {
+                            continue;
+                        }
+                        let label = m.get("display_name").and_then(|x| x.as_str()).unwrap_or(slug);
+                        let efforts: Vec<String> = m
+                            .get("supported_reasoning_levels")
+                            .and_then(|x| x.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|e| e.get("effort").and_then(|x| x.as_str()))
+                                    .map(|s| s.to_string())
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        models.push(model_entry(slug, label, &efforts));
+                    }
+                }
+            }
+            if models.is_empty() {
+                if let Some(m) = &current_model {
+                    models.push(model_entry(m, m, &["low", "medium", "high", "xhigh"].map(String::from)));
+                }
+            }
+            Ok(json!({
+                "models": models,
+                "efforts": ["low", "medium", "high", "xhigh"],
+                "current": { "model": current_model, "effort": current_effort },
+                "live": false,
+            }))
+        }
+        "antigravity" => {
+            let local = std::env::var("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default();
+            let agy = local.join(r"agy\bin\agy.exe");
+            let exe = if agy.exists() { agy } else { PathBuf::from("agy") };
+            let efforts = std_efforts();
+            let mut models: Vec<Value> = vec![];
+            if let Some(out) = run_capture(&exe, &["models"], 12_000) {
+                for line in out.lines() {
+                    let mut it = line.splitn(2, '\t');
+                    let (Some(id), Some(label)) = (it.next(), it.next()) else { continue };
+                    let id = id.trim();
+                    if id.is_empty() || id.contains(' ') {
+                        continue;
+                    }
+                    models.push(model_entry(id, label.trim(), &efforts));
+                }
+            }
+            Ok(json!({ "models": models, "efforts": efforts, "current": { "model": null, "effort": null }, "live": false }))
+        }
+        "opencode" => {
+            let mut models: Vec<Value> = vec![];
+            if let Some(cli) = opencode_cli() {
+                if let Some(out) = run_capture(&cli, &["models"], 12_000) {
+                    for line in out.lines() {
+                        let id = line.trim();
+                        if id.is_empty() || id.contains(' ') || !id.contains('/') {
+                            continue;
+                        }
+                        models.push(model_entry(id, id, &[]));
+                    }
+                }
+            }
+            Ok(json!({ "models": models, "efforts": [], "current": { "model": null, "effort": null }, "live": false }))
+        }
+        other => Err(format!("agente desconocido: {other}")),
     }
 }

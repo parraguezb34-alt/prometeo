@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Panel } from "../store";
 import { addAgentTerminal } from "../store";
+import { prefsFor } from "../lib/agentPrefs";
 import {
   agentColor,
   ago,
@@ -153,7 +154,8 @@ export function TeamPanel({
         await teamConnect(id, projectDraft.trim() || null);
         refreshDetect();
       }
-      const r = await teamOpen(id, launchMode ?? "exec");
+      const pref = prefsFor(id);
+      const r = await teamOpen(id, launchMode ?? "exec", { model: pref.model, effort: pref.effort });
       if (r.kind === "app") {
         say(`✓ ${label} abriéndose en la carpeta del equipo.`);
       } else {

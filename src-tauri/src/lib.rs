@@ -33,6 +33,7 @@ pub fn run() {
             hub::connectors::team_detect,
             hub::connectors::team_connect,
             hub::connectors::team_open,
+            hub::connectors::team_models,
             hub::connectors::opencode_compact,
             project::project_info,
             project::project_status,

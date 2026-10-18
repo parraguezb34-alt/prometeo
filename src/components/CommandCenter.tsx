@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { addAgentTerminal, useLayout } from "../store";
+import { addAgentTerminal, removePanel, useLayout } from "../store";
 import type { Panel } from "../store";
 import {
   agentColor,
@@ -22,12 +22,15 @@ import {
   teamDetect,
   teamDm,
   teamLeader,
+  teamModels,
   teamOpen,
   teamState,
   teamTaskOp,
 } from "../lib/team";
-import type { DetectResult, TeamEvent, TeamState } from "../lib/team";
-import { termWrite } from "../lib/pty";
+import type { DetectResult, ModelCatalog, TeamAgent, TeamEvent, TeamState } from "../lib/team";
+import { loadAutoStart, loadPrefs, saveAutoStart, savePrefs } from "../lib/agentPrefs";
+import type { AgentPref } from "../lib/agentPrefs";
+import { termKill, termWrite } from "../lib/pty";
 import { projectInfo } from "../lib/project";
 import type { ProjectInfo } from "../lib/project";
 import { inWindow, useChats } from "../lib/chats";
@@ -130,6 +133,12 @@ export function CommandCenter() {
   const [previewRel, setPreviewRel] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [opening, setOpening] = useState<string | null>(null);
+  const [prefs, setPrefs] = useState<Record<string, AgentPref>>(loadPrefs);
+  const [catalogs, setCatalogs] = useState<Record<string, ModelCatalog | null | undefined>>({});
+  const [autoStart, setAutoStart] = useState(loadAutoStart);
+  /** Lo último que se aplicó a la sesión de cada agente (modelo y esfuerzo). */
+  const appliedRef = useRef<Record<string, AgentPref | undefined>>({});
+  const autoRan = useRef<string | null>(null);
   const [hubOk, setHubOk] = useState(true);
   const [hubUrl, setHubUrl] = useState("");
   const [flash, setFlash] = useState<{ text: string; err?: boolean } | null>(null);
@@ -162,7 +171,13 @@ export function CommandCenter() {
     refreshDetect();
     teamDetails().then((d) => setHubUrl(d.url)).catch(() => {});
     const unlisten = onTeamUpdate(refresh);
-    const interval = window.setInterval(refresh, 4000);
+    // El estado del equipo se refresca cada 4 s; los CLIs instalados, cada ~30 s.
+    let tick = 0;
+    const interval = window.setInterval(() => {
+      refresh();
+      tick += 1;
+      if (tick % 8 === 0) refreshDetect();
+    }, 4000);
     return () => {
       unlisten.then((f) => f());
       window.clearInterval(interval);
@@ -203,6 +218,24 @@ export function CommandCenter() {
   const tasks = state?.tasks ?? [];
   const agents = state?.agents ?? [];
   const online = agents.filter((a) => a.online);
+
+  // «Equipo activo» muestra a todos los agentes instalados, estén o no en marcha:
+  // los que aún no tienen sesión aparecen sin conexión, con un botón para iniciarlos.
+  const roster = useMemo(() => {
+    const list: TeamAgent[] = [...agents];
+    for (const d of detect?.agents ?? []) {
+      if (!d.cli_found || list.some((a) => a.name === d.id)) continue;
+      list.push({
+        session_id: `det:${d.id}`,
+        name: d.id,
+        project: "",
+        pid: 0,
+        last_seen_ms: 0,
+        online: false,
+      });
+    }
+    return list;
+  }, [agents, detect]);
   const leader = state?.leader ?? "";
   const done = tasks.filter((t) => t.status === "done").length;
   const total = tasks.length;
@@ -362,7 +395,9 @@ export function CommandCenter() {
         await teamConnect(id, project);
         refreshDetect();
       }
-      const r = await teamOpen(id, shoot);
+      const p = prefs[id] ?? {};
+      const r = await teamOpen(id, shoot, { model: p.model, effort: p.effort });
+      appliedRef.current[id] = { model: p.model ?? null, effort: p.effort ?? null };
       if (r.kind === "app") {
         say(`✓ ${label} se está abriendo en su app de escritorio…`);
       } else {
@@ -382,6 +417,108 @@ export function CommandCenter() {
       setOpening(null);
     }
   };
+
+  /** Guarda el modelo o esfuerzo elegido para un agente (se usa al abrirlo o reiniciarlo). */
+  const setPref = (name: string, patch: AgentPref) => {
+    setPrefs((prev) => {
+      const next = { ...prev, [name]: { ...(prev[name] ?? {}), ...patch } };
+      savePrefs(next);
+      return next;
+    });
+  };
+
+  /** Aplica el modelo y esfuerzo elegidos a un agente que ya está en marcha.
+   * Claude Code lo admite en caliente (/model y /effort); el resto se reinicia
+   * con las flags nuevas retomando la conversación de la carpeta. */
+  const applyAgent = async (name: string) => {
+    const p = prefs[name] ?? {};
+    const label = agentLabel(name);
+    const panel = panelForAgent(layout.panels, name);
+    setOpening(name);
+    try {
+      if (name === "claude" && panel?.sessionId) {
+        if (p.model) await termWrite(panel.sessionId, `/model ${p.model}\r`);
+        if (p.effort) {
+          if (p.model) await new Promise((r) => window.setTimeout(r, 900));
+          await termWrite(panel.sessionId, `/effort ${p.effort}\r`);
+        }
+        appliedRef.current[name] = { model: p.model ?? null, effort: p.effort ?? null };
+        say(`✓ ${label}: ajustes escritos en su terminal.`);
+        return;
+      }
+      if (!panel) {
+        await launchAgent(name, label, { selectTerm: false });
+        return;
+      }
+      // Reinicio: se cierra su terminal y se abre otra con las flags nuevas.
+      if (panel.sessionId) await termKill(panel.sessionId).catch(() => {});
+      removePanel(panel.id);
+      const r = await teamOpen(name, shoot, { model: p.model, effort: p.effort, resume: true });
+      if (r.kind === "pty") addAgentTerminal(label, r.cmd);
+      appliedRef.current[name] = { model: p.model ?? null, effort: p.effort ?? null };
+      say(`✓ ${label} reiniciado con los ajustes nuevos; retoma su conversación.`);
+      refresh();
+    } catch (e) {
+      say(errMsg(e), true);
+    } finally {
+      setOpening(null);
+    }
+  };
+
+  const toggleAutoStart = (on: boolean) => {
+    setAutoStart(on);
+    saveAutoStart(on);
+  };
+
+  // Al abrir la app (y al elegir un proyecto): conecta los agentes instalados y
+  // abre los que no estén en marcha, para que aparezcan en «Equipo activo».
+  useEffect(() => {
+    if (!autoStart || !state || !detect || !project || autoRan.current === project) return;
+    autoRan.current = project;
+    void (async () => {
+      const installed = detect.agents.filter((a) => a.cli_found);
+      let connected = 0;
+      let opened = 0;
+      for (const a of installed) {
+        if (a.connected) continue;
+        try {
+          await teamConnect(a.id, project);
+          connected += 1;
+        } catch (e) {
+          say(`No pude conectar ${a.label}: ${errMsg(e)}`, true);
+        }
+      }
+      if (connected > 0) refreshDetect();
+      for (const a of installed) {
+        const running = state.agents.some((x) => x.name === a.id && x.online);
+        if (running || panelForAgent(layout.panels, a.id)) continue;
+        if (await launchAgent(a.id, a.label, { selectTerm: false })) opened += 1;
+        await new Promise((r) => window.setTimeout(r, 600));
+      }
+      if (connected + opened > 0) {
+        say(`Equipo listo: ${connected} conectado(s), ${opened} abierto(s).`);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart, state, detect, project]);
+
+  // Al abrir el modal de equipo se carga el catálogo de modelos de cada agente.
+  useEffect(() => {
+    if (overlay !== "team") return;
+    for (const a of roster) {
+      if (catalogs[a.name] !== undefined) continue;
+      setCatalogs((prev) => ({ ...prev, [a.name]: null }));
+      teamModels(a.name)
+        .then((c) => setCatalogs((prev) => ({ ...prev, [a.name]: c })))
+        .catch(() =>
+          setCatalogs((prev) => ({
+            ...prev,
+            [a.name]: { models: [], efforts: [], current: { model: null, effort: null }, live: false },
+          })),
+        );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlay, roster]);
 
   /** One click: connect + launch every agent CLI found on this machine. */
   const launchSquad = async () => {
@@ -689,11 +826,11 @@ export function CommandCenter() {
   const blockedNames = useMemo(() => blocked.map((a) => a.name), [blocked]);
   const states = useMemo(() => {
     const m = new Map<string, AgentState>();
-    for (const a of agents) {
+    for (const a of roster) {
       m.set(a.name, agentState(a, blockedNames.includes(a.name), claimedBy.has(a.name)));
     }
     return m;
-  }, [agents, blockedNames, claimedBy]);
+  }, [roster, blockedNames, claimedBy]);
 
   const VIEWS: { id: CenterView; label: string; icon: IconName; title: string }[] = [
     { id: "feed", label: "Comando", icon: "msg", title: "Chat y actividad del equipo" },
@@ -901,7 +1038,7 @@ export function CommandCenter() {
           </span>
         </div>
 
-        <TeamStrip agents={agents} states={states} onOpen={() => setOverlay("team")} />
+        <TeamStrip agents={roster} states={states} onOpen={() => setOverlay("team")} />
         {blocked.length > 0 && (
           <button
             className="cc-alert"
@@ -1101,7 +1238,7 @@ export function CommandCenter() {
 
       {overlay === "team" && (
         <TeamModal
-          agents={agents}
+          agents={roster}
           states={states}
           leader={leader}
           claimedBy={claimedBy}
@@ -1118,6 +1255,19 @@ export function CommandCenter() {
           onCmd={(name, cmd, note) => {
             void writeAgent(name, cmd, note);
           }}
+          catalogs={catalogs}
+          prefs={prefs}
+          applied={appliedRef.current}
+          busy={opening}
+          autoStart={autoStart}
+          onPref={setPref}
+          onApply={(name) => {
+            void applyAgent(name);
+          }}
+          onStart={(name) => {
+            void launchAgent(name, agentLabel(name), { selectTerm: false });
+          }}
+          onAutoStart={toggleAutoStart}
           onSettings={() => {
             setOverlay(null);
             openDrawer(true);

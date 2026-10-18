@@ -101,6 +101,11 @@ export function addAgentTerminal(title: string, cmd: string): Panel {
   return panel;
 }
 
+/** Quita una terminal (p. ej. al reiniciar un agente con otro modelo). */
+export function removePanel(id: string) {
+  set({ panels: state.panels.filter((p) => p.id !== id) });
+}
+
 export function setPanelSession(id: string, sessionId: string) {
   set({
     panels: state.panels.map((p) => (p.id === id ? { ...p, sessionId } : p)),

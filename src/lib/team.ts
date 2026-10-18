@@ -103,8 +103,30 @@ export const teamDetails = () => invoke<TeamDetails>("team_details");
 export const teamDetect = () => invoke<DetectResult>("team_detect");
 export const teamConnect = (agent: string, project: string | null) =>
   invoke<ConnectResult>("team_connect", { agent, project });
-export const teamOpen = (agent: string, mode: OpenMode = "exec") =>
-  invoke<OpenResult>("team_open", { agent, mode });
+/** Opciones al abrir un agente: modelo, esfuerzo y retomar la conversación de la carpeta. */
+export type OpenOpts = { model?: string | null; effort?: string | null; resume?: boolean };
+
+export const teamOpen = (agent: string, mode: OpenMode = "exec", opts: OpenOpts = {}) =>
+  invoke<OpenResult>("team_open", {
+    agent,
+    mode,
+    model: opts.model ?? null,
+    effort: opts.effort ?? null,
+    resume: opts.resume ?? false,
+  });
+
+export type ModelEntry = { id: string; label: string; efforts: string[] };
+
+/** Lo que cada agente admite: modelos, niveles de esfuerzo y lo que tiene configurado. */
+export type ModelCatalog = {
+  models: ModelEntry[];
+  efforts: string[];
+  current: { model: string | null; effort: string | null };
+  /** Se puede cambiar en caliente tecleando comandos; si no, hay que reiniciar la sesión. */
+  live: boolean;
+};
+
+export const teamModels = (agent: string) => invoke<ModelCatalog>("team_models", { agent });
 export const teamProjectSet = (path: string | null) =>
   invoke<void>("team_project_set", { path });
 /** Send a prompt to every connected agent (feed + terminal injection). */
