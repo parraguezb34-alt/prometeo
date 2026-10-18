@@ -480,7 +480,7 @@ export function CommandCenter() {
   };
 
   // ---- Despachador ligero: pide a los agentes libres que tomen las tareas listas.
-  const [dispatchOn, setDispatchOn] = useState(() => loadFlag(DISPATCH_KEY, false));
+  const [dispatchOn, setDispatchOn] = useState(() => loadFlag(DISPATCH_KEY, true));
   const [dispatchView, setDispatchView] = useState<DispatchState>(EMPTY_DISPATCH);
   const dispatchRef = useRef<DispatchState>(EMPTY_DISPATCH);
   const dispatchBusy = useRef(false);
