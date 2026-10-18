@@ -258,6 +258,28 @@ pub fn memory_forget(inner: &mut HubInner, id: u64, by: &str) -> Result<(), Stri
     Ok(())
 }
 
+/// Borra una tarea. Las que dependían de ella dejan de esperarla (si no, quedarían bloqueadas para
+/// siempre) y se avisa en el feed.
+pub fn delete_task(inner: &mut HubInner, id: u64) -> Result<(), String> {
+    let Some(pos) = inner.tasks.iter().position(|t| t.id == id) else {
+        return Err("tarea no encontrada".into());
+    };
+    let gone = inner.tasks.remove(pos);
+    for t in inner.tasks.iter_mut() {
+        t.parents.retain(|p| *p != id);
+    }
+    push_event(
+        inner,
+        "tú",
+        "ui",
+        "task",
+        &format!("#{} borrada: {}", id, clean_text(&gone.title, 100)),
+        vec![],
+        None,
+    );
+    Ok(())
+}
+
 /// Añade una nota al tablón de una tarea.
 pub fn add_task_comment(
     inner: &mut HubInner,
@@ -978,6 +1000,13 @@ pub fn team_memory_forget(hub: tauri::State<'_, Hub>, id: u64) -> Result<(), Str
 #[tauri::command]
 pub fn team_task_op(hub: tauri::State<'_, Hub>, id: u64, op: String) -> Result<(), String> {
     let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    if op == "delete" {
+        delete_task(&mut inner, id)?;
+        persist(&inner);
+        drop(inner);
+        notify_ui();
+        return Ok(());
+    }
     {
         let task = inner
             .tasks

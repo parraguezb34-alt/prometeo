@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { agentColor, agentInitial, agentLabel, ago, shortPath } from "../lib/team";
 import { waitingFor } from "../lib/team";
@@ -80,6 +80,13 @@ export function TasksDrawer({
   const [deps, setDeps] = useState<number[]>([]);
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [depsOpen, setDepsOpen] = useState(false);
+  /** Tarea que espera confirmación para borrarse (se pide un segundo clic). */
+  const [delAsk, setDelAsk] = useState<number | null>(null);
+  useEffect(() => {
+    if (delAsk == null) return;
+    const id = window.setTimeout(() => setDelAsk(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [delAsk]);
 
   const pausedAgents = Object.entries(dispatch.state.agentPausedUntil)
     .filter(([, until]) => until > Date.now())
@@ -350,6 +357,23 @@ export function TasksDrawer({
                       aria-label={t.status === "done" ? "Reabrir tarea" : "Marcar hecha"}
                     >
                       {t.status === "done" ? <Icon name="refresh" size={14} /> : <Icon name="check" size={14} />}
+                    </button>
+                    <button
+                      className="cc-icon-btn sm cc-td-del"
+                      data-ask={delAsk === t.id ? "1" : "0"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (delAsk === t.id) {
+                          setDelAsk(null);
+                          onTaskOp(t.id, "delete");
+                        } else {
+                          setDelAsk(t.id);
+                        }
+                      }}
+                      title={delAsk === t.id ? "Pulsa otra vez para borrarla" : "Borrar tarea"}
+                      aria-label={delAsk === t.id ? "Confirmar borrado" : "Borrar tarea"}
+                    >
+                      {delAsk === t.id ? <span className="cc-td-delq">¿Borrar?</span> : <Icon name="trash" size={14} />}
                     </button>
                   </div>
                 </div>
