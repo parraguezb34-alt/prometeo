@@ -38,6 +38,11 @@ export function isDispatch(e: TeamEvent): boolean {
   return e.agent === "tú" && e.text.startsWith("📌 Despacho");
 }
 
+/** Aviso de un agente que no pide nada aunque llegue como «waiting» («login successful»). */
+export function isNotice(e: TeamEvent): boolean {
+  return e.kind === "waiting" && /successful/i.test(e.text);
+}
+
 export function isImagePath(p: string): boolean {
   return IMAGE_RE.test(p.trim());
 }
@@ -85,7 +90,7 @@ export function buildTimeline(events: TeamEvent[]): Row[] {
       rows.push(mine ? { k: "user", key, e } : { k: "sys", key, e });
       continue;
     }
-    if (e.kind === "waiting") {
+    if (e.kind === "waiting" && !isNotice(e)) {
       close();
       rows.push({ k: "alert", key, e });
       continue;

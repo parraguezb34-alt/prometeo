@@ -48,7 +48,7 @@ import type { ProjectInfo } from "../lib/project";
 import { currentTeamChat, inWindow, useChats } from "../lib/chats";
 import { LATEST, resetCommand, withResume } from "../lib/resume";
 import { useTermActivity } from "../lib/activity";
-import { eventImages, samePath } from "../lib/timeline";
+import { eventImages, isNotice, samePath } from "../lib/timeline";
 import type { Chat } from "../lib/chats";
 import { AgentQuickCmds } from "./AgentCard";
 import { ChatView } from "./ChatView";
@@ -268,7 +268,25 @@ export function CommandCenter() {
   }, [project]);
 
   const tasks = state?.tasks ?? [];
-  const agents = state?.agents ?? [];
+  // Solo los agentes de este proyecto, uno por nombre. Otras apps (OpenCode Desktop en otra
+  // carpeta, la app de escritorio de Antigravity) también se conectan al hub con su puente, y
+  // sin este filtro el mismo agente salía repetido en el chat, la barra y el compositor.
+  const agents = useMemo(() => {
+    const all = state?.agents ?? [];
+    const norm = (x: string) => x.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const proj = state?.project ? norm(state.project) : "";
+    const mine = proj
+      ? all.filter((a) => !a.project || norm(a.project) === proj || norm(a.project).startsWith(`${proj}/`))
+      : all;
+    const best = new Map<string, TeamAgent>();
+    for (const a of mine) {
+      const b = best.get(a.name);
+      if (!b || (a.online && !b.online) || (a.online === b.online && a.last_seen_ms > b.last_seen_ms)) {
+        best.set(a.name, a);
+      }
+    }
+    return mine.filter((a) => best.get(a.name) === a);
+  }, [state]);
   const online = agents.filter((a) => a.online);
 
   // «Equipo activo» muestra a todos los agentes instalados, estén o no en marcha:
@@ -303,7 +321,10 @@ export function CommandCenter() {
     return m;
   }, [state]);
 
-  const blocked = online.filter((a) => lastByAgent.get(a.name)?.kind === "waiting");
+  const blocked = online.filter((a) => {
+    const last = lastByAgent.get(a.name);
+    return last?.kind === "waiting" && !isNotice(last);
+  });
 
   // Task each agent is currently holding (claimed).
   const claimedBy = useMemo(() => {
