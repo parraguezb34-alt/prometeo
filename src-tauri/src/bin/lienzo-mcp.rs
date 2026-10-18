@@ -857,9 +857,19 @@ fn join_hub(client: &HubClient, agent: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Las terminales que abre lienzo llevan `LIENZO_HUB`; un CLI abierto por su cuenta en la
+/// misma carpeta (otra ventana, la app de escritorio) no, aunque lea la misma config.
+fn outside_lienzo() -> bool {
+    std::env::var_os("LIENZO_HUB").is_none()
+}
+
 fn mcp_mode() {
     let agent = std::env::var("LIENZO_AGENT").unwrap_or_else(|_| "agente".to_string());
-    let client = HubClient::discover();
+    // Un Claude Code abierto fuera de lienzo lee el mismo `.mcp.json` del proyecto, pero no es
+    // el agente del equipo: no se une, para no hacerse pasar por él en el chat. (OpenCode y
+    // Antigravity sí pueden vivir fuera de una terminal de lienzo, p. ej. el servicio de OpenCode.)
+    let guest = agent == "claude" && outside_lienzo();
+    let client = if guest { None } else { HubClient::discover() };
 
     // La sesión vive en un Arc: si lienzo se reinicia (o aún no estaba abierto cuando arrancó
     // este puente), el latido detecta que el hub no la conoce y se vuelve a unir. Sin esto, un
@@ -869,7 +879,7 @@ fn mcp_mode() {
     ));
 
     // Heartbeat so the hub knows this agent is alive (and re-join when it does not know us).
-    {
+    if !guest {
         let sess = session.clone();
         let agent_name = agent.clone();
         let first = client.clone();
@@ -968,7 +978,11 @@ fn mcp_mode() {
                     Some(call_tool(c, &sid, &params))
                 }
                 None => Some(Ok(text_result(
-                    "La app de lienzo no está abierta: no puedo conectar con el equipo.",
+                    if guest {
+                        "Esta sesión de Claude no se abrió desde lienzo, así que no forma parte del equipo."
+                    } else {
+                        "La app de lienzo no está abierta: no puedo conectar con el equipo."
+                    },
                     true,
                 ))),
             },
@@ -1026,6 +1040,12 @@ fn hook_mode(args: &[String]) {
             }
             _ => i += 1,
         }
+    }
+
+    // Los hooks del proyecto también saltan en sesiones abiertas fuera de lienzo: esas no
+    // publican nada ni reciben el contexto del equipo.
+    if outside_lienzo() {
+        return;
     }
 
     let mut raw = String::new();
