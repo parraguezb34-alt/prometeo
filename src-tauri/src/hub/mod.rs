@@ -596,6 +596,7 @@ pub fn snapshot(inner: &HubInner, limit: usize) -> serde_json::Value {
                 "ctx_tokens": a.ctx_tokens,
                 "ctx_window": a.ctx_window,
                 "ctx_ms": a.ctx_ms,
+                "cli_session": a.cli_session,
             })
         })
         .collect();

@@ -1155,7 +1155,22 @@ fn hook_mode(args: &[String]) {
     // Al acabar el turno, lo que el agente contestó en su terminal también va al chat
     // de lienzo: si no, una respuesta que no pasó por team_message no se ve en ningún sitio.
     if event == "stop" {
-        if let Some(reply) = transcript_reply(payload["transcript_path"].as_str().unwrap_or("")) {
+        // Claude Code lanza este hook antes de terminar de escribir su respuesta en el
+        // transcript: si aún no está, se reintenta un momento.
+        let path = payload["transcript_path"].as_str().unwrap_or("");
+        let reply = payload["last_assistant_message"]
+            .as_str()
+            .map(|s| trunc(s.trim(), 6000))
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                (0..12).find_map(|i| {
+                    if i > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+                    transcript_reply(path)
+                })
+            });
+        if let Some(reply) = reply {
             let _ = client.post(
                 "/event",
                 &json!({ "agent": agent, "kind": "reply", "text": reply, "files": [] }),

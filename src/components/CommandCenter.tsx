@@ -1306,7 +1306,10 @@ export function CommandCenter() {
       // Si ya cerró su turno (o contestó) después de su última acción, no sigue trabajando.
       const ended = evs.find((e) => e.agent === a.name && (e.kind === "stop" || e.kind === "reply"));
       const finished = !!ended && !!lastTool && ended.seq > lastTool.seq;
-      const busy = !!act?.busy || (toolAge < 20_000 && !finished);
+      // La terminal tarda unos segundos en quedarse quieta tras el fin de turno: si el turno
+      // acaba de cerrarse después de que empezara la racha, ya no está trabajando.
+      const justEnded = !!ended && now - ended.ts_ms < 6_000 && (act?.since ?? 0) <= ended.ts_ms;
+      const busy = (!!act?.busy && !justEnded) || (toolAge < 20_000 && !finished);
       if (!busy) continue;
       // Sin terminal que mirar, la racha empieza en la primera acción seguida (sin pausas largas).
       let streak = lastTool?.ts_ms ?? now;

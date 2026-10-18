@@ -50,9 +50,15 @@ export function isDispatch(e: TeamEvent): boolean {
   return e.agent === "tú" && e.text.startsWith("📌 Despacho");
 }
 
-/** Aviso de un agente que no pide nada aunque llegue como «waiting» («login successful»). */
+/** «Claude is waiting for your input»: Claude Code lo manda tras un minuto quieto con el turno ya
+ * terminado. No pide nada; en el chat sobra. */
+export function isIdle(e: TeamEvent): boolean {
+  return e.kind === "waiting" && /waiting for your input/i.test(e.text);
+}
+
+/** Aviso de un agente que no pide nada aunque llegue como «waiting» («login successful», inactividad). */
 export function isNotice(e: TeamEvent): boolean {
-  return e.kind === "waiting" && /successful/i.test(e.text);
+  return e.kind === "waiting" && (/successful/i.test(e.text) || isIdle(e));
 }
 
 /** Qué pide un agente, en castellano («Claude needs your permission to use Bash» → «permiso para usar Bash»). */
@@ -126,6 +132,7 @@ export function buildTimeline(events: TeamEvent[]): Row[] {
   let day = "";
 
   for (const e of events) {
+    if (isIdle(e)) continue;
     const label = dayGroup(e.ts_ms);
     if (label !== day) {
       day = label;
