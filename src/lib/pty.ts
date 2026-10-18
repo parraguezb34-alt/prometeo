@@ -36,3 +36,26 @@ export const termList = () => invoke<SessionInfo[]>("term_list");
 
 export const termScrollback = (id: string) =>
   invoke<string>("term_scrollback", { id });
+
+/** Las últimas líneas legibles de una terminal (sin colores ni cajas), para saber qué está pidiendo. */
+export function tailText(b64: string, maxLines = 4): string {
+  let text = "";
+  try {
+    text = new TextDecoder().decode(base64ToBytes(b64).slice(-6000));
+  } catch {
+    return "";
+  }
+  const clean = text
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b[()][A-Z0-9]/g, "")
+    .replace(/\r/g, "\n");
+  const lines = clean
+    .split("\n")
+    .map((l) => l.replace(/[\u2500-\u257f]+/g, "").trim())
+    .filter((l) => l.length > 1);
+  return lines.slice(-maxLines).join("\n");
+}

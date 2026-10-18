@@ -103,6 +103,7 @@ export function TeamModal({
   applied,
   busy,
   startedAt,
+  tails,
   autoStart,
   onClose,
   onTalk,
@@ -129,6 +130,8 @@ export function TeamModal({
   busy: string | null;
   /** Cuándo se vio por primera vez la terminal de cada agente aún sin conectar. */
   startedAt: Record<string, number>;
+  /** Final de la terminal de los agentes que aún no se conectan. */
+  tails: Record<string, string>;
   autoStart: boolean;
   onClose: () => void;
   onTalk: (name: string) => void;
@@ -240,6 +243,11 @@ export function TeamModal({
                         ? "Todavía no se ha conectado al equipo. Mira su terminal: puede estar pidiéndote confirmar algo (confiar en la carpeta, aprobar el servidor MCP, iniciar sesión)."
                         : "Abriendo su terminal. En cuanto se conecte aparecerá en línea, con su contexto."}
                     </div>
+                  )}
+                  {state === "starting" && tails[name] && (
+                    <pre className="cc-tail" title="Lo último que muestra su terminal">
+                      {tails[name]}
+                    </pre>
                   )}
 
                   <div className="cc-acard-opts">
@@ -357,6 +365,14 @@ export function TeamModal({
 
                   {state === "starting" && (
                     <div className="cc-acard-act">
+                      <button
+                        className="cc-btn"
+                        onClick={() => onCmd(name, "\r", "Enter (confirmar)")}
+                        title="Envía Enter a su terminal: acepta la opción marcada, normalmente «Sí»"
+                      >
+                        <Icon name="check" size={14} />
+                        Confirmar (Enter)
+                      </button>
                       <button className="cc-btn sec" onClick={() => onTerminal(name)}>
                         <Icon name="term" size={14} />
                         Ver terminal

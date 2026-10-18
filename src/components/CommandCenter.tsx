@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { addAgentTerminal, removePanel, useLayout } from "../store";
+import { addAgentTerminal, getLayout, removePanel, useLayout } from "../store";
 import type { Panel } from "../store";
 import {
   agentColor,
@@ -38,7 +38,7 @@ import {
 import type { DAgent, DispatchState } from "../lib/dispatcher";
 import { loadAutoStart, loadPrefs, saveAutoStart, savePrefs } from "../lib/agentPrefs";
 import type { AgentPref } from "../lib/agentPrefs";
-import { termKill, termWrite } from "../lib/pty";
+import { tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
 import { projectInfo } from "../lib/project";
 import type { ProjectInfo } from "../lib/project";
 import { inWindow, useChats } from "../lib/chats";
@@ -149,6 +149,8 @@ export function CommandCenter() {
   const autoRan = useRef<string | null>(null);
   /** Desde cuándo se ve la terminal de un agente sin que se haya conectado al equipo. */
   const startedAtRef = useRef<Record<string, number>>({});
+  /** Lo último que muestra la terminal de un agente que aún no se conecta (qué está pidiendo). */
+  const [tails, setTails] = useState<Record<string, string>>({});
   /** Grupos de actividad desplegados en el chat (por seq del primer evento). */
   const [openGroups, setOpenGroups] = useState<number[]>([]);
   const [hubOk, setHubOk] = useState(true);
@@ -629,6 +631,52 @@ export function CommandCenter() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart, state, detect, project]);
+
+  // Con el modal abierto, se lee el final de la terminal de los agentes que aún no se unen al
+  // equipo: casi siempre esperan que confirmes algo (confiar en la carpeta, aprobar el MCP…).
+  const startingKey = roster
+    .filter((a) => !a.online && !!panelForAgent(layout.panels, a.name)?.sessionId)
+    .map((a) => a.name)
+    .join(",");
+  useEffect(() => {
+    if (overlay !== "team" || !startingKey) return;
+    const names = startingKey.split(",");
+    const read = async () => {
+      const next: Record<string, string> = {};
+      for (const name of names) {
+        const sid = panelForAgent(getLayout().panels, name)?.sessionId;
+        if (!sid) continue;
+        try {
+          next[name] = tailText(await termScrollback(sid));
+        } catch {
+          /* sin sesión: no hay nada que mostrar */
+        }
+      }
+      setTails(next);
+    };
+    void read();
+    const id = window.setInterval(() => void read(), 3000);
+    return () => window.clearInterval(id);
+  }, [overlay, startingKey]);
+
+  // Barrido de terminales huérfanas: si la interfaz se recarga mientras se abre un agente,
+  // puede quedar una sesión viva que ningún panel recuerda. Se cierran a los pocos segundos
+  // (solo si todos los paneles ya tienen su sesión guardada, para no matar una recién creada).
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      const panels = getLayout().panels;
+      if (panels.some((p) => !p.sessionId)) return;
+      const known = new Set(panels.map((p) => p.sessionId));
+      termList()
+        .then((live) => {
+          for (const sess of live) {
+            if (sess.running && !known.has(sess.id)) termKill(sess.id).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }, 10_000);
+    return () => window.clearTimeout(t);
+  }, []);
 
   // Al abrir el modal de equipo se carga el catálogo de modelos de cada agente.
   useEffect(() => {
@@ -1506,6 +1554,7 @@ export function CommandCenter() {
             void restartAgent(name);
           }}
           startedAt={startedAtRef.current}
+          tails={tails}
           onAutoStart={toggleAutoStart}
           onSettings={() => {
             setOverlay(null);
