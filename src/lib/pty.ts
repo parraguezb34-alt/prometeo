@@ -59,3 +59,21 @@ export function tailText(b64: string, maxLines = 4): string {
     .filter((l) => l.length > 1);
   return lines.slice(-maxLines).join("\n");
 }
+
+/**
+ * Si la terminal muestra un selector con una opción marcada (❯ …) que es claramente un «sí»,
+ * devuelve su texto: solo entonces es seguro ofrecer «aceptar con Enter». Si la marcada es un
+ * «no», «salir» o no se reconoce, devuelve null y la decisión es del usuario.
+ */
+export function confirmChoice(tail: string): string | null {
+  const lines = tail.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /^[❯›▸>]\s*(?:\d+[.)]\s*)?(.+)$/.exec(lines[i].trim());
+    if (!m) continue;
+    const option = m[1].trim();
+    if (/^(no\b|exit|cancel|deny|reject|salir|cancelar)/i.test(option)) return null;
+    if (/^(yes|sí|si\b|allow|trust|use\b|continue|accept|proceed|ok\b)/i.test(option)) return option;
+    return null;
+  }
+  return null;
+}

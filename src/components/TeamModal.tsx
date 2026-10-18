@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { agentColor, agentCommands, agentInitial, agentLabel, ago, HANDOVER_SAVE_PROMPT } from "../lib/team";
 import type { ModelCatalog, TeamAgent, TeamEvent } from "../lib/team";
 import type { AgentPref } from "../lib/agentPrefs";
+import { confirmChoice } from "../lib/pty";
 import { ctxLevel, ctxOf, fmtTokens, shortModel } from "./AgentCard";
 import { Icon } from "./Icon";
 
@@ -249,6 +250,11 @@ export function TeamModal({
                       {tails[name]}
                     </pre>
                   )}
+                  {state === "starting" && tails[name] && /\b(enter to confirm|\(y\/n\)|press enter)/i.test(tails[name]) && !confirmChoice(tails[name]) && (
+                    <div className="cc-field-note" data-warn="1">
+                      La opción marcada no es un «sí»: abre su terminal y elige tú.
+                    </div>
+                  )}
 
                   <div className="cc-acard-opts">
                     <label className="cc-field">
@@ -365,14 +371,16 @@ export function TeamModal({
 
                   {state === "starting" && (
                     <div className="cc-acard-act">
-                      <button
-                        className="cc-btn"
-                        onClick={() => onCmd(name, "\r", "Enter (confirmar)")}
-                        title="Envía Enter a su terminal: acepta la opción marcada, normalmente «Sí»"
-                      >
-                        <Icon name="check" size={14} />
-                        Confirmar (Enter)
-                      </button>
+                      {tails[name] && confirmChoice(tails[name]) && (
+                        <button
+                          className="cc-btn"
+                          onClick={() => onCmd(name, "\r", "Enter (aceptar)")}
+                          title="Envía Enter a su terminal para aceptar la opción marcada"
+                        >
+                          <Icon name="check" size={14} />
+                          Aceptar «{confirmChoice(tails[name])}»
+                        </button>
+                      )}
                       <button className="cc-btn sec" onClick={() => onTerminal(name)}>
                         <Icon name="term" size={14} />
                         Ver terminal

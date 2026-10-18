@@ -66,10 +66,6 @@ fn cli_installed(def: &AgentDef) -> bool {
     if which(def.cli) {
         return true;
     }
-    // Codex de escritorio: su CLI vive en %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\ y no está en el PATH.
-    if def.id == "codex" && codex_cli().is_some() {
-        return true;
-    }
     let npm = std::env::var("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_default()
@@ -532,33 +528,23 @@ fn safe_token(s: &str) -> Option<String> {
     }
 }
 
-/// El CLI de Codex: el de la app de escritorio (el más reciente) o el del PATH.
+/// El CLI de Codex: solo el instalado de verdad (PATH o npm). El `codex.exe` que trae la app de
+/// escritorio no sirve para la TUI («this CLI has no complete local package»), así que no cuenta.
 fn codex_cli() -> Option<PathBuf> {
-    let bin = std::env::var("LOCALAPPDATA")
+    if which("codex") {
+        return Some(PathBuf::from("codex"));
+    }
+    let npm = std::env::var("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_default()
-        .join("OpenAI")
-        .join("Codex")
-        .join("bin");
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    if let Ok(rd) = std::fs::read_dir(&bin) {
-        for entry in rd.flatten() {
-            let exe = entry.path().join("codex.exe");
-            if let Ok(meta) = exe.metadata() {
-                let t = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                if best.as_ref().map(|(bt, _)| t > *bt).unwrap_or(true) {
-                    best = Some((t, exe));
-                }
-            }
-        }
+        .join("npm");
+    if ["cmd", "exe", "ps1", "bat"]
+        .iter()
+        .any(|ext| npm.join(format!("codex.{ext}")).exists())
+    {
+        return Some(PathBuf::from("codex"));
     }
-    best.map(|(_, p)| p).or_else(|| {
-        if which("codex") {
-            Some(PathBuf::from("codex"))
-        } else {
-            None
-        }
-    })
+    None
 }
 
 fn quoted(p: &Path) -> String {

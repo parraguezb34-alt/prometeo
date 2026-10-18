@@ -27,12 +27,18 @@ fn unblock_locked_bins() {
             .unwrap_or(0);
         let old = dir.join(format!("{name}.locked-{ts}"));
         match fs::rename(&path, &old) {
-            Ok(()) => println!(
+            Ok(()) => {
+                // Se deja una copia con el nombre original: si este build no regenera el binario
+                // (p. ej. un `cargo check`), los agentes siguen encontrando lienzo-mcp.exe.
+                // La copia no está bloqueada, así que el linker puede reescribirla.
+                let _ = fs::copy(&old, &path);
+                println!(
                 "cargo:warning={name} estaba en uso: lo aparté como {} (los procesos vivos siguen con él)",
                 old.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default()
-            ),
+                )
+            }
             Err(e) => println!("cargo:warning=no pude apartar {name}: {e}"),
         }
     }

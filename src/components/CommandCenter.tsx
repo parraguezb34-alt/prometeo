@@ -659,6 +659,20 @@ export function CommandCenter() {
     return () => window.clearInterval(id);
   }, [overlay, startingKey]);
 
+  // Una terminal de un agente que ya no está instalado (o que nunca funcionó) no se puede
+  // reparar: se cierra para que no se quede en «Conectando…» para siempre.
+  useEffect(() => {
+    if (!detect) return;
+    for (const p of getLayout().panels) {
+      const key = agentKeyFromCmd(p.cmd ?? "");
+      const found = detect.agents.find((d) => d.id === key);
+      if (found && !found.cli_found) {
+        if (p.sessionId) termKill(p.sessionId).catch(() => {});
+        removePanel(p.id);
+      }
+    }
+  }, [detect]);
+
   // Barrido de terminales huérfanas: si la interfaz se recarga mientras se abre un agente,
   // puede quedar una sesión viva que ningún panel recuerda. Se cierran a los pocos segundos
   // (solo si todos los paneles ya tienen su sesión guardada, para no matar una recién creada).
