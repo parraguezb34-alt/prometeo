@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { addAgentTerminal, autoSpot, useLayout } from "../store";
+import { addAgentTerminal, useLayout } from "../store";
 import type { Panel } from "../store";
 import {
   agentColor,
@@ -39,7 +39,6 @@ import { DiffTab, taskPaths } from "./DiffTab";
 import { FilesTab } from "./FilesTab";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
-import { MemoryTab } from "./MemoryTab";
 import { NewChatMenu } from "./NewChatMenu";
 import type { NewChatChoice } from "./NewChatMenu";
 import { PreviewTab } from "./PreviewTab";
@@ -49,13 +48,11 @@ import type { AgentState } from "./TeamModal";
 import { TeamPanel } from "./TeamPanel";
 import { TerminalPanel } from "./TerminalPanel";
 
-type Mode = "command" | "canvas";
-
 /** Conversation shown in the central chat: the whole team or one agent. */
 type Sel = { kind: "team" } | { kind: "agent"; name: string };
 
 /** What the stage shows for the team destination. */
-type CenterView = "feed" | "diff" | "preview" | "split" | "term" | "files" | "memory";
+type CenterView = "feed" | "diff" | "preview" | "term" | "files";
 
 /** Mission trigger mode: plan-first or straight to execution. */
 type Shoot = "plan" | "exec";
@@ -112,7 +109,7 @@ function panelForAgent(panels: Panel[], agentName: string): Panel | undefined {
  * mision con modo Planificar/Ejecutar. Las terminales viven ocultas pero vivas,
  * listas para verse bajo demanda.
  */
-export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
+export function CommandCenter() {
   const layout = useLayout();
   const [state, setState] = useState<TeamState | null>(null);
   const [detect, setDetect] = useState<DetectResult | null>(null);
@@ -122,7 +119,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   /** Destinatario del compositor (independiente de lo que mires en el escenario). */
   const [dest, setDest] = useState<Sel>({ kind: "team" });
   const [view, setView] = useState<CenterView>("feed");
-  const [tab, setTab] = useState<"chat" | "term">("chat");
+  const [drawerTab, setDrawerTab] = useState<"tasks" | "feed" | "memory">("tasks");
   const [shoot, setShoot] = useState<Shoot>(loadShoot);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [chatsMin, setChatsMin] = useState(() => loadFlag(CHATS_MIN_KEY, false));
@@ -268,26 +265,34 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   useEffect(() => {
     const el = chatRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [selKey, tab, view, msgs.length]);
+  }, [selKey, view, msgs.length]);
 
-  /** Enfoca a un agente (conversación o terminal) sin tocar la lista de chats. */
-  const focusAgent = (name: string, to: "chat" | "term" = "chat") => {
+  /** Enfoca la conversación con un agente sin tocar la lista de chats. */
+  const focusAgent = (name: string) => {
     setSel({ kind: "agent", name });
     setDest({ kind: "agent", name });
-    setTab(to);
+    setView("feed");
     setOverlay(null);
   };
 
   /** Habla con un agente: abre (o retoma) su chat privado. */
-  const selectAgent = (name: string, to: "chat" | "term" = "chat") => {
-    focusAgent(name, to);
-    if (to === "chat") chats.openScope("agent", name);
+  const selectAgent = (name: string) => {
+    focusAgent(name);
+    chats.openScope("agent", name);
+  };
+
+  /** Muestra la terminal de un agente en la pestaña Terminal. */
+  const showTerminal = (name: string) => {
+    setTermPick(name);
+    setView("term");
+    setOverlay(null);
   };
 
   /** Vuelve a la conversación del equipo. */
   const selectTeam = () => {
     setSel({ kind: "team" });
     setDest({ kind: "team" });
+    setView("feed");
     chats.openScope("team");
   };
 
@@ -299,7 +304,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
       setDest({ kind: "team" });
       setView("feed");
     } else if (c.agent) {
-      focusAgent(c.agent, "chat");
+      focusAgent(c.agent);
     }
   };
 
@@ -308,14 +313,17 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     setOverlay(null);
     if (choice.kind === "agent") {
       chats.create("agent", choice.name);
-      focusAgent(choice.name, "chat");
+      focusAgent(choice.name);
       return;
     }
     chats.create("team");
     setSel({ kind: "team" });
     setDest({ kind: "team" });
-    setView(choice.kind === "handover" ? "memory" : "feed");
-    if (choice.kind === "handover") say("Elige un relevo en Memoria y retómalo con el agente que quieras.");
+    setView("feed");
+    if (choice.kind === "handover") {
+      setDrawerTab("memory");
+      setOverlay("tasks");
+    }
   };
 
   const toggleChats = () => {
@@ -358,10 +366,9 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
       if (r.kind === "app") {
         say(`✓ ${label} se está abriendo en su app de escritorio…`);
       } else {
-        const spot = autoSpot();
-        addAgentTerminal(spot.x, spot.y, label, r.cmd);
+        addAgentTerminal(label, r.cmd);
         if (opts.selectTerm) {
-          selectAgent(agentKeyFromCmd(r.cmd), "term");
+          showTerminal(agentKeyFromCmd(r.cmd));
           setDrawer(null);
         }
         say(`✓ ${label} lanzado${shoot === "plan" ? " en modo plan" : ""}.`);
@@ -394,7 +401,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   /** Open the selected agent's terminal tab, or launch it if it has none. */
   const openTerm = (name: string) => {
     const p = panelForAgent(layout.panels, name);
-    if (p) selectAgent(name, "term");
+    if (p) showTerminal(name);
     else launchAgent(name, name).catch(() => {});
   };
 
@@ -645,25 +652,23 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const agentView = sel.kind === "agent" ? sel.name : null;
   const agentRow = agentView ? agents.find((a) => a.name === agentView) : undefined;
   const agentTask = agentView ? claimedBy.get(agentView) : undefined;
-  const termPanel = agentView ? panelForAgent(layout.panels, agentView) : undefined;
 
-  // Terminal del escenario (vista Terminal del equipo): sesiones PTY abiertas.
+  // Pestaña Terminal: sesiones PTY abiertas. Por defecto, la del agente con el
+  // que estás hablando, o la primera que haya.
   const termPanels = layout.panels.filter((p) => p.kind === "terminal" && !!p.cmd);
   const teamTermName =
-    termPick ?? (termPanels[0] ? agentKeyFromCmd(termPanels[0].cmd ?? "") : null);
+    termPick ??
+    (agentView && panelForAgent(layout.panels, agentView)
+      ? agentView
+      : termPanels[0]
+        ? agentKeyFromCmd(termPanels[0].cmd ?? "")
+        : null);
   const teamTermPanel = teamTermName
     ? termPanels.find((p) => agentKeyFromCmd(p.cmd ?? "") === teamTermName)
     : undefined;
 
   // La terminal que se está viendo inline (no duplicar montajes de xterm).
-  const termInlineId =
-    sel.kind === "agent"
-      ? tab === "term" && termPanel
-        ? termPanel.id
-        : null
-      : view === "term" && teamTermPanel
-        ? teamTermPanel.id
-        : null;
+  const termInlineId = view === "term" && teamTermPanel ? teamTermPanel.id : null;
 
   // Terminals not shown inline still live (mounted off-screen) so the agents
   // keep working and are ready the moment you look at them.
@@ -694,10 +699,8 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     { id: "feed", label: "Comando", icon: "msg", title: "Chat y actividad del equipo" },
     { id: "diff", label: "Cambios", icon: "diff", title: "Revisar los cambios en git" },
     { id: "preview", label: "Preview", icon: "eye", title: "Vista previa de html/svg/md en vivo" },
-    { id: "split", label: "Split", icon: "cols", title: "Diff y Preview a la vez" },
-    { id: "term", label: "Terminal", icon: "term", title: "Terminal de un agente a pantalla completa" },
+    { id: "term", label: "Terminal", icon: "term", title: "Terminal de cada agente a pantalla completa" },
     { id: "files", label: "Archivos", icon: "folder", title: "Explorar los archivos del proyecto" },
-    { id: "memory", label: "Memoria", icon: "book", title: "Relevos guardados por los agentes (sin amnesia)" },
   ];
   const stageTask =
     view === "diff" && diffTask != null ? tasks.find((t) => t.id === diffTask) : undefined;
@@ -706,8 +709,11 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const tasksBtn = (
     <button
       className="cc-tasks-btn"
-      onClick={() => setOverlay("tasks")}
-      title="Tareas y actividad del equipo"
+      onClick={() => {
+        setDrawerTab("tasks");
+        setOverlay("tasks");
+      }}
+      title="Tareas, actividad y relevos del equipo"
     >
       <Icon name="list" size={14} />
       Tareas
@@ -740,12 +746,44 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const stageHead = (
     <>
       <div className="cc-stage-head">
+        {agentView && (
+          <button
+            className="cc-icon-btn"
+            onClick={selectTeam}
+            title="Volver a la conversación del equipo"
+            aria-label="Volver al equipo"
+          >
+            <Icon name="users" />
+          </button>
+        )}
         <div className="cc-stage-l">
-          <h2>{stageTask ? `#${stageTask.id} · ${stageTask.title}` : (activeChat?.title ?? "Comando")}</h2>
+          <h2 style={agentView && !stageTask ? { color: agentColor(agentView) } : undefined}>
+            {stageTask
+              ? `#${stageTask.id} · ${stageTask.title}`
+              : agentView
+                ? agentLabel(agentView)
+                : (activeChat?.title ?? "Comando")}
+            {agentView && !stageTask && leader === agentView && (
+              <span className="cc-lead">
+                <Icon name="crown" size={13} />
+                Líder
+              </span>
+            )}
+          </h2>
           <div className="cc-stage-sub">
-            <span className="cc-dot" data-on={online.length > 0 ? "1" : "0"} />
-            {online.length} en línea
-            {leader ? ` · líder ${agentLabel(leader)}` : ""}
+            <span
+              className="cc-dot"
+              data-on={(agentView ? agentRow?.online : online.length > 0) ? "1" : "0"}
+            />
+            {agentView
+              ? agentTask
+                ? `#${agentTask.id} ${agentTask.title}`
+                : agentRow
+                  ? agentRow.online
+                    ? `en línea · visto hace ${ago(agentRow.last_seen_ms)}`
+                    : "sin sesión viva"
+                  : "sin sesión conectada"
+              : `${online.length} en línea${leader ? ` · líder ${agentLabel(leader)}` : ""}`}
           </div>
         </div>
         <div className="cc-stage-r">
@@ -865,7 +903,13 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
 
         <TeamStrip agents={agents} states={states} onOpen={() => setOverlay("team")} />
         {blocked.length > 0 && (
-          <button className="cc-alert" onClick={() => setOverlay("tasks")}>
+          <button
+            className="cc-alert"
+            onClick={() => {
+              setDrawerTab("tasks");
+              setOverlay("tasks");
+            }}
+          >
             <Icon name="warn" size={14} />
             {blocked.length === 1 ? "1 espera tu respuesta" : `${blocked.length} esperan tu respuesta`}
           </button>
@@ -882,13 +926,6 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
             {hubOk ? "Hub conectado" : "Hub sin conexión"}
           </button>
           <div className="cc-modes">
-            <button
-              onClick={() => onMode("canvas")}
-              title="Lienzo: terminales y paneles en el espacio (topología / depuración)"
-            >
-              <Icon name="canvas" size={14} />
-              Lienzo
-            </button>
             <button
               onClick={() => openDrawer(true)}
               title="Ajustes del equipo: agentes, normas y proyecto"
@@ -914,260 +951,140 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
         />
 
         <section className="cc-conv">
-          {sel.kind === "team" ? (
-            <>
-              {stageHead}
-              {view === "feed" && (
-                <>
-                  <div className="cc-chat" ref={chatRef} onScroll={onChatScroll}>
-                    {msgs.length === 0 ? (
-                      online.length === 0 ? (
-                        <div className="cc-empty">
-                          <div className="cc-empty-title">Tu equipo, en un clic</div>
-                          <div className="cc-quick">
-                            <button className="cc-quick-card" onClick={launchSquad}>
-                              <b>⚡ Lanzar escuadrón</b>
-                              <span>Abre los agentes instalados ya dentro del proyecto (en modo plan si lo tienes puesto).</span>
-                            </button>
-                            <button className="cc-quick-card" onClick={() => openDrawer(true)}>
-                              <b>📂 Carpeta del proyecto</b>
-                              <span>Elige dónde trabajan los agentes y de dónde salen los diffs y el preview.</span>
-                            </button>
-                            <button className="cc-quick-card" onClick={() => openDrawer(true)}>
-                              <b>📜 Normas del equipo</b>
-                              <span>Ajusta el Charter, elige líder y conecta cada CLI.</span>
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="cc-empty">
-                          Aquí verás todo lo que hace el equipo: mensajes, tareas, avances y avisos,
-                          en vivo.
-                          <br />
-                          Escribe abajo una misión y se repartirá con instrucciones de coordinación.
-                        </div>
-                      )
-                    ) : (
-                      msgs.map(renderEvent)
-                    )}
-                  </div>
-                </>
-              )}
-              {view === "diff" && (
-                <DiffTab
-                  project={project}
-                  onChooseProject={() => openDrawer(true)}
-                  onCount={onDiffCount}
-                  tasks={tasks}
-                  events={state?.events ?? []}
-                  claims={state?.claims ?? []}
-                  taskId={diffTask}
-                  onTaskChange={setDiffTask}
-                  onSay={say}
-                  onPreview={(rel) => {
-                    setPreviewRel(rel);
-                    setView("preview");
-                  }}
-                />
-              )}
-              {view === "preview" && (
-                <PreviewTab
-                  project={project}
-                  events={state?.events ?? []}
-                  openRel={previewRel}
-                  onChooseProject={() => openDrawer(true)}
-                />
-              )}
-              {view === "files" && (
-                <FilesTab
-                  project={project}
-                  onChooseProject={() => openDrawer(true)}
-                  onCharter={() => openDrawer(true)}
-                  onPreview={(rel) => {
-                    setPreviewRel(rel);
-                    setView("preview");
-                  }}
-                />
-              )}
-              {view === "split" && (
-                <div className="cc-split">
-                  <div className="cc-split-pane">
-                    <DiffTab
-                      project={project}
-                      onChooseProject={() => openDrawer(true)}
-                      onCount={onDiffCount}
-                      tasks={tasks}
-                      events={state?.events ?? []}
-                      claims={state?.claims ?? []}
-                      taskId={diffTask}
-                      onTaskChange={setDiffTask}
-                      onSay={say}
-                      onPreview={(rel) => {
-                        setPreviewRel(rel);
-                        setView("preview");
-                      }}
-                    />
-                  </div>
-                  <div className="cc-split-pane">
-                    <PreviewTab
-                      project={project}
-                      events={state?.events ?? []}
-                      openRel={previewRel}
-                      onChooseProject={() => openDrawer(true)}
-                    />
-                  </div>
-                </div>
-              )}
-              {view === "term" &&
-                (teamTermPanel ? (
-                  <div className="cc-termwrap">
-                    <div className="cc-term-bar">
-                      <span className="cc-term-pick-label">Sesión PTY:</span>
-                      <select
-                        className="cc-mini-select"
-                        value={teamTermName ?? ""}
-                        onChange={(e) => setTermPick(e.target.value)}
-                      >
-                        {termPanels.map((p) => (
-                          <option key={p.id} value={agentKeyFromCmd(p.cmd ?? "")}>
-                            {agentKeyFromCmd(p.cmd ?? "")}
-                          </option>
-                        ))}
-                      </select>
-                      <AgentQuickCmds
-                        agent={teamTermName ?? ""}
-                        withEsc
-                        onCmd={(cmd, note) => {
-                          if (teamTermName) writeAgent(teamTermName, cmd, note);
-                        }}
-                      />
-                      <span className="cc-term-hint">⌨ se escribe en su terminal</span>
-                    </div>
-                    <div className="cc-termbox">
-                      <TerminalPanel panel={teamTermPanel} lod={false} />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="cc-empty">
-                    <div>
-                      Sin terminales abiertas todavía.
-                      <br />
-                      Conecta y abre a los agentes para verlos trabajar aquí mismo.
-                    </div>
-                    <button className="agent-btn" onClick={() => openDrawer(true)}>
-                      ＋ Conectar / abrir agentes
-                    </button>
-                  </div>
-                ))}
-              {view === "memory" && (
-                <MemoryTab
-                  tasks={tasks}
-                  onOpenTask={(id) => {
-                    setDiffTask(id);
-                    setView("diff");
-                  }}
-                  onPreview={(rel) => {
-                    setPreviewRel(rel);
-                    setView("preview");
-                  }}
-                />
-              )}
-            </>
-          ) : (
-            <>
-              <div className="cc-stage-head">
-                <button
-                  className="cc-icon-btn"
-                  onClick={selectTeam}
-                  title="Volver a la conversación del equipo"
-                  aria-label="Volver al equipo"
-                >
-                  <Icon name="users" />
-                </button>
-                <div className="cc-stage-l">
-                  <h2 style={{ color: agentColor(sel.name) }}>
-                    {agentLabel(sel.name)}
-                    {leader === sel.name && (
-                      <span className="cc-lead">
-                        <Icon name="crown" size={13} />
-                        Líder
-                      </span>
-                    )}
-                  </h2>
-                  <div className="cc-stage-sub">
-                    <span className="cc-dot" data-on={agentRow?.online ? "1" : "0"} />
-                    {agentTask
-                      ? `#${agentTask.id} ${agentTask.title}`
-                      : agentRow
-                        ? agentRow.online
-                          ? `en línea · visto hace ${ago(agentRow.last_seen_ms)}`
-                          : "sin sesión viva"
-                        : "sin sesión conectada"}
-                  </div>
-                </div>
-                <div className="cc-stage-r">
-                  {tab === "chat" && actToggle}
-                  {tasksBtn}
-                </div>
-              </div>
-              <div className="cc-vtabs" role="tablist">
-                <button role="tab" aria-selected={tab === "chat"} onClick={() => setTab("chat")}>
-                  <Icon name="msg" size={14} />
-                  Conversación
-                </button>
-                <button role="tab" aria-selected={tab === "term"} onClick={() => setTab("term")}>
-                  <Icon name="term" size={14} />
-                  Terminal
-                </button>
-              </div>
+          {stageHead}
 
-              {tab === "term" ? (
-                termPanel ? (
-                  <div className="cc-termwrap">
-                    <div className="cc-term-bar">
-                      <AgentQuickCmds
-                        agent={sel.name}
-                        withEsc
-                        onCmd={(cmd, note) => writeAgent(sel.name, cmd, note)}
-                      />
-                      <span className="cc-term-hint">⌨ se escribe en su terminal</span>
-                    </div>
-                    <div className="cc-termbox">
-                      <TerminalPanel panel={termPanel} lod={false} />
+          {view === "feed" && (
+            <div className="cc-chat" ref={chatRef} onScroll={onChatScroll}>
+              {msgs.length === 0 ? (
+                agentView ? (
+                  <div className="cc-empty">
+                    Conversación con {agentLabel(agentView)}. Lo que escribas va directo a su terminal; sus
+                    avances y mensajes aparecerán aquí.
+                  </div>
+                ) : online.length === 0 ? (
+                  <div className="cc-empty">
+                    <div className="cc-empty-title">Tu equipo, en un clic</div>
+                    <div className="cc-quick">
+                      <button className="cc-quick-card" onClick={launchSquad}>
+                        <b>Lanzar escuadrón</b>
+                        <span>Abre los agentes instalados ya dentro del proyecto (en modo plan si lo tienes puesto).</span>
+                      </button>
+                      <button className="cc-quick-card" onClick={() => openDrawer(true)}>
+                        <b>Carpeta del proyecto</b>
+                        <span>Elige dónde trabajan los agentes y de dónde salen los diffs y el preview.</span>
+                      </button>
+                      <button className="cc-quick-card" onClick={() => openDrawer(true)}>
+                        <b>Normas del equipo</b>
+                        <span>Ajusta el Charter, elige líder y conecta cada CLI.</span>
+                      </button>
                     </div>
                   </div>
                 ) : (
                   <div className="cc-empty">
-                    <div>
-                      {sel.name} todavía no tiene terminal abierta.
-                      <br />
-                      Ábrela aquí y podrás verlo trabajar y escribirle directo.
-                    </div>
-                    <button
-                      className="agent-btn"
-                      disabled={opening === sel.name}
-                      onClick={() => launchAgent(sel.name, sel.name)}
-                    >
-                      {opening === sel.name ? "Abriendo…" : "▸_ Lanzar terminal"}
-                    </button>
+                    Aquí verás todo lo que hace el equipo: mensajes, tareas, avances y avisos, en vivo.
+                    <br />
+                    Escribe abajo una misión y se repartirá con instrucciones de coordinación.
                   </div>
                 )
               ) : (
-                <>
-                  <div className="cc-chat" ref={chatRef} onScroll={onChatScroll}>
-                    {msgs.length === 0 ? (
-                      <div className="cc-empty">
-                        Conversación con {agentLabel(sel.name)}. Lo que escribas va directo a su terminal; sus
-                        avances y mensajes aparecerán aquí.
-                      </div>
-                    ) : (
-                      msgs.map(renderEvent)
-                    )}
-                  </div>
-                </>
+                msgs.map(renderEvent)
               )}
-            </>
+            </div>
           )}
+
+          {view === "diff" && (
+            <DiffTab
+              project={project}
+              onChooseProject={() => openDrawer(true)}
+              onCount={onDiffCount}
+              tasks={tasks}
+              events={state?.events ?? []}
+              claims={state?.claims ?? []}
+              taskId={diffTask}
+              onTaskChange={setDiffTask}
+              onSay={say}
+              onPreview={(rel) => {
+                setPreviewRel(rel);
+                setView("preview");
+              }}
+            />
+          )}
+
+          {view === "preview" && (
+            <PreviewTab
+              project={project}
+              events={state?.events ?? []}
+              openRel={previewRel}
+              onChooseProject={() => openDrawer(true)}
+            />
+          )}
+
+          {view === "files" && (
+            <FilesTab
+              project={project}
+              onChooseProject={() => openDrawer(true)}
+              onCharter={() => openDrawer(true)}
+              onPreview={(rel) => {
+                setPreviewRel(rel);
+                setView("preview");
+              }}
+            />
+          )}
+
+          {view === "term" &&
+            (teamTermPanel ? (
+              <div className="cc-termwrap">
+                <div className="cc-term-bar">
+                  <span className="cc-term-pick-label">Terminal de</span>
+                  <select
+                    className="cc-mini-select"
+                    value={teamTermName ?? ""}
+                    onChange={(e) => setTermPick(e.target.value)}
+                  >
+                    {termPanels.map((p) => (
+                      <option key={p.id} value={agentKeyFromCmd(p.cmd ?? "")}>
+                        {agentLabel(agentKeyFromCmd(p.cmd ?? ""))}
+                      </option>
+                    ))}
+                  </select>
+                  <AgentQuickCmds
+                    agent={teamTermName ?? ""}
+                    withEsc
+                    onCmd={(cmd, note) => {
+                      if (teamTermName) writeAgent(teamTermName, cmd, note);
+                    }}
+                  />
+                  <span className="cc-term-hint">se escribe en su terminal</span>
+                </div>
+                <div className="cc-termbox">
+                  <TerminalPanel panel={teamTermPanel} />
+                </div>
+              </div>
+            ) : (
+              <div className="cc-empty">
+                <div>
+                  {teamTermName
+                    ? `${agentLabel(teamTermName)} todavía no tiene terminal abierta.`
+                    : "Sin terminales abiertas todavía."}
+                  <br />
+                  Ábrela aquí y podrás verlo trabajar y escribirle directo.
+                </div>
+                {teamTermName ? (
+                  <button
+                    className="agent-btn"
+                    disabled={opening === teamTermName}
+                    onClick={() => launchAgent(teamTermName, agentLabel(teamTermName))}
+                  >
+                    {opening === teamTermName ? "Abriendo…" : "Lanzar terminal"}
+                  </button>
+                ) : (
+                  <button className="agent-btn" onClick={() => openDrawer(true)}>
+                    Conectar / abrir agentes
+                  </button>
+                )}
+              </div>
+            ))}
+
           {composer}
         </section>
       </div>
@@ -1218,6 +1135,12 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
           taskFileCount={taskFileCount}
           activeTaskId={view === "diff" ? diffTask : null}
           hasProject={!!project}
+          initialTab={drawerTab}
+          onPreview={(rel) => {
+            setPreviewRel(rel);
+            setView("preview");
+            setOverlay(null);
+          }}
           onClose={() => setOverlay(null)}
           onOpenTask={(id) => {
             if (!project) {
@@ -1247,7 +1170,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
           estés mirándolos, y aparecen al instante al abrir su pestaña. */}
       <div className="cc-hideterms" aria-hidden="true">
         {hiddenTerms.map((p) => (
-          <TerminalPanel key={p.id} panel={p} lod={false} />
+          <TerminalPanel key={p.id} panel={p} />
         ))}
       </div>
 
@@ -1272,7 +1195,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                 initialTab={drawer.agents ? "agents" : "feed"}
                 launchMode={shoot}
                 onTerminalOpen={(p) => {
-                  selectAgent(agentKeyFromCmd(p.cmd ?? ""), "term");
+                  showTerminal(agentKeyFromCmd(p.cmd ?? ""));
                   setDrawer(null);
                 }}
               />

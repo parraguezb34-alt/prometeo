@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Panel } from "../store";
-import { addAgentTerminal, autoSpot } from "../store";
+import { addAgentTerminal } from "../store";
 import {
   agentColor,
   ago,
@@ -29,12 +29,10 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export function TeamPanel({
-  panel,
   initialTab,
   launchMode,
   onTerminalOpen,
 }: {
-  panel?: Panel;
   initialTab?: Tab;
   /** Modo con el que se lanzan los agentes desde aqui (plan = sin editar). */
   launchMode?: "plan" | "exec";
@@ -159,10 +157,9 @@ export function TeamPanel({
       if (r.kind === "app") {
         say(`✓ ${label} abriéndose en la carpeta del equipo.`);
       } else {
-        const spot = panel ? { x: panel.x + panel.w + 28, y: panel.y } : autoSpot();
-        const created = addAgentTerminal(spot.x, spot.y, label, r.cmd);
+        const created = addAgentTerminal(label, r.cmd);
         onTerminalOpen?.(created);
-        say(`✓ ${label} abriéndose en una terminal del lienzo…`);
+        say(`✓ ${label} abriéndose en una terminal…`);
       }
     } catch (e) {
       say(errMsg(e), true);
@@ -421,7 +418,7 @@ export function TeamPanel({
             {agents.length === 0 ? (
               <div className="team-empty">
                 Ninguna sesión conectada todavía. Pulsa «Abrir» en un agente para lanzarlo
-                en una terminal del lienzo, ya dentro del proyecto.
+                en una terminal, ya dentro del proyecto.
               </div>
             ) : (
               agents.map((a) => (

@@ -1,14 +1,12 @@
 import { useSyncExternalStore } from "react";
 
-export type PanelKind = "terminal" | "team" | "tasks";
-
+/**
+ * Terminales vivas de los agentes. Cada una es una sesión PTY que el backend
+ * mantiene aunque la interfaz se recargue: guardamos su id para re-adjuntarla.
+ */
 export type Panel = {
   id: string;
-  kind: PanelKind;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+  kind: "terminal";
   title: string;
   /** PTY session id attached to this panel (survives frontend reloads). */
   sessionId: string | null;
@@ -16,48 +14,37 @@ export type Panel = {
   cmd?: string | null;
 };
 
-export type View = { x: number; y: number; zoom: number };
-
 export type Layout = {
   panels: Panel[];
-  view: View;
   seq: number;
 };
 
+// Misma clave que cuando existía el lienzo espacial: así las sesiones abiertas
+// se siguen re-adjuntando. Los paneles antiguos de equipo/progreso se descartan.
 const STORAGE_KEY = "lienzo.layout.v1";
-const MIN_ZOOM = 0.1;
-const MAX_ZOOM = 2.5;
-
-function defaultLayout(): Layout {
-  return {
-    panels: [
-      {
-        id: "p1",
-        kind: "terminal",
-        x: 0,
-        y: 0,
-        w: 640,
-        h: 400,
-        title: "Terminal 1",
-        sessionId: null,
-      },
-    ],
-    view: { x: 90, y: 70, zoom: 1 },
-    seq: 2,
-  };
-}
 
 function load(): Layout {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as Layout;
-      if (Array.isArray(parsed.panels) && parsed.view) return parsed;
+      const parsed = JSON.parse(raw) as { panels?: Partial<Panel>[]; seq?: number };
+      if (Array.isArray(parsed.panels)) {
+        const panels = parsed.panels
+          .filter((p) => p.kind === "terminal" && !!p.cmd && typeof p.id === "string")
+          .map((p) => ({
+            id: p.id as string,
+            kind: "terminal" as const,
+            title: p.title ?? "Terminal",
+            sessionId: p.sessionId ?? null,
+            cmd: p.cmd,
+          }));
+        return { panels, seq: parsed.seq ?? panels.length + 1 };
+      }
     }
   } catch {
     /* corrupted storage: fall back to defaults */
   }
-  return defaultLayout();
+  return { panels: [], seq: 1 };
 }
 
 let state: Layout = load();
@@ -100,82 +87,12 @@ function set(patch: Partial<Layout>) {
   scheduleSave();
 }
 
-export function clampZoom(z: number) {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
-}
-
-export function setView(view: View) {
-  set({ view });
-}
-
-export function resetView() {
-  set({ view: { x: 90, y: 70, zoom: 1 } });
-}
-
-export function addTerminal(x: number, y: number): Panel {
+/** A terminal that starts already running a command (e.g. an agent CLI). */
+export function addAgentTerminal(title: string, cmd: string): Panel {
   const n = state.seq;
   const panel: Panel = {
     id: `p${n}`,
     kind: "terminal",
-    x,
-    y,
-    w: 640,
-    h: 400,
-    title: `Terminal ${n}`,
-    sessionId: null,
-  };
-  set({ panels: [...state.panels, panel], seq: n + 1 });
-  return panel;
-}
-
-export function addTeam(x: number, y: number): Panel {
-  const n = state.seq;
-  const panel: Panel = {
-    id: `p${n}`,
-    kind: "team",
-    x,
-    y,
-    w: 620,
-    h: 470,
-    title: "Equipo",
-    sessionId: null,
-  };
-  set({ panels: [...state.panels, panel], seq: n + 1 });
-  return panel;
-}
-
-/** Slim vertical panel: team progress — tasks + agents online. */
-export function addTasks(x: number, y: number): Panel {
-  const n = state.seq;
-  const panel: Panel = {
-    id: `p${n}`,
-    kind: "tasks",
-    x,
-    y,
-    w: 300,
-    h: 560,
-    title: "Progreso",
-    sessionId: null,
-  };
-  set({ panels: [...state.panels, panel], seq: n + 1 });
-  return panel;
-}
-
-/** A terminal panel that starts already running a command (e.g. an agent CLI). */
-export function addAgentTerminal(
-  x: number,
-  y: number,
-  title: string,
-  cmd: string,
-): Panel {
-  const n = state.seq;
-  const panel: Panel = {
-    id: `p${n}`,
-    kind: "terminal",
-    x,
-    y,
-    w: 900,
-    h: 520,
     title,
     sessionId: null,
     cmd,
@@ -184,36 +101,8 @@ export function addAgentTerminal(
   return panel;
 }
 
-/** Cascade position for panels opened without explicit canvas coordinates. */
-export function autoSpot(): { x: number; y: number } {
-  const n = state.panels.length;
-  return { x: 60 + ((n * 46) % 480), y: 48 + ((n * 42) % 380) };
-}
-
-export function removePanel(id: string) {
-  set({ panels: state.panels.filter((p) => p.id !== id) });
-}
-
-export function movePanel(id: string, x: number, y: number) {
-  set({ panels: state.panels.map((p) => (p.id === id ? { ...p, x, y } : p)) });
-}
-
-export function resizePanel(id: string, w: number, h: number) {
-  set({ panels: state.panels.map((p) => (p.id === id ? { ...p, w, h } : p)) });
-}
-
 export function setPanelSession(id: string, sessionId: string) {
   set({
     panels: state.panels.map((p) => (p.id === id ? { ...p, sessionId } : p)),
   });
-}
-
-/** Move a panel to the end of the array so it renders above the rest. */
-export function bringToFront(id: string) {
-  const i = state.panels.findIndex((p) => p.id === id);
-  if (i < 0 || i === state.panels.length - 1) return;
-  const next = state.panels.slice();
-  const [panel] = next.splice(i, 1);
-  next.push(panel);
-  set({ panels: next });
 }

@@ -40,13 +40,7 @@ const THEME = {
   brightWhite: "#fafafa",
 };
 
-export const TerminalPanel = memo(function TerminalPanel({
-  panel,
-  lod,
-}: {
-  panel: Panel;
-  lod: boolean;
-}) {
+export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Panel }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const sessionRef = useRef<string | null>(panel.sessionId);
@@ -169,20 +163,6 @@ export const TerminalPanel = memo(function TerminalPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // When coming back from semantic zoom (LOD), ask xterm to repaint.
-  useEffect(() => {
-    if (!lod && termRef.current) {
-      const term = termRef.current;
-      requestAnimationFrame(() => {
-        try {
-          term.refresh(0, term.rows - 1);
-        } catch {
-          /* disposed */
-        }
-      });
-    }
-  }, [lod]);
 
   return (
     <div

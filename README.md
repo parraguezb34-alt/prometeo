@@ -1,6 +1,6 @@
 # lienzo
 
-Canvas infinito + terminales para orquestar agentes de IA.
+Centro de mando con chats y terminales para orquestar agentes de IA.
 Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Electron ni 300 MB de asar).
 
 ## ¿De qué trata?
@@ -12,7 +12,6 @@ lienzo es un **centro de mando conversacional para dirigir un equipo de agentes 
 - **Las sesiones largas no se pudren**: cuando un agente va a quedarse sin contexto, guarda un **relevo con memoria** pegado a su tarea y lienzo compacta por él; quien retome el trabajo continúa con ese resumen, sin amnesia.
 - **Tú mandas sobre lo que cambia**: diffs filtrados por tarea, aceptar o revertir por archivos/con bloques, commit solo bajo tu OK, y preview en vivo de los HTML/SVG/MD que producen.
 - **Datos reales, nada fingido**: el termómetro de contexto (% y tokens), el feed, las tareas y los diffs salen de las fuentes locales de cada CLI (transcripts, `opencode.db`, rollouts de Codex) y de git. Si algo no se puede medir, no se inventa.
-- Y todo eso sobre un **lienzo espacial** de terminales y paneles (la vista `⬚ Lienzo`) para ver la topología completa del taller cuando quieras.
 
 ## ¿Qué se quiere lograr con la aplicación?
 
@@ -27,30 +26,23 @@ lienzo es un **centro de mando conversacional para dirigir un equipo de agentes 
 - **Centro de Mando (vista principal)** — diseño "Mesa de equipo" (paleta en tokens CSS, fuentes Manrope y JetBrains Mono incluidas en la app, iconos SVG de línea):
   - **Barra superior**: proyecto y rama, el **equipo como anillos** (cada anillo es el termómetro de contexto real del agente y un punto marca si trabaja, está libre o espera tu respuesta), aviso «N espera tu respuesta» y estado del hub. Pulsar el equipo abre un **modal** con modelo, modo, contexto exacto (`71k de 200k · 36%`), 👑 líder, Terminal, Hablar, 🔄 **relevo con memoria** y compactar de cada agente, más *Añadir agente* y *Normas del equipo*.
   - **Chats** (barra izquierda **plegable**): historial agrupado por día con búsqueda, quién participó y si es del equipo o privado. «Nuevo chat» ofrece equipo, líder, un agente en privado o retomar desde un relevo. Un chat es una ventana de tiempo sobre el feed real del hub (se guarda en `localStorage` por proyecto), así no se duplica ni se inventa nada; el primer mensaje le pone título.
-  - **Escenario**: cabecera con el título del chat y el **progreso de tareas (`1/4`) siempre visible** (con aviso si algo te bloquea); pestañas `Comando` (chat con burbujas por agente; la actividad de bajo nivel se oculta con «Mostrar actividad»), `Cambios` (git status + diff con **revisión por tarea**: *Aceptar (commit)* / *Revertir*, **caja de relevo**, **Scope Creep** con *Revertir* por archivo y **+N/−M reales**, `Ver Preview` en `.html`/`.svg`/`.md`), `Preview` (se recarga sola), `Split`, `Terminal`, `Archivos` y `Memoria` (los **relevos reales** guardados con `team_handover_save`).
-  - **Tareas y actividad** en un **panel lateral** bajo demanda: avance del equipo, filtros, bloqueos 🚨 con *Responder*, nº de archivos por tarea y ✓/↺; pestaña Actividad con el feed en vivo.
-  - **Compositor flotante** con `Planificar` / `Directo` y destino `@equipo` / agentes (también valen las menciones `@…` al principio del texto). En plan la misión va **solo al líder** y nadie edita hasta tu OK (Claude arranca con `--permission-mode plan`, Antigravity con `--mode plan`). El **lienzo espacial** sigue como vista secundaria (`Lienzo`); las terminales ocultas siguen vivas (PTY + scrollback) y se re-adjuntan al abrirlas.
-- **Lienzo infinito**: arrastra el fondo para mover, rueda del ratón para zoom al cursor, `Shift+rueda` para desplazarte en horizontal.
-- **Terminales reales** (ConPTY vía `portable-pty`) como paneles:
-  - Doble clic en el lienzo → nueva terminal.
-  - Arrastra el título para mover, esquina inferior derecha para redimensionar.
-  - El PTY se redimensiona contigo (el shell recibe `SIGWINCH` / resize real).
-- **Sesiones persistentes (borrador)**: el backend Rust mantiene cada PTY vivo y guarda hasta 512 KB de scrollback. Si la interfaz se recarga, los paneles se **re-adjuntan solos** y repintan el historial.
-- **Zoom semántico (LOD)**: por debajo del 35% de zoom los paneles se convierten en tarjetas de título (menos trabajo de render, navegación del conjunto).
-- **Persistencia del layout**: paneles, posiciones, tamaños y vista se guardan en `localStorage`.
+  - **Escenario**: cabecera con el título del chat y el **progreso de tareas (`1/4`) siempre visible** (con aviso si algo te bloquea); cinco pestañas: `Comando` (chat con burbujas por agente; la actividad de bajo nivel se oculta con «Mostrar actividad»), `Cambios` (git status + diff con **revisión por tarea**: *Aceptar (commit)* / *Revertir*, **caja de relevo**, **Scope Creep** con *Revertir* por archivo y **+N/−M reales**, `Ver Preview` en `.html`/`.svg`/`.md`), `Preview` (se recarga sola), `Terminal` (la terminal de cada agente, con selector) y `Archivos`.
+  - **Tareas, actividad y relevos** en un **panel lateral** bajo demanda: avance del equipo, filtros, bloqueos 🚨 con *Responder*, nº de archivos por tarea y ✓/↺; pestaña Actividad con el feed en vivo y pestaña Relevos con lo que los agentes guardaron con `team_handover_save` antes de compactar.
+  - **Compositor flotante** con `Planificar` / `Directo` y destino `@equipo` / agentes (también valen las menciones `@…` al principio del texto). En plan la misión va **solo al líder** y nadie edita hasta tu OK (Claude arranca con `--permission-mode plan`, Antigravity con `--mode plan`). Las terminales ocultas siguen vivas (PTY + scrollback) y se re-adjuntan al abrirlas.
+- **Terminales reales** (ConPTY vía `portable-pty`): cada agente corre en su terminal, que se ve en la pestaña `Terminal` y se redimensiona contigo (el shell recibe el resize real).
+- **Sesiones persistentes (borrador)**: el backend Rust mantiene cada PTY vivo y guarda hasta 512 KB de scrollback. Si la interfaz se recarga, las terminales se **re-adjuntan solas** y repintan el historial.
 - **Capó de equipo (agentes trabajando juntos)**:
-  - Panel **Equipo** en el lienzo (`+ Equipo`): actividad en vivo, tareas compartidas y conexión de agentes.
+  - **Equipo** (modal desde la barra superior) y **Ajustes del equipo** (⚙): actividad en vivo, tareas compartidas, conexión de agentes, normas y proyecto.
   - **`lienzo-mcp.exe`**: puente MCP universal. Da a cualquier agente las herramientas `team_context`, `team_update`, `team_feed`, `team_message`, `team_task_*`, `team_claim_files` / `team_release_files` y **`team_handover_save`** (memoria de relevo pegada a la tarea). Para OpenCode y Codex, además, un **muestreador** lee su almacén local cada 12 s y reporta su contexto real al hub (sin ruido en el feed).
   - **Conexión con 1 clic**: detecta Claude Code, Codex, OpenCode y Antigravity y escribe su configuración (`.mcp.json`, `~/.codex/config.toml`, `opencode.json`, `.agents/mcp_config.json`) + bloque de protocolo en `AGENTS.md`/`CLAUDE.md`.
   - **Reporte automático**: los hooks de Claude Code (y Codex) publican cada edición/comando en el feed y **inyectan el contexto del equipo en cada prompt** — Claude ve lo que hizo otro agente antes de responder.
   - **Sin pisarse archivos**: `team_claim_files` reserva archivos y devuelve conflictos si otro agente ya los tiene.
   - **Hub local** (Rust, `127.0.0.1` + token): descubrimiento en `%APPDATA%\lienzo\hub.json`; las terminales que abre lienzo heredan `LIENZO_HUB` / `LIENZO_TOKEN`.
 - **Orquestador del equipo** 🎛️:
-  - **Prompt para todos** (📣 barra arriba del panel Equipo): publica el mensaje en el feed y lo **escribe en la terminal de cada agente abierto** en el lienzo (OpenCode/Antigravity/Claude la reciben al instante), y a Claude en cualquier ventana le llega como bloque del **hook Stop** cuando termina su turno. El texto viaja **envuelto con el protocolo de equipo** (llama a `team_context`, reparte/reclama tareas, publica avances con `team_update`, reserva archivos) para que los agentes coordinen de verdad en vez de trabajar cada uno por su cuenta.
+  - **Prompt para todos** (📣 en Ajustes del equipo): publica el mensaje en el feed y lo **escribe en la terminal de cada agente abierto** (OpenCode/Antigravity/Claude la reciben al instante), y a Claude en cualquier ventana le llega como bloque del **hook Stop** cuando termina su turno. El texto viaja **envuelto con el protocolo de equipo** (llama a `team_context`, reparte/reclama tareas, publica avances con `team_update`, reserva archivos) para que los agentes coordinen de verdad en vez de trabajar cada uno por su cuenta.
   - **Normas del equipo (system prompt global)**: texto editable en la pestaña Agentes que se inyecta a los agentes en `team_context`, en las instrucciones del MCP y en cada prompt vía hooks — saben que trabajan juntos y cómo coordinarse.
   - **Jerarquía sin peleas**: un **líder** (el primero que conecta, o el que elijas) coordina y reparte; los demás proponen y ejecutan su parte.
   - **Tareas huérfanas**: si el agente que reclamó una tarea deja de latir (su puente murió), el hub la **libera solo** — vuelve a *abierta* con un aviso `↺` en el feed. No hay tareas colgadas para siempre.
-  - **Panel Progreso** (`+ Progreso`, arriba a la derecha): barra de % completado, una línea **«Ahora mismo» por agente** con su última actividad, agentes en línea con su líder y tareas pendientes/hechas de un vistazo.
 
 ## Arquitectura
 
@@ -63,24 +55,21 @@ lienzo es un **centro de mando conversacional para dirigir un equipo de agentes 
 | Proyecto (Rust) | `src-tauri/src/project.rs` | Ventana a la carpeta: git status/diff, revisión por tarea (commit o revert de sus rutas), listados y lecturas con tope de tamaño (nunca sale de la raíz) |
 | Puente MCP | `src-tauri/src/bin/lienzo-mcp.rs` | Servidor MCP por stdio (`team_*` + recursos `team://`), modo `hook` para Claude Code / Codex (contexto de equipo, avisos de bloqueo y telemetría de contexto desde el transcript) y muestreador de telemetría local para OpenCode (`opencode.db`) y Codex (rollouts) |
 | Registro de comandos | `src-tauri/src/lib.rs` | `term_*` + `team_*` (estado, tareas, líder, detectar/conectar/lanzar agentes) + `project_*` |
-| Estado del lienzo | `src/store.ts` | Paneles (terminal/equipo/progreso) + vista con `useSyncExternalStore` y persistencia |
-| Lienzo | `src/components/Canvas.tsx` | Paneo, zoom, LOD, barra de herramientas |
-| Marco de panel | `src/components/PanelFrame.tsx` | Mover, redimensionar, cerrar, traer al frente |
+| Terminales vivas | `src/store.ts` | Registro de terminales de agentes (id de sesión PTY) con `useSyncExternalStore` y persistencia |
 | Terminal | `src/components/TerminalPanel.tsx` | xterm.js + re-attach a la sesión PTY |
-| Panel Equipo | `src/components/TeamPanel.tsx` | Actividad, tareas, agentes, prompt para todos (📣), normas y líder (también en el cajón del Centro de Mando) |
-| Panel Progreso | `src/components/TasksPanel.tsx` | Barra de avance, agentes en línea y tablero compacto |
+| Ajustes del equipo | `src/components/TeamPanel.tsx` | Actividad, tareas, agentes, prompt para todos (📣), normas y líder (cajón del Centro de Mando) |
 | Centro de Mando | `src/components/CommandCenter.tsx` | Vista principal: barra superior con el equipo, chats a la izquierda y escenario con pestañas (comando, cambios, preview, split, terminal, archivos, memoria) más compositor |
 | Equipo (modal y anillos) | `src/components/TeamModal.tsx`, `AgentCard.tsx` | Anillos de contexto en la barra superior y modal con los controles de cada agente (modelo, modo, relevo, compactar, líder) |
 | Chats | `src/components/ChatsSidebar.tsx`, `NewChatMenu.tsx`, `src/lib/chats.ts` | Barra plegable con historial por día, menú de nuevo chat y ventanas de tiempo sobre el feed del hub |
-| Tareas y actividad | `src/components/TasksDrawer.tsx` | Panel lateral con progreso, bloqueos, tareas y feed |
+| Tareas, actividad y relevos | `src/components/TasksDrawer.tsx` | Panel lateral con progreso, bloqueos, tareas, feed y relevos |
 | Sistema de diseño | `src/App.css` (tokens `:root`), `src/cc2.css`, `src/components/Icon.tsx` | Paleta y tipografía en variables; estilos del Centro de Mando; iconos SVG |
 | Pestañas de artefactos | `src/components/DiffTab.tsx`, `PreviewTab.tsx`, `FilesTab.tsx` | Cambios (git diff + revisión por tarea, +N/−M reales por archivo), preview con recarga automática y explorador del proyecto |
-| Memoria (relevos) | `src/components/MemoryTab.tsx` | Los relevos reales que guardan los agentes (team_handover_save) pegados a su tarea, con archivos clicables hacia el preview |
-| Feed compartido | `src/components/FeedList.tsx` | Lista de actividad reutilizada por el panel Equipo y el Centro de Mando |
+| Relevos | `src/components/MemoryTab.tsx` | Los relevos reales que guardan los agentes (team_handover_save) pegados a su tarea, con archivos clicables hacia el preview (se muestra en el panel de Tareas) |
+| Feed compartido | `src/components/FeedList.tsx` | Lista de actividad reutilizada por los ajustes del equipo |
 
 ## Conectar un agente (equipo)
 
-1. Abre el panel **Equipo** (`+ Equipo` en la barra) → pestaña **Agentes**.
+1. Abre los **Ajustes del equipo** (⚙ arriba a la derecha, o *Añadir agente* en el modal de Equipo) → pestaña **Agentes**.
 2. Escribe la carpeta del proyecto y pulsa **Guardar**.
 3. Pulsa **Conectar** en el agente que quieras (Claude Code, Codex, OpenCode, Antigravity).
 4. Pulsa **Abrir** para lanzarlo ya dentro del proyecto: Claude/Codex/OpenCode **y Antigravity**
@@ -93,14 +82,14 @@ lienzo es un **centro de mando conversacional para dirigir un equipo de agentes 
 
 ## Orquestar al equipo
 
-1. **Prompt para todos** (barra 📣 arriba del panel Equipo): se publica en el feed y se
+1. **Prompt para todos** (barra 📣 en los Ajustes del equipo): se publica en el feed y se
    escribe en la terminal de cada agente abierto **con las instrucciones de coordinación**
    (así se conectan al equipo, reparten tareas y se hablan entre sí); a Claude le llega
    además como bloque del hook al terminar su turno. Todos responden y lo ves en Actividad.
 2. **Normas + líder** (pestaña Agentes → «Normas del equipo y líder»): el texto se inyecta
    en `team_context`, en las instrucciones del MCP y en cada prompt vía hooks. El líder
    coordina y reparte; elige uno o deja que sea el primero que conecte.
-3. **Panel Progreso** (`+ Progreso`): mira el avance de todos sin abrir el panel Equipo.
+3. **Progreso**: el avance (`1/4`) y los bloqueos están siempre en la cabecera; el panel de Tareas lo detalla.
 4. **Tareas**: crea tareas en la pestaña Tareas (o pídeselo a un agente con
    `team_task_create`); los agentes las reclaman (`team_task_claim`) y las cierran
    (`team_task_done`) — el progreso se ve en el panel.
@@ -131,7 +120,7 @@ de sus comandos rápidos):
   `opencode reload` en la carpeta del proyecto y comprueba con `opencode mcp list`.
 - **Puentes y reinicios**: los puentes (`lienzo-mcp.exe`) se re-descubren solos si la app
   reinicia (leen el `hub.json` nuevo); si una sesión quedó rara, ciérrala y **vuelve a
-  abrirla** desde el panel Equipo.
+  abrirla** desde los Ajustes del equipo.
 
 ## Ejecutar (desarrollo)
 
@@ -162,6 +151,6 @@ npm run tauri build
 
 - **F2 — Daemon de sesiones**: los PTY sobreviven al **cierre total** de la app (proceso separado + IPC). El diseño actual ya separa el gestor PTY para poder extraerlo a un daemon.
 - **F3 — Cola de tareas con worktrees**: cada tarea crea un `git worktree` propio, lanza el agente ahí y al terminar revisas el diff y apruebas/rechazas en bloque.
-- **F4 — Productividad**: command palette (`Ctrl+K`), notificaciones cuando un agente necesita aprobación, miniaturas reales en LOD, plantillas de layout.
+- **F4 — Productividad**: command palette (`Ctrl+K`), notificaciones cuando un agente necesita aprobación.
 - **F5 — Editor y diffs**: panel de código con CodeMirror 6, visor de diffs, búsqueda con ripgrep.
 - **Antigravity**: su telemetría de contexto queda pendiente (almacén en protobuf sin login activo); el resto del equipo ya tiene termómetro real.

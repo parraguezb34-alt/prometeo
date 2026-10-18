@@ -1574,3 +1574,26 @@ button.cc-lead {
     padding: 0 12px;
   }
 }
+
+/* los relevos viven dentro del panel de tareas */
+.cc-tdrawer-body .cc-mem {
+  flex: none;
+  overflow: visible;
+  padding: 0;
+}
+.cc-tdrawer-body .cc-mem-head {
+  padding-bottom: 10px;
+}
+.cc-tdrawer-body .cc-mem-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+.cc-tdrawer-body .cc-mem-sub {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.cc-tdrawer-body .cc-mem .cc-empty {
+  margin: 12px 0;
+  text-align: left;
+  align-items: flex-start;
+}

@@ -25,11 +25,10 @@ export function MemoryTab({
   return (
     <div className="cc-mem">
       <div className="cc-mem-head">
-        <div className="cc-mem-title">🧠 Memoria del equipo</div>
+        <div className="cc-mem-title">Relevos del equipo</div>
         <p className="cc-mem-sub">
-          Relevos guardados por los agentes (team_handover_save) justo antes de compactar su
-          contexto: decisiones, avances y qué falta. Quedan pegados a su tarea, así que compactar
-          ya no deja amnesia.
+          Lo que cada agente guardó justo antes de compactar su contexto: decisiones, avances y qué
+          falta. Quedan pegados a su tarea.
         </p>
       </div>
 
@@ -38,8 +37,8 @@ export function MemoryTab({
           <div>
             Aún no hay relevos guardados.
             <br />
-            Pídele uno a un agente con 🔄 (en su tarjeta o junto a su barra de contexto): guardará
-            su resumen y lienzo compactará su contexto sin perder el hilo.
+            Pídele uno a un agente con «Relevo» (en el modal de Equipo): guardará su resumen y
+            lienzo compactará su contexto sin perder el hilo.
           </div>
         </div>
       )}
@@ -71,7 +70,7 @@ export function MemoryTab({
                       key={f}
                       data-click={can ? "1" : "0"}
                       onClick={can ? () => onPreview(f) : undefined}
-                      title={can ? `👁 Ver ${f}` : f}
+                      title={can ? `Ver ${f} en Preview` : f}
                     >
                       {f}
                     </span>

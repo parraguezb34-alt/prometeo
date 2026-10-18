@@ -4,6 +4,7 @@ import { agentColor, agentInitial, agentLabel, ago, shortPath } from "../lib/tea
 import type { TeamEvent, TeamTask } from "../lib/team";
 import { GLYPHS } from "./FeedList";
 import { Icon } from "./Icon";
+import { MemoryTab } from "./MemoryTab";
 
 type Filter = "all" | "active" | "done";
 
@@ -21,6 +22,7 @@ export function TasksDrawer({
   activeTaskId,
   hasProject,
   initialTab = "tasks",
+  onPreview,
   onClose,
   onOpenTask,
   onTaskOp,
@@ -37,7 +39,8 @@ export function TasksDrawer({
   taskFileCount: Map<number, number>;
   activeTaskId: number | null;
   hasProject: boolean;
-  initialTab?: "tasks" | "feed";
+  initialTab?: "tasks" | "feed" | "memory";
+  onPreview: (rel: string) => void;
   onClose: () => void;
   onOpenTask: (id: number) => void;
   onTaskOp: (id: number, op: string) => void;
@@ -46,7 +49,7 @@ export function TasksDrawer({
   onTerminal: (name: string) => void;
   onSelectAgent: (name: string) => void;
 }) {
-  const [tab, setTab] = useState<"tasks" | "feed">(initialTab);
+  const [tab, setTab] = useState<"tasks" | "feed" | "memory">(initialTab);
   const [filter, setFilter] = useState<Filter>("all");
   const [draft, setDraft] = useState("");
 
@@ -103,6 +106,10 @@ export function TasksDrawer({
           <button role="tab" aria-selected={tab === "feed"} onClick={() => setTab("feed")}>
             <Icon name="pulse" size={14} />
             Actividad
+          </button>
+          <button role="tab" aria-selected={tab === "memory"} onClick={() => setTab("memory")}>
+            <Icon name="book" size={14} />
+            Relevos <span className="cc-count">{tasks.filter((t) => t.handover).length}</span>
           </button>
         </div>
 
@@ -213,6 +220,8 @@ export function TasksDrawer({
                 </div>
               ))}
             </>
+          ) : tab === "memory" ? (
+            <MemoryTab tasks={tasks} onOpenTask={onOpenTask} onPreview={onPreview} />
           ) : (
             <>
               {feed.length === 0 && <div className="cc-td-empty">Aún no hay actividad del equipo.</div>}
