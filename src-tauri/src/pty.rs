@@ -180,6 +180,26 @@ fn append_scrollback(buffer: &Arc<Mutex<VecDeque<u8>>>, bytes: &[u8]) {
     }
 }
 
+/// Variables que identifican a una sesión concreta de Claude Code y no deben heredarse a los
+/// agentes que abre lienzo. Se conservan las de configuración del usuario (proveedor, token…).
+fn is_foreign_session_var(key: &str) -> bool {
+    const KEEP: [&str; 6] = [
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_GIT_BASH_PATH",
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+    ];
+    if KEEP.contains(&key) {
+        return false;
+    }
+    key == "CLAUDECODE"
+        || key == "CLAUDE_PID"
+        || key.starts_with("CLAUDE_CODE_")
+        || key.starts_with("CLAUDE_AGENT_SDK_")
+}
+
 /// Spawn a new terminal session. Returns its id; the frontend subscribes to
 /// `pty://data` and `pty://exit` events afterwards.
 ///
@@ -222,6 +242,15 @@ pub fn term_spawn(
             } else {
                 line.to_string()
             });
+        }
+    }
+    // Si lienzo se lanzó desde una sesión de Claude Code (p. ej. un terminal del propio
+    // Claude), el entorno trae marcadores de esa sesión (CLAUDE_CODE_SESSION_ID,
+    // CLAUDE_CODE_CHILD_SESSION…). Los agentes que abrimos aquí deben ser sesiones propias:
+    // con esos marcadores Claude se cree hijo de otra sesión y se comporta distinto.
+    for (key, _) in std::env::vars() {
+        if is_foreign_session_var(&key) {
+            cmd.env_remove(&key);
         }
     }
     cmd.env("TERM", "xterm-256color");

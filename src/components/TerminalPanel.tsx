@@ -84,7 +84,34 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
     };
 
     (async () => {
+      // Se escucha la salida ANTES de abrir la sesión. Los agentes (Claude Code, OpenCode…)
+      // preguntan al terminal por sus capacidades nada más arrancar y esperan la respuesta; si
+      // esa primera salida se perdía por escuchar tarde, se quedaban esperando hasta que alguien
+      // abría la terminal y se repintaba el historial.
+      const early: PtyDataEvent[] = [];
+      let live = false;
+      await addUn(
+        listen<PtyDataEvent>("pty://data", (e) => {
+          if (disposedRef.current) return;
+          if (!live) {
+            early.push(e.payload);
+            return;
+          }
+          if (e.payload.id === sessionRef.current) {
+            term.write(base64ToBytes(e.payload.data));
+          }
+        }),
+      );
+      await addUn(
+        listen<PtyExitEvent>("pty://exit", (e) => {
+          if (!disposedRef.current && e.payload.id === sessionRef.current) {
+            term.write("\r\n\x1b[90m[proceso finalizado]\x1b[0m\r\n");
+          }
+        }),
+      );
+
       let sid = sessionRef.current;
+      let reattached = false;
       if (sid) {
         // Re-attach to an existing session (frontend reload): repaint scrollback.
         try {
@@ -92,6 +119,7 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
           if (disposedRef.current) return;
           term.clear();
           term.write(base64ToBytes(b64));
+          reattached = true;
         } catch {
           sid = null; // session no longer exists: spawn a fresh one
         }
@@ -115,20 +143,15 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
         /* ignore */
       }
       termResize(sid, term.cols, term.rows).catch(() => {});
-      await addUn(
-        listen<PtyDataEvent>("pty://data", (e) => {
-          if (!disposedRef.current && e.payload.id === sessionRef.current) {
-            term.write(base64ToBytes(e.payload.data));
-          }
-        }),
-      );
-      await addUn(
-        listen<PtyExitEvent>("pty://exit", (e) => {
-          if (!disposedRef.current && e.payload.id === sessionRef.current) {
-            term.write("\r\n\x1b[90m[proceso finalizado]\x1b[0m\r\n");
-          }
-        }),
-      );
+      // Lo que el agente ya escribió mientras se abría la sesión (sus preguntas al terminal
+      // incluidas): en una sesión nueva se entrega entero; en una re-adjuntada ya iba en el historial.
+      if (!reattached) {
+        for (const ev of early) {
+          if (ev.id === sid) term.write(base64ToBytes(ev.data));
+        }
+      }
+      early.length = 0;
+      live = true;
     })().catch((err) => {
       term.write(
         `\r\n\x1b[31m[error al iniciar la terminal: ${String(err)}]\x1b[0m\r\n`,

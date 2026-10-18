@@ -10,6 +10,7 @@
 use lienzo_lib::hub::client::HubClient;
 use serde_json::{json, Value};
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
+use std::sync::{Arc, Mutex};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -834,39 +835,71 @@ fn read_resource(client: &HubClient, params: &Value) -> Result<Value, (i64, Stri
     Ok(json!({ "contents": [ { "uri": uri, "mimeType": "text/markdown", "text": text } ] }))
 }
 
+/// Se une al hub como `agent` y devuelve el id de sesión (vacío si no se pudo).
+fn join_hub(client: &HubClient, agent: &str) -> String {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    client
+        .post(
+            "/join",
+            &json!({ "name": agent, "project": cwd, "pid": std::process::id() }),
+        )
+        .ok()
+        .and_then(|v| v["session_id"].as_str().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
 fn mcp_mode() {
     let agent = std::env::var("LIENZO_AGENT").unwrap_or_else(|_| "agente".to_string());
     let client = HubClient::discover();
 
-    let session_id: String = client
-        .as_ref()
-        .and_then(|c| {
-            let cwd = std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            c.post(
-                "/join",
-                &json!({ "name": agent, "project": cwd, "pid": std::process::id() }),
-            )
-            .ok()
-            .and_then(|v| v["session_id"].as_str().map(|s| s.to_string()))
-        })
-        .unwrap_or_default();
+    // La sesión vive en un Arc: si lienzo se reinicia (o aún no estaba abierto cuando arrancó
+    // este puente), el latido detecta que el hub no la conoce y se vuelve a unir. Sin esto, un
+    // puente de larga vida (el de OpenCode lo mantiene su servicio) quedaba mudo para siempre.
+    let session: Arc<Mutex<String>> = Arc::new(Mutex::new(
+        client.as_ref().map(|c| join_hub(c, &agent)).unwrap_or_default(),
+    ));
 
-    // Heartbeat so the hub knows this agent is alive.
-    if let (Some(c), false) = (client.clone(), session_id.is_empty()) {
-        let sid = session_id.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_secs(20));
-            let _ = c.post("/heartbeat", &json!({ "session_id": sid }));
+    // Heartbeat so the hub knows this agent is alive (and re-join when it does not know us).
+    {
+        let sess = session.clone();
+        let agent_name = agent.clone();
+        let first = client.clone();
+        std::thread::spawn(move || {
+            let mut c = first;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(8));
+                if c.is_none() {
+                    c = HubClient::discover();
+                }
+                let Some(cl) = c.clone() else { continue };
+                let sid = sess.lock().map(|s| s.clone()).unwrap_or_default();
+                let known = !sid.is_empty()
+                    && cl
+                        .post("/heartbeat", &json!({ "session_id": sid }))
+                        .map(|v| v["known"].as_bool().unwrap_or(true))
+                        .unwrap_or(false);
+                if !known {
+                    // El hub no nos conoce: unirse otra vez (descubriendo el hub vigente).
+                    let fresh = HubClient::discover().unwrap_or(cl);
+                    let nsid = join_hub(&fresh, &agent_name);
+                    if !nsid.is_empty() {
+                        if let Ok(mut s) = sess.lock() {
+                            *s = nsid;
+                        }
+                        c = Some(fresh);
+                    }
+                }
+            }
         });
     }
 
     // Telemetría de contexto para CLIs sin hooks (OpenCode, Codex): lee su
     // almacén local cada 12 s y lo reporta al hub sin ruido en el feed.
     if matches!(agent.as_str(), "opencode" | "codex") {
-        if let (Some(c), false) = (client.clone(), session_id.is_empty()) {
-            let sid = session_id.clone();
+        if let Some(c) = client.clone() {
+            let sess = session.clone();
             let agent_name = agent.clone();
             let cwd = std::env::current_dir()
                 .map(|p| p.display().to_string())
@@ -876,6 +909,10 @@ fn mcp_mode() {
                 let mut last: Option<(u64, u64)> = None;
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(12));
+                    let sid = sess.lock().map(|s| s.clone()).unwrap_or_default();
+                    if sid.is_empty() {
+                        continue;
+                    }
                     let Some(sample) = sample_telemetry(&agent_name, &cwd, &mut win_cache) else {
                         continue;
                     };
@@ -919,7 +956,10 @@ fn mcp_mode() {
             "ping" => Some(Ok(json!({}))),
             "tools/list" => Some(Ok(json!({ "tools": tools_catalog() }))),
             "tools/call" => match &client {
-                Some(c) => Some(call_tool(c, &session_id, &params)),
+                Some(c) => {
+                    let sid = session.lock().map(|s| s.clone()).unwrap_or_default();
+                    Some(call_tool(c, &sid, &params))
+                }
                 None => Some(Ok(text_result(
                     "La app de lienzo no está abierta: no puedo conectar con el equipo.",
                     true,
@@ -953,8 +993,9 @@ fn mcp_mode() {
         }
     }
 
-    if let (Some(c), false) = (client, session_id.is_empty()) {
-        let _ = c.post("/leave", &json!({ "session_id": session_id }));
+    let sid = session.lock().map(|s| s.clone()).unwrap_or_default();
+    if let (Some(c), false) = (client, sid.is_empty()) {
+        let _ = c.post("/leave", &json!({ "session_id": sid }));
     }
 }
 

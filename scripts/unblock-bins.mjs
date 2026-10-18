@@ -2,7 +2,7 @@
 // puede sobrescribir un .exe en uso ("Acceso denegado", os error 5), pero
 // renombrarlo sí: los procesos vivos (p. ej. puentes MCP de agentes) siguen
 // con su copia y el linker escribe una nueva. Corre como script `pretauri`.
-import { closeSync, existsSync, openSync, renameSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, openSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,9 @@ for (const dir of dirs) {
     const stamp = Math.floor(Date.now() / 1000);
     try {
       renameSync(path, `${path}.locked-${stamp}`);
+      // Copia de vuelta con el nombre original: sin ella, un build que no regenere el archivo
+      // (o una DLL que el linker no reescribe) deja a los agentes sin puente MCP.
+      copyFileSync(`${path}.locked-${stamp}`, path);
       console.log(`[unblock] ${dir}/${name} estaba en uso → ${name}.locked-${stamp}`);
     } catch (e) {
       console.warn(`[unblock] no pude apartar ${dir}/${name}: ${e.message}`);

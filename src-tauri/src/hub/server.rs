@@ -178,11 +178,15 @@ fn cmd_join(app: &AppHandle, payload: &Value) -> Result<Value, String> {
 
 fn cmd_heartbeat(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     let sid = payload["session_id"].as_str().unwrap_or("").to_string();
-    hub::with_inner(app, |inner| {
+    // `known: false` avisa al puente de que este hub no lo conoce (p. ej. lienzo se reinició):
+    // el puente vuelve a unirse en vez de quedarse mudo con una sesión que ya no existe.
+    let known = hub::with_inner(app, |inner| {
+        let known = inner.agents.contains_key(&sid);
         hub::touch_agent(inner, &sid);
+        known
     })
     .ok_or("hub no inicializado")?;
-    Ok(json!({ "ok": true }))
+    Ok(json!({ "ok": true, "known": known }))
 }
 
 fn cmd_leave(app: &AppHandle, payload: &Value) -> Result<Value, String> {
