@@ -97,6 +97,13 @@ lienzo es un **centro de mando conversacional para dirigir un equipo de agentes 
    - **Entrega estructurada**: cerrar exige `summary` (qué hizo y decidió) y admite `files` y `evidence` (cómo lo comprobó). Se guarda en la tarea y se ve en el panel.
    - **Los dependientes la reciben**: al reclamar una tarea, el agente recibe las entregas de sus padres; `team_context` también las resume.
 
+5. **Despacho automático** (interruptor en el panel de Tareas, apagado por defecto): cuando una tarea queda **lista** (abierta, sin dueño y con todos sus padres hechos) y hay un agente **libre**, lienzo le escribe en su terminal que la tome y la reclame con `team_task_claim`. Frenos:
+   - **Un trabajo en curso por agente**: no se avisa a quien ya tiene una tarea reclamada o un aviso sin responder.
+   - **Solo a quien puede**: en línea, con terminal en lienzo, sin esperar tu permiso y sin actividad en los últimos 20 s. Los trabajadores van antes que el líder.
+   - **Plazo de 90 s** para reclamar. Si nadie lo hace, se prueba con otro agente (nunca con el mismo) y, tras **2 fallos**, la tarea se queda parada hasta que pulses *Reintentar*.
+   - **Pausa de 5 min** para un agente que no responde a 3 avisos seguidos, y como mínimo 4 s entre dos avisos cualesquiera (nada de tormentas).
+   La lógica está en `src/lib/dispatcher.ts` (pura, sin Tauri) y se prueba con `npm test`.
+
 ## Relevo con memoria (compactar sin amnesia)
 
 Cuando la barra de contexto de un agente se acerque al límite (o cuando quieras

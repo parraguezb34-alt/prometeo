@@ -27,7 +27,15 @@ import {
   teamState,
   teamTaskOp,
 } from "../lib/team";
-import type { DetectResult, ModelCatalog, TeamAgent, TeamEvent, TeamState } from "../lib/team";
+import type { DetectResult, ModelCatalog, TeamAgent, TeamEvent, TeamState, TeamTask } from "../lib/team";
+import {
+  EMPTY_DISPATCH,
+  dispatchPrompt,
+  retryTask,
+  sendFailed,
+  tick as dispatchTick,
+} from "../lib/dispatcher";
+import type { DAgent, DispatchState } from "../lib/dispatcher";
 import { loadAutoStart, loadPrefs, saveAutoStart, savePrefs } from "../lib/agentPrefs";
 import type { AgentPref } from "../lib/agentPrefs";
 import { termKill, termWrite } from "../lib/pty";
@@ -69,6 +77,7 @@ type Overlay = "team" | "tasks" | "newchat" | null;
 const SHOOT_KEY = "lienzo.shoot.v1";
 const CHATS_MIN_KEY = "lienzo.chatsmin.v1";
 const ACT_KEY = "lienzo.showact.v1";
+const DISPATCH_KEY = "lienzo.dispatch.v1";
 
 /** Eventos de bajo nivel que se ocultan cuando apagas «Mostrar actividad». */
 const QUIET_KINDS = new Set(["tool", "join", "leave", "claim", "release", "session", "stop", "prompt"]);
@@ -470,6 +479,107 @@ export function CommandCenter() {
     saveAutoStart(on);
   };
 
+  // ---- Despachador ligero: pide a los agentes libres que tomen las tareas listas.
+  const [dispatchOn, setDispatchOn] = useState(() => loadFlag(DISPATCH_KEY, false));
+  const [dispatchView, setDispatchView] = useState<DispatchState>(EMPTY_DISPATCH);
+  const dispatchRef = useRef<DispatchState>(EMPTY_DISPATCH);
+  const dispatchBusy = useRef(false);
+  /** Lo último que el ciclo necesita ver, actualizado en cada render. */
+  const latestRef = useRef<{
+    tasks: TeamTask[];
+    agents: TeamAgent[];
+    leader: string;
+    blocked: string[];
+    panels: Panel[];
+    lastByAgent: Map<string, TeamEvent>;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!dispatchOn) return;
+    const run = async () => {
+      const cur = latestRef.current;
+      if (!cur || dispatchBusy.current) return;
+      dispatchBusy.current = true;
+      try {
+        const now = Date.now();
+        const byName = new Map<string, DAgent>();
+        for (const a of cur.agents) {
+          const prev = byName.get(a.name);
+          byName.set(a.name, {
+            name: a.name,
+            online: (prev?.online ?? false) || a.online,
+            hasTerminal: !!panelForAgent(cur.panels, a.name)?.sessionId,
+            blocked: cur.blocked.includes(a.name),
+            lastActivityMs: cur.lastByAgent.get(a.name)?.ts_ms ?? 0,
+          });
+        }
+        const res = dispatchTick(dispatchRef.current, {
+          now,
+          tasks: cur.tasks.map((t) => ({
+            id: t.id,
+            title: t.title,
+            notes: t.notes,
+            status: t.status,
+            owner: t.owner,
+            parents: t.parents ?? [],
+          })),
+          agents: [...byName.values()],
+          leader: cur.leader,
+        });
+        let next = res.state;
+        for (const note of res.notes) say(note, true);
+        if (res.send) {
+          const { taskId, agent } = res.send;
+          const task = cur.tasks.find((t) => t.id === taskId);
+          const panel = panelForAgent(cur.panels, agent);
+          try {
+            if (!task || !panel?.sessionId) throw new Error("sin terminal");
+            await termWrite(
+              panel.sessionId,
+              `${dispatchPrompt({
+                id: task.id,
+                title: task.title,
+                notes: task.notes,
+                status: task.status,
+                owner: task.owner,
+                parents: task.parents ?? [],
+              })}\r`,
+            );
+            await teamDm(agent, `📌 Despacho: #${taskId} «${task.title}»`);
+            say(`📌 #${taskId} pedida a ${agentLabel(agent)}.`);
+          } catch (e) {
+            next = sendFailed(next, taskId, agent, now);
+            say(`No pude avisar a ${agentLabel(agent)}: ${errMsg(e)}`, true);
+          }
+        }
+        dispatchRef.current = next;
+        setDispatchView(next);
+      } finally {
+        dispatchBusy.current = false;
+      }
+    };
+    const id = window.setInterval(() => {
+      void run();
+    }, 3000);
+    void run();
+    return () => window.clearInterval(id);
+  }, [dispatchOn, say]);
+
+  const toggleDispatch = (on: boolean) => {
+    setDispatchOn(on);
+    saveFlag(DISPATCH_KEY, on);
+    if (!on) {
+      // Los avisos en vuelo no deben contar como fallos mientras está apagado.
+      dispatchRef.current = { ...dispatchRef.current, pending: {} };
+      setDispatchView(dispatchRef.current);
+    }
+  };
+
+  const retryDispatch = (id: number) => {
+    dispatchRef.current = retryTask(dispatchRef.current, id);
+    setDispatchView(dispatchRef.current);
+  };
+
   // Al abrir la app (y al elegir un proyecto): conecta los agentes instalados y
   // abre los que no estén en marcha, para que aparezcan en «Equipo activo».
   useEffect(() => {
@@ -831,6 +941,15 @@ export function CommandCenter() {
     }
     return m;
   }, [roster, blockedNames, claimedBy]);
+
+  latestRef.current = {
+    tasks,
+    agents,
+    leader,
+    blocked: blockedNames,
+    panels: layout.panels,
+    lastByAgent,
+  };
 
   const VIEWS: { id: CenterView; label: string; icon: IconName; title: string }[] = [
     { id: "feed", label: "Comando", icon: "msg", title: "Chat y actividad del equipo" },
@@ -1286,6 +1405,7 @@ export function CommandCenter() {
           activeTaskId={view === "diff" ? diffTask : null}
           hasProject={!!project}
           initialTab={drawerTab}
+          dispatch={{ enabled: dispatchOn, state: dispatchView, onToggle: toggleDispatch, onRetry: retryDispatch }}
           onPreview={(rel) => {
             setPreviewRel(rel);
             setView("preview");

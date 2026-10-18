@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { agentColor, agentInitial, agentLabel, ago, shortPath } from "../lib/team";
 import { waitingFor } from "../lib/team";
+import { isParked } from "../lib/dispatcher";
+import type { DispatchState } from "../lib/dispatcher";
 import type { TeamEvent, TeamTask } from "../lib/team";
 import { GLYPHS } from "./FeedList";
 import { Icon } from "./Icon";
@@ -23,6 +25,7 @@ export function TasksDrawer({
   activeTaskId,
   hasProject,
   initialTab = "tasks",
+  dispatch,
   onPreview,
   onClose,
   onOpenTask,
@@ -41,6 +44,13 @@ export function TasksDrawer({
   activeTaskId: number | null;
   hasProject: boolean;
   initialTab?: "tasks" | "feed" | "memory";
+  /** Despacho automático: interruptor, estado de los avisos y reintento de tareas paradas. */
+  dispatch: {
+    enabled: boolean;
+    state: DispatchState;
+    onToggle: (on: boolean) => void;
+    onRetry: (id: number) => void;
+  };
   onPreview: (rel: string) => void;
   onClose: () => void;
   onOpenTask: (id: number) => void;
@@ -56,6 +66,9 @@ export function TasksDrawer({
   const [deps, setDeps] = useState<number[]>([]);
   const [depsOpen, setDepsOpen] = useState(false);
 
+  const pausedAgents = Object.entries(dispatch.state.agentPausedUntil)
+    .filter(([, until]) => until > Date.now())
+    .map(([name]) => agentLabel(name));
   const done = tasks.filter((t) => t.status === "done").length;
   const pct = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
 
@@ -100,6 +113,24 @@ export function TasksDrawer({
           </div>
           <div className="cc-meter">
             <i style={{ width: `${pct}%` }} />
+          </div>
+          <div className="cc-dispatch-row">
+            <button
+              className="cc-toggle"
+              aria-pressed={dispatch.enabled}
+              onClick={() => dispatch.onToggle(!dispatch.enabled)}
+              title="Cuando una tarea esté lista y un agente libre, lienzo le escribe que la tome. Un trabajo en curso por agente."
+            >
+              <span className="cc-sw" />
+              Despacho automático
+            </button>
+            <span className="cc-dispatch-hint">
+              {!dispatch.enabled
+                ? "Apagado: repartes tú o el líder."
+                : pausedAgents.length > 0
+                  ? `En pausa: ${pausedAgents.join(", ")}`
+                  : "Pide las tareas listas a los agentes libres."}
+            </span>
           </div>
         </div>
 
@@ -195,6 +226,26 @@ export function TasksDrawer({
                           </div>
                         )
                       : null}
+                    {dispatch.enabled && t.status === "open" && dispatch.state.pending[t.id] && (
+                      <div className="cc-td-disp">
+                        <Icon name="pulse" size={12} />
+                        Pedida a {agentLabel(dispatch.state.pending[t.id].agent)}
+                      </div>
+                    )}
+                    {t.status === "open" && isParked(dispatch.state, t.id) && (
+                      <div className="cc-td-parked">
+                        Nadie la reclamó tras {dispatch.state.taskFails[t.id]} avisos
+                        <button
+                          className="cc-td-retry"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            dispatch.onRetry(t.id);
+                          }}
+                        >
+                          Reintentar
+                        </button>
+                      </div>
+                    )}
                     <div className="cc-td-meta">
                       {t.owner ? (
                         <span
