@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { agentKeyFromCmd } from "./lib/agentKey";
 
 /**
  * Terminales vivas de los agentes. Cada una es una sesión PTY que el backend
@@ -38,7 +39,11 @@ function load(): Layout {
             sessionId: p.sessionId ?? null,
             cmd: p.cmd,
           }));
-        return { panels, seq: parsed.seq ?? panels.length + 1 };
+        // Una terminal por agente: se queda la más reciente (las demás eran duplicados).
+        const latest = new Map<string, number>();
+        panels.forEach((p, idx) => latest.set(agentKeyFromCmd(p.cmd ?? ""), idx));
+        const unique = panels.filter((p, idx) => latest.get(agentKeyFromCmd(p.cmd ?? "")) === idx);
+        return { panels: unique, seq: parsed.seq ?? panels.length + 1 };
       }
     }
   } catch {

@@ -86,10 +86,30 @@ fn cli_installed(def: &AgentDef) -> bool {
     def.extra_bins.iter().any(|p| local.join(p).exists())
 }
 
+/// La copia `<name>.locked-<ts>` más reciente que build.rs apartó en `dir`.
+fn newest_locked_copy(dir: &Path, name: &str) -> Option<PathBuf> {
+    let prefix = format!("{name}.locked-");
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+        .map(|e| e.path())
+}
+
 fn mcp_exe_path() -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("sin directorio de la app")?;
     let candidate = dir.join("lienzo-mcp.exe");
+    if !candidate.exists() {
+        // build.rs aparta (renombra) el puente cuando está en uso por agentes vivos y,
+        // si ese build no lo regenera (p. ej. un `cargo check`), la config de los
+        // agentes quedaría apuntando a un archivo que ya no existe. Se restaura la
+        // copia apartada más reciente: es el mismo binario.
+        if let Some(saved) = newest_locked_copy(dir, "lienzo-mcp.exe") {
+            let _ = std::fs::copy(&saved, &candidate);
+        }
+    }
     if candidate.exists() {
         Ok(candidate.display().to_string())
     } else {

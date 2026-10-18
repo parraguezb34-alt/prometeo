@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { addAgentTerminal, removePanel, useLayout } from "../store";
 import type { Panel } from "../store";
 import {
@@ -43,7 +43,6 @@ import { projectInfo } from "../lib/project";
 import type { ProjectInfo } from "../lib/project";
 import { inWindow, useChats } from "../lib/chats";
 import type { Chat } from "../lib/chats";
-import { GLYPHS } from "./FeedList";
 import { AgentQuickCmds } from "./AgentCard";
 import { ChatsSidebar } from "./ChatsSidebar";
 import { DiffTab, taskPaths } from "./DiffTab";
@@ -148,6 +147,10 @@ export function CommandCenter() {
   /** Lo último que se aplicó a la sesión de cada agente (modelo y esfuerzo). */
   const appliedRef = useRef<Record<string, AgentPref | undefined>>({});
   const autoRan = useRef<string | null>(null);
+  /** Desde cuándo se ve la terminal de un agente sin que se haya conectado al equipo. */
+  const startedAtRef = useRef<Record<string, number>>({});
+  /** Grupos de actividad desplegados en el chat (por seq del primer evento). */
+  const [openGroups, setOpenGroups] = useState<number[]>([]);
   const [hubOk, setHubOk] = useState(true);
   const [hubUrl, setHubUrl] = useState("");
   const [flash, setFlash] = useState<{ text: string; err?: boolean } | null>(null);
@@ -395,8 +398,14 @@ export function CommandCenter() {
   const launchAgent = async (
     id: string,
     label: string,
-    opts: { selectTerm?: boolean } = { selectTerm: true },
+    opts: { selectTerm?: boolean; force?: boolean } = { selectTerm: true },
   ): Promise<boolean> => {
+    // Una terminal por agente: si ya tiene una, se muestra en lugar de abrir otra.
+    if (!opts.force && panelForAgent(layout.panels, id)) {
+      if (opts.selectTerm) showTerminal(id);
+      say(`${label} ya tiene una terminal abierta.`);
+      return true;
+    }
     setOpening(id);
     try {
       const det = detect?.agents.find((x) => x.id === id);
@@ -472,6 +481,15 @@ export function CommandCenter() {
     } finally {
       setOpening(null);
     }
+  };
+
+  /** Cierra la terminal de un agente y abre otra nueva (p. ej. si se quedó sin conectar). */
+  const restartAgent = async (name: string) => {
+    const panel = panelForAgent(layout.panels, name);
+    if (panel?.sessionId) await termKill(panel.sessionId).catch(() => {});
+    if (panel) removePanel(panel.id);
+    delete startedAtRef.current[name];
+    await launchAgent(name, agentLabel(name), { selectTerm: true, force: true });
   };
 
   const toggleAutoStart = (on: boolean) => {
@@ -857,7 +875,8 @@ export function CommandCenter() {
   const openDrawer = (agents = true) => setDrawer({ kind: "team", agents });
   const onDiffCount = useCallback((n: number) => setChangeCount(n), []);
 
-  const renderEvent = (e: TeamEvent) => {
+  /** Un mensaje (burbuja) o un aviso del equipo (tarea, progreso, bloqueo…) en una línea clara. */
+  const renderEvent = (e: TeamEvent): ReactNode => {
     const mine = e.agent === "tú";
     if (e.kind === "message" || (mine && e.kind === "broadcast")) {
       return (
@@ -880,20 +899,113 @@ export function CommandCenter() {
         </div>
       );
     }
+    const icon: IconName =
+      e.kind === "task"
+        ? "list"
+        : e.kind === "update"
+          ? "pulse"
+          : e.kind === "handover"
+            ? "book"
+            : e.kind === "waiting"
+              ? "warn"
+              : e.kind === "broadcast"
+                ? "msg"
+                : "check";
     return (
-      <div className="cc-sys" key={e.seq}>
-        <span className="cc-sys-glyph">{GLYPHS[e.kind] ?? "•"}</span>
-        <span className="cc-sys-main">
-          <span style={{ color: agentColor(e.agent) }}>{e.agent === "tú" ? "Tú" : agentLabel(e.agent)}</span>
-          {e.to ? <span> → {e.to}</span> : null}
-          <span data-weak={e.kind === "tool" ? "1" : "0"}> {e.text}</span>
-          {e.files.length > 0 && (
-            <span className="feed-files"> · {e.files.map(shortPath).join(", ")}</span>
-          )}
+      <div
+        className="cc-ev"
+        key={e.seq}
+        data-kind={e.kind}
+        style={{ "--ac": agentColor(e.agent) } as CSSProperties}
+      >
+        <span className="cc-ev-ic">
+          <Icon name={icon} size={14} />
         </span>
-        <span className="feed-time">{ago(e.ts_ms)}</span>
+        <div className="cc-ev-body">
+          <span className="cc-ev-who">{e.agent === "tú" ? "Tú" : agentLabel(e.agent)}</span>
+          {e.to ? <span className="cc-ev-to"> → {e.to}</span> : null}
+          <span className="cc-ev-text"> {e.kind === "waiting" ? `pide tu respuesta: ${e.text}` : e.text}</span>
+          {e.files.length > 0 && (
+            <span className="cc-ev-files">
+              {e.files.slice(0, 4).map((f) => (
+                <span className="cc-file-chip" key={f} title={f}>
+                  {shortPath(f)}
+                </span>
+              ))}
+              {e.files.length > 4 ? <span className="cc-ev-more">+{e.files.length - 4}</span> : null}
+            </span>
+          )}
+        </div>
+        <time>{ago(e.ts_ms)}</time>
       </div>
     );
+  };
+
+  /** Una racha de acciones de bajo nivel (herramientas, reservas…) en una sola fila plegable. */
+  const renderGroup = (run: TeamEvent[]): ReactNode => {
+    const key = run[0].seq;
+    const open = openGroups.includes(key);
+    const who = [...new Set(run.map((e) => e.agent))];
+    const last = run[run.length - 1];
+    return (
+      <div className="cc-grp" key={`g${key}`} data-open={open ? "1" : "0"}>
+        <button
+          className="cc-grp-head"
+          aria-expanded={open}
+          onClick={() => setOpenGroups((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]))}
+        >
+          <span className="cc-minis">
+            {who.slice(0, 3).map((n) => (
+              <span key={n} className="cc-mini-av" style={{ "--ac": agentColor(n) } as CSSProperties}>
+                {agentInitial(n)}
+              </span>
+            ))}
+          </span>
+          <span className="cc-grp-t">
+            {run.length} {run.length === 1 ? "acción" : "acciones"} · {who.map((n) => (n === "tú" ? "Tú" : agentLabel(n))).join(", ")}
+          </span>
+          {!open && <span className="cc-grp-last">{last.text}</span>}
+          <Icon name="chev" size={14} />
+        </button>
+        {open && (
+          <div className="cc-grp-list">
+            {run.map((e) => {
+              const m = e.kind === "tool" ? /^(\S+)\s+([\s\S]*)$/.exec(e.text) : null;
+              return (
+                <div className="cc-grp-line" key={e.seq} style={{ "--ac": agentColor(e.agent) } as CSSProperties}>
+                  <span className="cc-grp-who">{agentInitial(e.agent)}</span>
+                  {m ? <span className="cc-grp-tool">{m[1]}</span> : <span className="cc-grp-tool">{e.kind}</span>}
+                  <span className="cc-grp-txt" title={e.text}>
+                    {m ? m[2] : e.text}
+                  </span>
+                  <time>{ago(e.ts_ms)}</time>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  /** Mensajes y avisos en orden; las acciones de bajo nivel seguidas se agrupan. */
+  const renderRows = (list: TeamEvent[]): ReactNode[] => {
+    const rows: ReactNode[] = [];
+    let run: TeamEvent[] = [];
+    const flush = () => {
+      if (run.length > 0) rows.push(renderGroup(run));
+      run = [];
+    };
+    for (const e of list) {
+      if (QUIET_KINDS.has(e.kind)) {
+        run.push(e);
+        continue;
+      }
+      flush();
+      rows.push(renderEvent(e));
+    }
+    flush();
+    return rows;
   };
 
   const agentView = sel.kind === "agent" ? sel.name : null;
@@ -937,10 +1049,14 @@ export function CommandCenter() {
   const states = useMemo(() => {
     const m = new Map<string, AgentState>();
     for (const a of roster) {
-      m.set(a.name, agentState(a, blockedNames.includes(a.name), claimedBy.has(a.name)));
+      const hasTerminal = !!panelForAgent(layout.panels, a.name)?.sessionId;
+      const s = agentState(a, blockedNames.includes(a.name), claimedBy.has(a.name), hasTerminal);
+      if (s === "starting") startedAtRef.current[a.name] ??= Date.now();
+      else delete startedAtRef.current[a.name];
+      m.set(a.name, s);
     }
     return m;
-  }, [roster, blockedNames, claimedBy]);
+  }, [roster, blockedNames, claimedBy, layout.panels]);
 
   latestRef.current = {
     tasks,
@@ -1243,7 +1359,7 @@ export function CommandCenter() {
                   </div>
                 )
               ) : (
-                msgs.map(renderEvent)
+                renderRows(msgs)
               )}
             </div>
           )}
@@ -1384,8 +1500,12 @@ export function CommandCenter() {
             void applyAgent(name);
           }}
           onStart={(name) => {
-            void launchAgent(name, agentLabel(name), { selectTerm: false });
+            void launchAgent(name, agentLabel(name), { selectTerm: true });
           }}
+          onRestart={(name) => {
+            void restartAgent(name);
+          }}
+          startedAt={startedAtRef.current}
           onAutoStart={toggleAutoStart}
           onSettings={() => {
             setOverlay(null);

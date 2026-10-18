@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getLayout } from "../store";
 import { termWrite } from "./pty";
+import { agentKeyFromCmd } from "./agentKey";
 
 export type TeamEvent = {
   seq: number;
@@ -240,15 +241,7 @@ export function shortPath(path: string): string {
   return parts.length >= 2 ? parts.slice(-2).join("/") : path;
 }
 
-/** Map a terminal launch command to the agent id used by the hub. */
-export function agentKeyFromCmd(cmd: string): string {
-  const c = cmd.toLowerCase();
-  if (c.includes("opencode")) return "opencode";
-  if (c.includes("agy") || c.includes("antigravity")) return "antigravity";
-  if (c.includes("claude")) return "claude";
-  if (c.includes("codex")) return "codex";
-  return c.split(/[\\/]/).pop()?.replace(/\.(exe|cmd|bat|ps1)$/i, "") || "agente";
-}
+export { agentKeyFromCmd };
 
 /** Wrap the user's message with the team protocol before typing it into each
  * agent terminal. Single line on purpose: it is submitted as-is into their

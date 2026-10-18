@@ -5,14 +5,16 @@ import type { AgentPref } from "../lib/agentPrefs";
 import { ctxLevel, ctxOf, fmtTokens, shortModel } from "./AgentCard";
 import { Icon } from "./Icon";
 
-export type AgentState = "work" | "idle" | "blocked" | "off";
+/** work = con tarea · idle = libre · blocked = espera tu respuesta · starting = terminal abierta, aún sin conectar · off = sin sesión */
+export type AgentState = "work" | "idle" | "blocked" | "starting" | "off";
 
 export function agentState(
   agent: TeamAgent,
   blocked: boolean,
   working: boolean,
+  hasTerminal = false,
 ): AgentState {
-  if (!agent.online) return "off";
+  if (!agent.online) return hasTerminal ? "starting" : "off";
   if (blocked) return "blocked";
   return working ? "work" : "idle";
 }
@@ -21,6 +23,7 @@ const STATE_LABEL: Record<AgentState, string> = {
   work: "Trabajando",
   idle: "Libre",
   blocked: "Espera tu respuesta",
+  starting: "Conectando…",
   off: "Sin sesión",
 };
 
@@ -99,6 +102,7 @@ export function TeamModal({
   prefs,
   applied,
   busy,
+  startedAt,
   autoStart,
   onClose,
   onTalk,
@@ -108,6 +112,7 @@ export function TeamModal({
   onPref,
   onApply,
   onStart,
+  onRestart,
   onAutoStart,
   onSettings,
 }: {
@@ -122,6 +127,8 @@ export function TeamModal({
   /** Lo último que se aplicó a la sesión de cada agente. */
   applied: Record<string, AgentPref | undefined>;
   busy: string | null;
+  /** Cuándo se vio por primera vez la terminal de cada agente aún sin conectar. */
+  startedAt: Record<string, number>;
   autoStart: boolean;
   onClose: () => void;
   onTalk: (name: string) => void;
@@ -131,6 +138,7 @@ export function TeamModal({
   onPref: (name: string, patch: AgentPref) => void;
   onApply: (name: string) => void;
   onStart: (name: string) => void;
+  onRestart: (name: string) => void;
   onAutoStart: (on: boolean) => void;
   onSettings: () => void;
 }) {
@@ -226,6 +234,14 @@ export function TeamModal({
                     )}
                   </div>
 
+                  {state === "starting" && (
+                    <div className="cc-field-note" data-warn={Date.now() - (startedAt[name] ?? Date.now()) > 60_000 ? "1" : "0"}>
+                      {Date.now() - (startedAt[name] ?? Date.now()) > 60_000
+                        ? "Todavía no se ha conectado al equipo. Mira su terminal: puede estar pidiéndote confirmar algo (confiar en la carpeta, aprobar el servidor MCP, iniciar sesión)."
+                        : "Abriendo su terminal. En cuanto se conecte aparecerá en línea, con su contexto."}
+                    </div>
+                  )}
+
                   <div className="cc-acard-opts">
                     <label className="cc-field">
                       <span className="cc-field-l">Modelo</span>
@@ -306,6 +322,7 @@ export function TeamModal({
                     </div>
                   )}
 
+                  {a.online && (
                   <div className="cc-ctxbig" data-lvl={ctxLevel(ctx?.pct ?? null)}>
                     <div className="cc-ctxbig-row">
                       <span>Contexto</span>
@@ -319,13 +336,37 @@ export function TeamModal({
                       <i style={{ width: `${ctx?.pct ?? 0}%` }} />
                     </div>
                   </div>
+                  )}
 
                   <div className="cc-now">
-                    {a.online ? <time>hace {ago(a.last_seen_ms)}</time> : <time>offline</time>}
+                    {a.online ? (
+                      <time>hace {ago(a.last_seen_ms)}</time>
+                    ) : (
+                      <time>{last ? `hace ${ago(last.ts_ms)}` : "—"}</time>
+                    )}
                     <span title={task ? `#${task.id} ${task.title}` : last?.text}>
-                      {task ? `#${task.id} ${task.title}` : last ? last.text : "sin actividad aún"}
+                      {task
+                        ? `#${task.id} ${task.title}`
+                        : last
+                          ? a.online
+                            ? last.text
+                            : `Última actividad: ${last.text}`
+                          : "sin actividad aún"}
                     </span>
                   </div>
+
+                  {state === "starting" && (
+                    <div className="cc-acard-act">
+                      <button className="cc-btn sec" onClick={() => onTerminal(name)}>
+                        <Icon name="term" size={14} />
+                        Ver terminal
+                      </button>
+                      <button className="cc-btn sec" disabled={busy === name} onClick={() => onRestart(name)}>
+                        <Icon name="refresh" size={14} />
+                        {busy === name ? "Reiniciando…" : "Reiniciar"}
+                      </button>
+                    </div>
+                  )}
 
                   {a.online && (
                     <div className="cc-acard-act">
