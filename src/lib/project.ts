@@ -46,6 +46,10 @@ export const projectRead = (path: string, rel: string) =>
 export const projectRecent = (path: string, exts: string[], limit = 40) =>
   invoke<RecentFile[]>("project_recent", { path, exts, limit });
 
+/** Guarda en el proyecto una imagen pegada en el compositor; devuelve su ruta absoluta. */
+export const projectSaveImage = (path: string, data: string, ext: string) =>
+  invoke<string>("project_save_image", { path, data, ext });
+
 /** Diff y estado limitados a las rutas de una tarea. */
 export const projectDiffPaths = (path: string, paths: string[]) =>
   invoke<TaskDiff>("project_diff_paths", { path, paths });

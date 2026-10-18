@@ -14,8 +14,8 @@ const INLINE = new RegExp(
   [
     "(`[^`\\n]+`)", // 1 código
     "(\\*\\*[^*\\n]+\\*\\*)", // 2 negrita
-    "(\\[[^\\]\\n]+\\]\\(https?:\\/\\/[^)\\s]+\\))", // 3 enlace
-    "(https?:\\/\\/[^\\s)<>\"]+[^\\s)<>\".,;:!?])", // 4 url suelta
+    "(\\[[^\\]\\n]+\\]\\((?:https?:\\/\\/|file:\\/\\/\\/)[^)\\s]+\\))", // 3 enlace (web o archivo)
+    '(https?:\\/\\/[^\\s)<>"]+[^\\s)<>".,;:!?])', // 4 url suelta
     `((?:[A-Za-z]:[\\\\/]|\\.{0,2}[\\\\/])?(?:[\\w@.-]+[\\\\/])*[\\w@-][\\w@.-]*\\.(?:${FILE_EXT})(?![\\w/\\\\]))`, // 5 ruta
     "((?:^|(?<=[\\s(]))\\*[^*\\s][^*\\n]*\\*(?=[\\s).,;:!?]|$))", // 6 cursiva
   ].join("|"),
@@ -52,6 +52,17 @@ function inline(text: string, onPath: ((p: string) => void) | undefined, keyBase
     } else if (link) {
       const lm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(link);
       const href = lm?.[2] ?? "";
+      // Enlace a un archivo local («[juego3d](file:///C:/…)»): se abre como cualquier ruta.
+      if (href.startsWith("file:///") && onPath) {
+        const local = decodeURI(href.slice("file:///".length));
+        out.push(
+          <button key={k} className="md-path" onClick={() => onPath(local)} title={local}>
+            {lm?.[1] ?? local}
+          </button>,
+        );
+        last = at + all.length;
+        continue;
+      }
       out.push(
         <a key={k} className="md-link" href={href} onClick={(ev) => openLink(ev, href)}>
           {lm?.[1] ?? link}

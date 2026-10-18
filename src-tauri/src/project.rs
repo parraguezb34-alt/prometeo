@@ -529,3 +529,33 @@ pub fn image_data(path: String, project: Option<String>) -> Result<String, Strin
         base64::engine::general_purpose::STANDARD.encode(bytes)
     ))
 }
+
+/// Guarda en el proyecto una imagen que pegaste o arrastraste al compositor
+/// (`.lienzo/capturas/captura-<ms>.<ext>`) y devuelve su ruta absoluta, para pasársela
+/// a los agentes: así ven lo mismo que tú.
+#[tauri::command]
+pub fn project_save_image(path: String, data: String, ext: Option<String>) -> Result<String, String> {
+    use base64::Engine;
+    let root = root_of(&path)?;
+    let ext = match ext.as_deref().map(str::to_lowercase).as_deref() {
+        Some("jpg") | Some("jpeg") => "jpg",
+        Some("gif") => "gif",
+        Some("webp") => "webp",
+        _ => "png",
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .map_err(|_| "la imagen no se pudo leer".to_string())?;
+    if bytes.is_empty() || bytes.len() as u64 > IMAGE_CAP {
+        return Err("la imagen está vacía o es demasiado grande".into());
+    }
+    let dir = root.join(".lienzo").join("capturas");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let ms = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let file = dir.join(format!("captura-{ms}.{ext}"));
+    std::fs::write(&file, bytes).map_err(|e| e.to_string())?;
+    Ok(file.display().to_string())
+}

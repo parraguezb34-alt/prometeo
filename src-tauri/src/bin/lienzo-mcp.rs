@@ -16,6 +16,13 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(|a| a == "hook").unwrap_or(false) {
         hook_mode(&args[1..]);
+    } else if args.first().map(|a| a == "mirror-dump").unwrap_or(false) {
+        // Diagnóstico del espejo de OpenCode/Antigravity: lienzo-mcp mirror-dump <carpeta> [pasos]
+        let project = args.get(1).cloned().unwrap_or_default();
+        let back: i64 = args.get(2).and_then(|n| n.parse().ok()).unwrap_or(80);
+        for line in lienzo_lib::hub::mirror::replay(&project, back, back) {
+            println!("{line}");
+        }
     } else {
         mcp_mode();
     }

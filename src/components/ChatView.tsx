@@ -5,7 +5,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { stampLabel } from "../lib/chats";
 import { agentColor, agentInitial, agentLabel, shortPath } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
-import { buildTimeline, clock, eventImages, isDispatch, samePath, span } from "../lib/timeline";
+import { askPhrase, buildTimeline, clock, eventImages, isDispatch, samePath, span } from "../lib/timeline";
 import type { Part, Row, TaskInfo, Turn } from "../lib/timeline";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
@@ -248,6 +248,8 @@ function stepOf(e: TeamEvent): Step {
   if (/^(Edit|MultiEdit|NotebookEdit)$/.test(tool))
     return { icon: "pencil", verb: "Editó", detail: rest, path };
   if (tool === "Read" || /screenshot/i.test(tool)) return { icon: "eye", verb: "Miró", detail: rest, path };
+  if (tool === "Search") return { icon: "search", verb: "Buscó", detail: rest };
+  if (tool === "Web") return { icon: "search", verb: "Consultó", detail: rest };
   return { icon: "pulse", verb: tool || "Acción", detail: rest, path };
 }
 
@@ -258,17 +260,20 @@ function workSummary(events: TeamEvent[]): string {
   let looks = 0;
   let claims = 0;
   let releases = 0;
+  let searches = 0;
   for (const e of events) {
     const s = stepOf(e);
     if (s.icon === "pencil" || s.icon === "plus") edited.add(s.path ?? s.detail);
     else if (s.icon === "term") cmds++;
     else if (s.icon === "eye") looks++;
+    else if (s.icon === "search") searches++;
     else if (e.kind === "claim") claims++;
     else if (e.kind === "release") releases++;
   }
   const bits: string[] = [];
   if (edited.size) bits.push(`editó ${edited.size} ${edited.size === 1 ? "archivo" : "archivos"}`);
   if (cmds) bits.push(`${cmds} ${cmds === 1 ? "comando" : "comandos"}`);
+  if (searches) bits.push(`${searches} ${searches === 1 ? "búsqueda" : "búsquedas"}`);
   if (looks) bits.push(`miró ${looks} ${looks === 1 ? "imagen" : "imágenes"}`);
   if (claims) bits.push(`reservó ${claims === 1 ? "archivos" : `archivos ${claims} veces`}`);
   if (releases) bits.push("liberó sus archivos");
@@ -278,14 +283,6 @@ function workSummary(events: TeamEvent[]): string {
 // ---- piezas pequeñas -----------------------------------------------------------------
 
 const PLAN_PREFIX = /^📋\s*\(modo plan\)\s*/;
-
-/** Qué pide un agente, en castellano («Claude needs your permission to use Bash» → «permiso para usar Bash»). */
-function askPhrase(text: string): string {
-  const perm = /permission to use ([\w.:-]+)/i.exec(text);
-  if (perm) return `permiso para usar ${perm[1]}`;
-  if (/waiting for your input|needs your (input|attention)/i.test(text)) return "tu respuesta";
-  return text;
-}
 
 function Avatar({ agent, live = false, size }: { agent: string; live?: boolean; size?: "sm" }) {
   return (
@@ -843,6 +840,13 @@ export function ChatView({
     if (r.k === "user") {
       const e = r.e;
       const plan = PLAN_PREFIX.test(e.text);
+      // Capturas que adjuntaste: la línea con sus rutas se cambia por las miniaturas.
+      const att = /📎[^\n]*/.exec(e.text)?.[0] ?? "";
+      const shots = att ? eventImages({ ...e, text: att, files: [] }) : [];
+      const said = e.text
+        .replace(PLAN_PREFIX, "")
+        .replace(/\s*📎[^\n]*/, "")
+        .trim();
       const to = e.kind === "broadcast" || !e.to ? "Al equipo" : `A ${agentLabel(e.to)}`;
       return (
         <div className="cv-user" key={r.key} data-new={isNew(r.key)}>
@@ -851,7 +855,8 @@ export function ChatView({
             {to}
             <span className="cv-meta">{stamp(e.ts_ms)}</span>
           </div>
-          <div className="cv-bubble">{e.text.replace(PLAN_PREFIX, "")}</div>
+          {said && <div className="cv-bubble">{said}</div>}
+          {shots.length > 0 && gallery(shots)}
           {r === lastUser && receipt(e)}
         </div>
       );

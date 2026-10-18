@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { addAgentTerminal, getLayout, removePanel, setRespawnResolver, useLayout } from "../store";
 import type { Panel } from "../store";
 import {
@@ -42,12 +44,13 @@ import type { DAgent, DispatchState } from "../lib/dispatcher";
 import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, savePrefs } from "../lib/agentPrefs";
 import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
-import { projectInfo, projectRecent } from "../lib/project";
+import { projectInfo, projectRecent, projectSaveImage } from "../lib/project";
 import type { ProjectInfo } from "../lib/project";
 import { currentTeamChat, inWindow, useChats } from "../lib/chats";
 import { LATEST, resetCommand, withResume } from "../lib/resume";
 import { useTermActivity } from "../lib/activity";
-import { eventImages, isNotice, samePath } from "../lib/timeline";
+import { askPhrase, eventImages, isDispatch, isNotice, parseTask, samePath } from "../lib/timeline";
+import { notify } from "../lib/notify";
 import type { Chat } from "../lib/chats";
 import { AgentQuickCmds } from "./AgentCard";
 import { ChatView } from "./ChatView";
@@ -85,6 +88,7 @@ type Overlay = "team" | "tasks" | "newchat" | null;
 const SHOOT_KEY = "lienzo.shoot.v1";
 const CHATS_MIN_KEY = "lienzo.chatsmin.v1";
 const DISPATCH_KEY = "lienzo.dispatch.v1";
+const NOTIFY_KEY = "lienzo.notify.v1";
 
 /** Ruido de conexión que no aporta a una conversación: nunca se muestra en el chat. */
 const HIDDEN_KINDS = new Set(["join", "leave", "session", "stop", "prompt"]);
@@ -166,6 +170,9 @@ export function CommandCenter() {
   const [diffTask, setDiffTask] = useState<number | null>(null);
   const [previewRel, setPreviewRel] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  /** Capturas pegadas o arrastradas al compositor, ya guardadas en el proyecto. */
+  const [shots, setShots] = useState<{ path: string; preview: string }[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const [prefs, setPrefs] = useState<Record<string, AgentPref>>(loadPrefs);
   const [catalogs, setCatalogs] = useState<Record<string, ModelCatalog | null | undefined>>({});
@@ -1028,7 +1035,14 @@ export function CommandCenter() {
   /** Send the composer. Supports mentions (@todos, @lider, @agente) and the
    * Planificar / Ejecutar trigger. */
   const send = async () => {
-    const raw = draft.trim();
+    // Las capturas adjuntas viajan como rutas: el agente las abre con su herramienta de leer archivos.
+    const att =
+      shots.length === 0
+        ? ""
+        : `📎 ${shots.length === 1 ? "Captura adjunta" : "Capturas adjuntas"}: ${shots
+            .map((s) => s.path)
+            .join(" · ")} (ábrela${shots.length === 1 ? "" : "s"} para ver${shots.length === 1 ? "la" : "las"})`;
+    const raw = [draft.trim(), att].filter(Boolean).join("\n");
     if (!raw) return;
 
     let target: Sel = dest;
@@ -1067,6 +1081,7 @@ export function CommandCenter() {
 
     const clear = () => {
       setDraft("");
+      setShots([]);
       if (areaRef.current) areaRef.current.style.height = "auto";
     };
 
@@ -1125,6 +1140,55 @@ export function CommandCenter() {
       say(errMsg(e), true);
     }
   };
+
+  /** Guarda las imágenes pegadas o arrastradas y las deja listas para ir con el mensaje. */
+  const attachImages = async (files: File[]) => {
+    const imgs = files.filter((f) => f.type.startsWith("image/"));
+    if (imgs.length === 0) return false;
+    if (!project) {
+      say("Elige antes la carpeta del proyecto: las capturas se guardan en ella.", true);
+      return true;
+    }
+    for (const f of imgs.slice(0, 6)) {
+      try {
+        const preview = await new Promise<string>((ok, ko) => {
+          const r = new FileReader();
+          r.onload = () => ok(String(r.result));
+          r.onerror = () => ko(r.error);
+          r.readAsDataURL(f);
+        });
+        const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+        const path = await projectSaveImage(project, preview.slice(preview.indexOf(",") + 1), ext);
+        setShots((cur) => [...cur, { path, preview }]);
+      } catch (e) {
+        say(`No pude guardar la imagen: ${errMsg(e)}`, true);
+      }
+    }
+    return true;
+  };
+
+  // Arrastrar imágenes a la ventana: Tauri entrega las rutas reales (no hace falta copiarlas).
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const un = getCurrentWebview().onDragDropEvent((ev) => {
+      const t = ev.payload.type;
+      if (t === "enter" || t === "over") setDragOver(true);
+      else if (t === "leave") setDragOver(false);
+      else if (t === "drop") {
+        setDragOver(false);
+        const imgs = ev.payload.paths.filter((x) => /.(png|jpe?g|gif|webp|bmp)$/i.test(x)).slice(0, 6);
+        for (const path of imgs) {
+          invoke<string>("image_data", { path, project: null })
+            .then((preview) => setShots((cur) => (cur.some((x) => x.path === path) ? cur : [...cur, { path, preview }])))
+            .catch(() => say(`No pude abrir ${path}`, true));
+        }
+        if (imgs.length === 0 && ev.payload.paths.length > 0) say("Solo se pueden adjuntar imágenes.", true);
+      }
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [say]);
 
   /** Opciones del selector de destino del compositor (@equipo, líder y agentes). */
   const destNames = useMemo(() => {
@@ -1251,6 +1315,63 @@ export function CommandCenter() {
     }
     return out;
   }, [roster, activity, state, layout.panels, sel]);
+
+  // ---- Avisos de Windows (solo si lienzo no está delante) ------------------------------
+  const [notifyOn, setNotifyOn] = useState(() => loadFlag(NOTIFY_KEY, true));
+  const notifSeq = useRef<number | null>(null);
+  const lateWarned = useRef<Set<number>>(new Set());
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const toggleNotify = () =>
+    setNotifyOn((on) => {
+      saveFlag(NOTIFY_KEY, !on);
+      say(on ? "Avisos de Windows desactivados." : "Avisos de Windows activados: te aviso si un agente te necesita.");
+      return !on;
+    });
+
+  // Lo nuevo del feed: alguien pide permiso, termina una tarea o te responde.
+  useEffect(() => {
+    const evs = state?.events ?? [];
+    const top = evs[0]?.seq ?? 0;
+    // Lo que ya había al abrir lienzo no se avisa.
+    if (notifSeq.current === null || !notifyOn) {
+      if (evs.length > 0) notifSeq.current = top;
+      return;
+    }
+    const since = notifSeq.current;
+    notifSeq.current = Math.max(since, top);
+    const team = new Set(roster.map((a) => a.name));
+    for (const e of evs.filter((x) => x.seq > since).reverse()) {
+      if (e.agent === "tú" || !team.has(e.agent)) continue;
+      const who = agentLabel(e.agent);
+      if (e.kind === "waiting" && !isNotice(e)) {
+        notify(`${who} necesita tu respuesta`, `Pide ${askPhrase(e.text)}.`);
+      } else if (e.kind === "task") {
+        const t = parseTask(e);
+        if (t?.op === "hecha") notify(`${who} terminó la tarea #${t.id}`, t.detail || "Tarea hecha.");
+      } else if (e.kind === "reply" || (e.kind === "message" && e.to === "tú")) {
+        notify(`${who} respondió`, e.text.replace(/\s+/g, " ").slice(0, 160));
+      }
+    }
+  }, [state, notifyOn, roster]);
+
+  // Tu último mensaje a un agente lleva 3 minutos sin respuesta y el agente no está trabajando.
+  useEffect(() => {
+    if (!notifyOn) return;
+    const id = window.setInterval(() => {
+      const evs = latestRef.current?.events ?? [];
+      const mine = evs.find((e) => e.agent === "tú" && e.kind === "message" && !!e.to && !isDispatch(e));
+      if (!mine || lateWarned.current.has(mine.seq)) return;
+      const age = Date.now() - mine.ts_ms;
+      if (age < 180_000 || age > 30 * 60_000) return;
+      const a = mine.to as string;
+      if (evs.some((e) => e.agent === a && e.seq > mine.seq)) return;
+      if (liveRef.current.some((l) => l.name === a && l.busy)) return;
+      lateWarned.current.add(mine.seq);
+      notify(`${agentLabel(a)} no ha respondido`, "Lleva 3 minutos sin contestar a tu mensaje. Mira su terminal en lienzo.");
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [notifyOn]);
 
   /** Abre un archivo que sale en el chat: en el preview si es del proyecto. */
   const openPath = (path: string) => {
@@ -1384,10 +1505,103 @@ export function CommandCenter() {
     </>
   );
 
+  /**
+   * Retomar un chat cerrado con su memoria: abre un chat nuevo que lo continúa y reabre a cada
+   * agente con la conversación que tenía en él (los que no estuvieron, empiezan de cero).
+   */
+  const resumeChat = async (old: Chat) => {
+    const chat = chats.create("team", undefined, `↩ ${old.title.replace(/^↩\s*/, "")}`);
+    const refs = old.sessions ?? {};
+    for (const [name, ref] of Object.entries(refs)) chats.setSession(chat.id, name, ref);
+    let resumed = 0;
+    for (const p of getLayout().panels) {
+      if (p.kind !== "terminal" || !p.cmd) continue;
+      const name = agentKeyFromCmd(p.cmd);
+      const ref = refs[name];
+      if (ref) {
+        // Se cierra su terminal y se abre otra retomando la conversación de aquel chat.
+        if (p.sessionId) await termKill(p.sessionId).catch(() => {});
+        removePanel(p.id);
+        addAgentTerminal(agentLabel(name), withResume(p.cmd, ref));
+        resumed++;
+      } else if (p.sessionId) {
+        const reset = resetCommand(name);
+        if (reset) await termWrite(p.sessionId, `${reset}\r`).catch(() => {});
+      }
+    }
+    setSel({ kind: "team" });
+    setDest({ kind: "team" });
+    setView("feed");
+    say(
+      resumed > 0
+        ? `↩ Retomado «${old.title}»: ${resumed === 1 ? "1 agente vuelve" : `${resumed} agentes vuelven`} a su conversación de entonces.`
+        : "Ese chat no tiene conversaciones guardadas de los agentes; empiezan de cero.",
+    );
+  };
+
+  /** Barra sobre el compositor cuando miras un chat del equipo ya cerrado. */
+  const closedBar =
+    view === "feed" && sel.kind === "team" && activeChat?.kind === "team" && activeChat.endMs != null ? (
+      <div className="cc-closed">
+        <Icon name="book" size={14} />
+        <span>
+          Este chat está cerrado. Si escribes, se abre uno nuevo
+          {Object.keys(activeChat.sessions ?? {}).length > 0 ? "; o retómalo con la memoria que tenían los agentes." : "."}
+        </span>
+        {Object.keys(activeChat.sessions ?? {}).length > 0 && (
+          <button className="cc-btn" onClick={() => void resumeChat(activeChat)}>
+            <Icon name="refresh" size={13} />
+            Retomar con su memoria
+          </button>
+        )}
+      </div>
+    ) : null;
+
   const composer = (
     <div className="cc-comp">
-      <div className="cc-cbox">
+      <div
+        className="cc-cbox"
+        data-drop={dragOver ? "1" : "0"}
+        onDragOver={(e) => {
+          if ([...e.dataTransfer.items].some((i) => i.type.startsWith("image/"))) {
+            e.preventDefault();
+            setDragOver(true);
+          }
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          setDragOver(false);
+          const files = [...e.dataTransfer.files];
+          if (files.some((f) => f.type.startsWith("image/"))) {
+            e.preventDefault();
+            void attachImages(files);
+          }
+        }}
+      >
+        {shots.length > 0 && (
+          <div className="cc-shots">
+            {shots.map((s) => (
+              <span className="cc-shot" key={s.path} title={s.path}>
+                <img src={s.preview} alt="" />
+                <button
+                  onClick={() => setShots((cur) => cur.filter((x) => x.path !== s.path))}
+                  aria-label="Quitar la captura"
+                  title="Quitar"
+                >
+                  <Icon name="x" size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <textarea
+          onPaste={(e) => {
+            const files = [...e.clipboardData.files];
+            if (files.some((f) => f.type.startsWith("image/"))) {
+              e.preventDefault();
+              void attachImages(files);
+            }
+          }}
           ref={areaRef}
           rows={1}
           value={draft}
@@ -1428,7 +1642,7 @@ export function CommandCenter() {
             </button>
           </div>
           <span className="cc-c-grow" />
-          <button className="cc-send" disabled={!draft.trim()} onClick={send} aria-label="Enviar" title="Enviar">
+          <button className="cc-send" disabled={!draft.trim() && shots.length === 0} onClick={send} aria-label="Enviar" title="Enviar">
             <Icon name="send" />
           </button>
         </div>
@@ -1481,6 +1695,18 @@ export function CommandCenter() {
             {hubOk ? "Hub conectado" : "Hub sin conexión"}
           </button>
           <div className="cc-modes">
+            <button
+              onClick={toggleNotify}
+              data-off={notifyOn ? "0" : "1"}
+              title={
+                notifyOn
+                  ? "Avisos de Windows activados: te aviso si un agente pide permiso, termina o te responde (pulsa para silenciar)"
+                  : "Avisos de Windows silenciados (pulsa para activarlos)"
+              }
+              aria-label={notifyOn ? "Silenciar avisos" : "Activar avisos"}
+            >
+              <Icon name={notifyOn ? "bell" : "belloff"} size={15} />
+            </button>
             <button
               onClick={() => openDrawer(true)}
               title="Ajustes del equipo: agentes, normas y proyecto"
@@ -1655,6 +1881,7 @@ export function CommandCenter() {
               </div>
             ))}
 
+          {closedBar}
           {composer}
         </section>
       </div>

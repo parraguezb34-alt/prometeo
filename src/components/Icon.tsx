@@ -36,6 +36,10 @@ const PATHS: Record<string, ReactNode> = {
   x: <path d="M18 6 6 18M6 6l12 12" />,
   trash: <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" />,
   chev: <path d="m6 9 6 6 6-6" />,
+  bell: <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />,
+  belloff: (
+    <path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7M10.3 21a1.94 1.94 0 0 0 3.4 0M2 2l20 20" />
+  ),
   pencil: <path d="M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5z" />,
   shrink: <path d="m4 14 6 0 0 6M20 10l-6 0 0-6M14 10l7-7M3 21l7-7" />,
   shield: (

@@ -55,6 +55,14 @@ export function isNotice(e: TeamEvent): boolean {
   return e.kind === "waiting" && /successful/i.test(e.text);
 }
 
+/** Qué pide un agente, en castellano («Claude needs your permission to use Bash» → «permiso para usar Bash»). */
+export function askPhrase(text: string): string {
+  const perm = /permission to use ([\w.:-]+)/i.exec(text);
+  if (perm) return `permiso para usar ${perm[1]}`;
+  if (/waiting for your input|needs your (input|attention)/i.test(text)) return "tu respuesta";
+  return text;
+}
+
 /** Lee un aviso de tarea del hub. */
 export function parseTask(e: TeamEvent): TaskInfo | null {
   if (e.kind !== "task") return null;

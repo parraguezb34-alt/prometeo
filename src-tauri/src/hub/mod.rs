@@ -10,6 +10,7 @@
 
 pub mod client;
 pub mod connectors;
+pub mod mirror;
 pub mod server;
 
 use serde::{Deserialize, Serialize};
@@ -1152,6 +1153,9 @@ pub fn init(app: AppHandle) -> Result<(), String> {
     std::thread::spawn(move || {
         server::serve(server, app2);
     });
+
+    // Lo que hacen OpenCode y Antigravity (sin hooks), leído de sus conversaciones en disco.
+    mirror::start(app.clone());
 
     // Housekeeping: drop agents that stopped heartbeating.
     let app3 = app.clone();

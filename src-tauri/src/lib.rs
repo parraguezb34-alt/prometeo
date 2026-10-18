@@ -6,6 +6,7 @@ mod pty;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(pty::PtyManager::default())
         .setup(|app| {
             if let Err(e) = hub::init(app.handle().clone()) {
@@ -49,6 +50,7 @@ pub fn run() {
             project::project_commit_paths,
             project::project_revert_paths,
             project::image_data,
+            project::project_save_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
