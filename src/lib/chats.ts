@@ -24,6 +24,8 @@ export type Chat = {
   createdMs: number;
   /** Conversación de cada agente en este chat (id del CLI, o «*» = la última de la carpeta). */
   sessions?: Record<string, string>;
+  /** Chat que este retoma («Retomar con su memoria»): su historial y sus tareas siguen aquí. */
+  from?: string;
 };
 
 /** El chat del equipo que está abierto ahora: a él pertenecen las conversaciones de los agentes. */
@@ -83,6 +85,24 @@ export function inWindow(chat: Chat, e: TeamEvent): boolean {
   return chat.endMs == null || e.ts_ms < chat.endMs;
 }
 
+/** El chat y los que retoma, del más nuevo al más viejo. */
+export function chatLineage(chat: Chat, chats: Chat[]): Chat[] {
+  const out = [chat];
+  let cur = chat;
+  while (cur.from && out.length < 20) {
+    const prev = chats.find((c) => c.id === cur.from);
+    if (!prev || out.includes(prev)) break;
+    out.push(prev);
+    cur = prev;
+  }
+  return out;
+}
+
+/** ¿Este instante cae en el chat o en alguno de los que retoma? */
+export function inChat(lineage: Chat[], ts: number): boolean {
+  return lineage.some((c) => ts >= c.startMs && (c.endMs == null || ts < c.endMs));
+}
+
 /** Eventos de un chat: todo el feed (equipo) o lo que toca a ese agente. */
 export function chatEvents(chat: Chat, events: TeamEvent[]): TeamEvent[] {
   return events.filter((e) => {
@@ -126,7 +146,7 @@ export function useChats(project: string | null) {
 
   /** Abre un chat nuevo y cierra el anterior del mismo ámbito. */
   const create = useCallback(
-    (kind: "team" | "agent", agent?: string, title?: string): Chat => {
+    (kind: "team" | "agent", agent?: string, title?: string, from?: string): Chat => {
       const now = Date.now();
       const chat: Chat = {
         id: newId(now),
@@ -136,6 +156,7 @@ export function useChats(project: string | null) {
         autoTitle: title == null,
         startMs: now,
         createdMs: now,
+        from,
       };
       update((prev) => [
         chat,

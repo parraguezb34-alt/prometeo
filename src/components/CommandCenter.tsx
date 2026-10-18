@@ -46,7 +46,7 @@ import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
 import { projectInfo, projectRecent, projectSaveImage } from "../lib/project";
 import type { ProjectInfo } from "../lib/project";
-import { currentTeamChat, inWindow, useChats } from "../lib/chats";
+import { chatLineage, currentTeamChat, inChat, useChats } from "../lib/chats";
 import { LATEST, resetCommand, withResume } from "../lib/resume";
 import { useTermActivity } from "../lib/activity";
 import { askPhrase, eventImages, isDispatch, isNotice, parseTask, samePath } from "../lib/timeline";
@@ -314,8 +314,6 @@ export function CommandCenter() {
     return list;
   }, [agents, detect]);
   const leader = state?.leader ?? "";
-  const done = tasks.filter((t) => t.status === "done").length;
-  const total = tasks.length;
 
   // Latest activity per agent (joins/leaves aside) → cards + bloqueos.
   const lastByAgent = useMemo(() => {
@@ -348,6 +346,28 @@ export function CommandCenter() {
   // newest first). Agent chats show that agent's events; the team chat is the
   // whole feed (messages as bubbles, the rest as system lines).
   const activeChat = chats.active;
+  // El chat y los que retoma: un chat retomado sigue mostrando la historia y las tareas del original.
+  const lineage = useMemo(() => (activeChat ? chatLineage(activeChat, chats.chats) : []), [activeChat, chats.chats]);
+  const inActive = (ts: number) => lineage.length === 0 || inChat(lineage, ts);
+
+  // Las tareas son del proyecto, pero cada chat muestra las suyas: las que nacieron en él o que
+  // alguien tomó o cerró en él. Las que quedaron sin terminar en chats anteriores van aparte.
+  const { chatTasks, earlierTasks } = useMemo(() => {
+    if (lineage.length === 0) return { chatTasks: tasks, earlierTasks: [] as TeamTask[] };
+    const touched = new Set<number>();
+    for (const e of state?.events ?? []) {
+      if (e.kind !== "task" || !inChat(lineage, e.ts_ms)) continue;
+      const t = parseTask(e);
+      if (t) touched.add(t.id);
+    }
+    const mine = tasks.filter((t) => inChat(lineage, t.created_ms) || touched.has(t.id));
+    const first = Math.min(...lineage.map((c) => c.startMs));
+    const earlier = tasks.filter((t) => !mine.includes(t) && t.status !== "done" && t.created_ms < first);
+    return { chatTasks: mine, earlierTasks: earlier };
+  }, [tasks, lineage, state]);
+  const done = chatTasks.filter((t) => t.status === "done").length;
+  const total = chatTasks.length;
+
   const msgs = useMemo(() => {
     const all = (state?.events ?? []).slice().reverse();
     const base =
@@ -355,17 +375,17 @@ export function CommandCenter() {
         ? all
         : all.filter((e) => e.agent === sel.name || e.to === sel.name || (e.kind === "broadcast" && e.agent === "tú"));
     // Cada chat solo muestra su ventana de tiempo.
-    const windowed = activeChat ? base.filter((e) => inWindow(activeChat, e)) : base;
+    const windowed = base.filter((e) => inActive(e.ts_ms));
     const list = windowed.filter((e) => !HIDDEN_KINDS.has(e.kind));
     // Capturas nuevas del proyecto que ningún evento mencionó ya.
     const extra = newImages.filter(
       (img) =>
-        (!activeChat || inWindow(activeChat, img)) &&
+        inActive(img.ts_ms) &&
         (sel.kind === "team" || img.agent === sel.name) &&
         !list.some((e) => eventImages(e).some((p) => samePath(p, img.files[0]))),
     );
     return extra.length > 0 ? [...list, ...extra].sort((a, b) => a.ts_ms - b.ts_ms) : list;
-  }, [state, sel, activeChat, newImages]);
+  }, [state, sel, lineage, newImages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Imágenes nuevas en el proyecto (capturas que guardan los agentes): se miran cada poco.
   useEffect(() => {
@@ -1436,16 +1456,24 @@ export function CommandCenter() {
         setDrawerTab("tasks");
         setOverlay("tasks");
       }}
-      title="Tareas, actividad y relevos del equipo"
+      title={
+        total
+          ? `Tareas de este chat: ${done} de ${total} hechas. También actividad, relevos y memoria.`
+          : "Tareas de este chat, actividad, relevos y memoria"
+      }
     >
       <Icon name="list" size={14} />
       Tareas
-      <span className="cc-meter sm">
-        <i style={{ width: total ? `${Math.round((done / total) * 100)}%` : "0%" }} />
-      </span>
-      <span className="cc-tasks-n">
-        {done}/{total}
-      </span>
+      {total > 0 && (
+        <>
+          <span className="cc-meter sm">
+            <i style={{ width: `${Math.round((done / total) * 100)}%` }} />
+          </span>
+          <span className="cc-tasks-n">
+            {done}/{total}
+          </span>
+        </>
+      )}
       {blocked.length > 0 && (
         <span className="cc-warnmark">
           <Icon name="warn" size={14} />
@@ -1524,7 +1552,7 @@ export function CommandCenter() {
    * agente con la conversación que tenía en él (los que no estuvieron, empiezan de cero).
    */
   const resumeChat = async (old: Chat) => {
-    const chat = chats.create("team", undefined, `↩ ${old.title.replace(/^↩\s*/, "")}`);
+    const chat = chats.create("team", undefined, `↩ ${old.title.replace(/^↩\s*/, "")}`, old.id);
     const refs = old.sessions ?? {};
     for (const [name, ref] of Object.entries(refs)) chats.setSession(chat.id, name, ref);
     let resumed = 0;
@@ -1956,8 +1984,15 @@ export function CommandCenter() {
 
       {overlay === "tasks" && (
         <TasksDrawer
-          tasks={tasks}
-          events={(state?.events ?? []).filter((e) => !HIDDEN_KINDS.has(e.kind))}
+          tasks={chatTasks}
+          earlier={earlierTasks}
+          allTasks={tasks}
+          chatTitle={activeChat?.title ?? "Conversación del equipo"}
+          events={(state?.events ?? []).filter((e) => !HIDDEN_KINDS.has(e.kind) && inActive(e.ts_ms))}
+          onOpenPath={(p) => {
+            setOverlay(null);
+            openPath(p);
+          }}
           agentNames={agents.map((a) => a.name)}
           blocked={blockedNames}
           lastByAgent={lastByAgent}
