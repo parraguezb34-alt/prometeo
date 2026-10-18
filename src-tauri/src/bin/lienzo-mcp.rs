@@ -111,12 +111,35 @@ fn render_context(state: &Value) -> String {
                 "#{} {} [{}]",
                 t["id"].as_u64().unwrap_or(0),
                 trunc(t["title"].as_str().unwrap_or(""), 60),
-                t["status"].as_str().unwrap_or("open")
+                task_flag(t, tasks)
             )
         })
         .collect();
     if !open.is_empty() {
         out.push_str(&format!("Tareas abiertas: {}\n", open.join(" · ")));
+    }
+    // Entregas de tareas hechas de las que aún depende trabajo pendiente.
+    let delivered: Vec<String> = tasks
+        .iter()
+        .filter(|t| t["status"].as_str().unwrap_or("") == "done" && !t["result"].is_null())
+        .filter(|t| {
+            let id = t["id"].as_u64().unwrap_or(0);
+            tasks.iter().any(|o| {
+                o["status"].as_str().unwrap_or("") != "done"
+                    && o["parents"].as_array().map(|p| p.iter().any(|x| x.as_u64() == Some(id))).unwrap_or(false)
+            })
+        })
+        .take(4)
+        .map(|t| {
+            format!(
+                "#{} entregó: {}",
+                t["id"].as_u64().unwrap_or(0),
+                trunc(t["result"]["summary"].as_str().unwrap_or(""), 140)
+            )
+        })
+        .collect();
+    if !delivered.is_empty() {
+        out.push_str(&format!("Entregas previas: {}\n", delivered.join(" · ")));
     }
 
     let claims = state["claims"].as_array().unwrap_or(&empty);
@@ -196,6 +219,29 @@ fn render_feed(feed: &Value) -> String {
         .join("\n")
 }
 
+/// Estado legible de una tarea: «open·lista», «open·bloqueada por #1,#2», «claimed», «done».
+fn task_flag(t: &Value, tasks: &[Value]) -> String {
+    let status = t["status"].as_str().unwrap_or("open");
+    if status != "open" {
+        return status.to_string();
+    }
+    let unmet: Vec<String> = t["parents"]
+        .as_array()
+        .map(|p| {
+            p.iter()
+                .filter_map(|x| x.as_u64())
+                .filter(|id| tasks.iter().any(|o| o["id"].as_u64() == Some(*id) && o["status"].as_str().unwrap_or("") != "done"))
+                .map(|id| format!("#{id}"))
+                .collect()
+        })
+        .unwrap_or_default();
+    if unmet.is_empty() {
+        "open·lista".to_string()
+    } else {
+        format!("open·bloqueada por {}", unmet.join(","))
+    }
+}
+
 fn render_tasks(state: &Value) -> String {
     let empty = vec![];
     let tasks = state["tasks"].as_array().unwrap_or(&empty);
@@ -208,7 +254,7 @@ fn render_tasks(state: &Value) -> String {
         lines.push(format!(
             "#{} [{}]{} {}",
             t["id"].as_u64().unwrap_or(0),
-            t["status"].as_str().unwrap_or("open"),
+            task_flag(t, tasks),
             if owner.is_empty() {
                 String::new()
             } else {
@@ -216,6 +262,9 @@ fn render_tasks(state: &Value) -> String {
             },
             trunc(t["title"].as_str().unwrap_or(""), 120)
         ));
+        if t["status"].as_str().unwrap_or("") == "done" && !t["result"].is_null() {
+            lines.push(format!("   ↳ entrega: {}", trunc(t["result"]["summary"].as_str().unwrap_or(""), 160)));
+        }
     }
     lines.join("\n")
 }
@@ -300,12 +349,13 @@ fn tools_catalog() -> Value {
         },
         {
             "name": "team_task_create",
-            "description": "Crea una tarea en el tablero compartido.",
+            "description": "Crea una tarea en el tablero compartido. Con `parents` (ids de otras tareas) queda bloqueada hasta que todas ellas estén hechas: así se ordena el trabajo y lo independiente corre en paralelo.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "title": { "type": "string" },
-                    "notes": { "type": "string" }
+                    "notes": { "type": "string" },
+                    "parents": { "type": "array", "items": { "type": "integer" }, "description": "Ids de las tareas que deben estar hechas antes de esta (opcional)" }
                 },
                 "required": ["title"]
             }
@@ -317,7 +367,7 @@ fn tools_catalog() -> Value {
         },
         {
             "name": "team_task_claim",
-            "description": "Marca una tarea como tuya (en progreso).",
+            "description": "Marca una tarea como tuya (en progreso). Falla si ya es de otro agente o si espera a tareas aún sin hacer. Al reclamar recibes las entregas de las tareas de las que depende.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "id": { "type": "integer" } },
@@ -326,14 +376,17 @@ fn tools_catalog() -> Value {
         },
         {
             "name": "team_task_done",
-            "description": "Marca una tarea como completada.",
+            "description": "Cierra una tarea con su entrega: qué hiciste, qué archivos tocaste y cómo lo comprobaste. Las tareas que dependen de esta recibirán tu entrega al reclamarlas.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "id": { "type": "integer" },
-                    "notes": { "type": "string", "description": "Resultado o notas finales" }
+                    "summary": { "type": "string", "description": "Qué hiciste y qué decidiste (obligatorio)" },
+                    "files": { "type": "array", "items": { "type": "string" }, "description": "Archivos que tocaste" },
+                    "evidence": { "type": "string", "description": "Cómo lo comprobaste (tests, comando, resultado)" },
+                    "notes": { "type": "string", "description": "Alias antiguo de summary" }
                 },
-                "required": ["id"]
+                "required": ["id", "summary"]
             }
         },
         {
@@ -426,17 +479,23 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
         "team_task_create" => {
             let title = trunc(args["title"].as_str().unwrap_or(""), 200);
             let notes = trunc(args["notes"].as_str().unwrap_or(""), 500);
+            let parents: Vec<u64> = args["parents"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
+                .unwrap_or_default();
             client
                 .post(
                     "/task",
-                    &json!({ "session_id": sid, "op": "create", "title": title, "notes": notes }),
+                    &json!({ "session_id": sid, "op": "create", "title": title, "notes": notes, "parents": parents }),
                 )
                 .map(|v| {
+                    let blocked = v["task"]["parents"].as_array().map(|p| !p.is_empty()).unwrap_or(false);
                     text_result(
                         &format!(
-                            "tarea #{} creada: {}",
+                            "tarea #{} creada: {}{}",
                             v["task"]["id"].as_u64().unwrap_or(0),
-                            v["task"]["title"].as_str().unwrap_or("")
+                            v["task"]["title"].as_str().unwrap_or(""),
+                            if blocked { " (bloqueada hasta que terminen sus padres)" } else { "" }
                         ),
                         false,
                     )
@@ -449,20 +508,43 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
             let id = args["id"].as_u64().unwrap_or(0);
             let op = if name == "team_task_claim" { "claim" } else { "done" };
             let notes = trunc(args["notes"].as_str().unwrap_or(""), 500);
+            let summary = trunc(args["summary"].as_str().unwrap_or(""), 1500);
+            let evidence = trunc(args["evidence"].as_str().unwrap_or(""), 500);
+            let files = str_array(&args["files"]);
             client
                 .post(
                     "/task",
-                    &json!({ "session_id": sid, "op": op, "id": id, "notes": notes }),
+                    &json!({
+                        "session_id": sid, "op": op, "id": id,
+                        "notes": notes, "summary": summary, "evidence": evidence, "files": files
+                    }),
                 )
                 .map(|v| {
-                    text_result(
-                        &format!(
-                            "tarea #{} ahora está: {}",
-                            v["task"]["id"].as_u64().unwrap_or(0),
-                            v["task"]["status"].as_str().unwrap_or("")
-                        ),
-                        false,
-                    )
+                    let mut msg = format!(
+                        "tarea #{} ahora está: {}",
+                        v["task"]["id"].as_u64().unwrap_or(0),
+                        v["task"]["status"].as_str().unwrap_or("")
+                    );
+                    if let Some(list) = v["parents_results"].as_array().filter(|l| !l.is_empty()) {
+                        msg.push_str("\n\nEntregas de las tareas de las que depende (léelas antes de empezar):");
+                        for r in list {
+                            msg.push_str(&format!(
+                                "\n- #{} {} ({}): {}",
+                                r["id"].as_u64().unwrap_or(0),
+                                trunc(r["title"].as_str().unwrap_or(""), 80),
+                                r["by"].as_str().unwrap_or("?"),
+                                trunc(r["summary"].as_str().unwrap_or(""), 600)
+                            ));
+                            let rf = str_array(&r["files"]);
+                            if !rf.is_empty() {
+                                msg.push_str(&format!("\n  archivos: {}", rf.join(", ")));
+                            }
+                            if let Some(ev) = r["evidence"].as_str().filter(|e| !e.is_empty()) {
+                                msg.push_str(&format!("\n  evidencia: {}", trunc(ev, 300)));
+                            }
+                        }
+                    }
+                    text_result(&msg, false)
                 })
         }
         "team_claim_files" => {

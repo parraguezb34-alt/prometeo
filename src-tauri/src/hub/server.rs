@@ -408,6 +408,30 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
         .take(200)
         .collect();
     let notes: String = payload["notes"].as_str().unwrap_or("").chars().take(500).collect();
+    let parents_in: Vec<u64> = payload["parents"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
+        .unwrap_or_default();
+    // Entrega al cerrar: resumen (o las notas de siempre), archivos y evidencia.
+    let summary: String = payload["summary"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(payload["notes"].as_str().unwrap_or(""))
+        .trim()
+        .chars()
+        .take(1500)
+        .collect();
+    let evidence: String = payload["evidence"].as_str().unwrap_or("").trim().chars().take(500).collect();
+    let files_in: Vec<String> = payload["files"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.chars().take(260).collect::<String>())
+                .take(40)
+                .collect()
+        })
+        .unwrap_or_default();
 
     let out = hub::with_inner(app, |inner| -> Result<Value, String> {
         let (agent, sid) = hub::agent_label(inner, &sid, payload["agent"].as_str());
@@ -416,6 +440,7 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 if title.is_empty() {
                     return Err("la tarea necesita un título".into());
                 }
+                let parents = hub::check_parents(&inner.tasks, &parents_in)?;
                 inner.task_seq += 1;
                 let task = hub::Task {
                     id: inner.task_seq,
@@ -425,6 +450,8 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                     notes,
                     created_ms: hub::now_ms(),
                     handover: None,
+                    parents,
+                    result: None,
                 };
                 inner.tasks.push(task.clone());
                 hub::push_event(
@@ -432,7 +459,16 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                     &agent,
                     &sid,
                     "task",
-                    &format!("#{} creada: {}", task.id, title),
+                    &if task.parents.is_empty() {
+                        format!("#{} creada: {}", task.id, title)
+                    } else {
+                        format!(
+                            "#{} creada: {} (depende de {})",
+                            task.id,
+                            title,
+                            task.parents.iter().map(|p| format!("#{p}")).collect::<Vec<_>>().join(", ")
+                        )
+                    },
                     vec![],
                     None,
                 );
@@ -440,40 +476,119 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 Ok(json!({ "task": task }))
             }
             "claim" | "done" | "reopen" => {
-                let updated = if let Some(pos) = inner.tasks.iter().position(|t| t.id == id) {
-                    {
-                        let task = &mut inner.tasks[pos];
-                        match op.as_str() {
-                            "claim" => {
-                                task.status = "claimed".into();
-                                task.owner = agent.clone();
-                            }
-                            "done" => {
-                                task.status = "done".into();
-                                task.owner = agent.clone();
-                                if !notes.is_empty() {
-                                    task.notes = notes.clone();
-                                }
-                            }
-                            _ => {
-                                task.status = "open".into();
-                                task.owner = String::new();
-                            }
+                let Some(pos) = inner.tasks.iter().position(|t| t.id == id) else {
+                    return Err("tarea no encontrada".into());
+                };
+                let snapshot = inner.tasks[pos].clone();
+                let unmet = hub::unmet_parents(&inner.tasks, &snapshot);
+                let fmt_ids = |v: &[u64]| v.iter().map(|p| format!("#{p}")).collect::<Vec<_>>().join(", ");
+
+                // Un solo ganador: no se pisa la tarea de otro ni se reabre una hecha.
+                match op.as_str() {
+                    "claim" => {
+                        if snapshot.status == "done" {
+                            return Err(format!("la tarea #{id} ya está hecha"));
+                        }
+                        if snapshot.status == "claimed" && !snapshot.owner.is_empty() && snapshot.owner != agent {
+                            return Err(format!(
+                                "la tarea #{id} ya está en manos de {}; elige otra o coordínate con esa persona",
+                                snapshot.owner
+                            ));
+                        }
+                        if !unmet.is_empty() {
+                            return Err(format!(
+                                "la tarea #{id} está bloqueada: espera a {}. Haz primero esas o elige otra tarea lista",
+                                fmt_ids(&unmet)
+                            ));
                         }
                     }
-                    Some(inner.tasks[pos].clone())
-                } else {
-                    None
-                };
-                match updated {
-                    Some(task) => {
-                        let text = format!("#{} {} por {}", task.id, task.status, agent);
-                        hub::push_event(inner, &agent, &sid, "task", &text, vec![], None);
-                        hub::persist(inner);
-                        Ok(json!({ "task": task }))
+                    "done" => {
+                        if snapshot.status == "claimed" && !snapshot.owner.is_empty() && snapshot.owner != agent {
+                            return Err(format!("la tarea #{id} es de {}; no la cierres tú", snapshot.owner));
+                        }
+                        if !unmet.is_empty() {
+                            return Err(format!(
+                                "la tarea #{id} depende de {} que aún no está hecha",
+                                fmt_ids(&unmet)
+                            ));
+                        }
+                        if summary.is_empty() {
+                            return Err(
+                                "cierra la tarea con una entrega: pasa `summary` (qué hiciste y qué decidiste), `files` (qué tocaste) y `evidence` (cómo lo comprobaste)"
+                                    .into(),
+                            );
+                        }
                     }
-                    None => Err("tarea no encontrada".into()),
+                    _ => {}
                 }
+
+                {
+                    let task = &mut inner.tasks[pos];
+                    match op.as_str() {
+                        "claim" => {
+                            task.status = "claimed".into();
+                            task.owner = agent.clone();
+                        }
+                        "done" => {
+                            task.status = "done".into();
+                            task.owner = agent.clone();
+                            task.result = Some(hub::TaskResult {
+                                summary: summary.clone(),
+                                files: files_in.clone(),
+                                evidence: evidence.clone(),
+                                by: agent.clone(),
+                                ts_ms: hub::now_ms(),
+                            });
+                            if !notes.is_empty() {
+                                task.notes = notes.clone();
+                            }
+                        }
+                        _ => {
+                            task.status = "open".into();
+                            task.owner = String::new();
+                            task.result = None;
+                        }
+                    }
+                }
+                let task = inner.tasks[pos].clone();
+                let (text, ev_files) = if op == "done" {
+                    (
+                        format!(
+                            "#{} hecha por {}: {}",
+                            task.id,
+                            agent,
+                            summary.chars().take(160).collect::<String>()
+                        ),
+                        files_in.clone(),
+                    )
+                } else {
+                    (format!("#{} {} por {}", task.id, task.status, agent), vec![])
+                };
+                hub::push_event(inner, &agent, &sid, "task", &text, ev_files, None);
+                hub::persist(inner);
+
+                // Al reclamar, el agente recibe las entregas de las tareas de las que depende.
+                let parents_results: Vec<Value> = if op == "claim" {
+                    task.parents
+                        .iter()
+                        .filter_map(|p| inner.tasks.iter().find(|t| t.id == *p))
+                        .filter_map(|t| {
+                            t.result.as_ref().map(|r| {
+                                json!({
+                                    "id": t.id,
+                                    "title": t.title,
+                                    "by": r.by,
+                                    "summary": r.summary,
+                                    "files": r.files,
+                                    "evidence": r.evidence,
+                                })
+                            })
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                };
+                Ok(json!({ "task": task, "parents_results": parents_results }))
             }
             "list" => Ok(json!({ "tasks": inner.tasks })),
             _ => Err("operación de tarea desconocida".into()),

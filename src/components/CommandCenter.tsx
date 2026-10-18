@@ -726,9 +726,9 @@ export function CommandCenter() {
     return names;
   }, [agents, leader, dest]);
 
-  const addTask = async (title: string) => {
+  const addTask = async (title: string, parents: number[] = []) => {
     try {
-      await teamAddTask(title);
+      await teamAddTask(title, parents);
       refresh();
     } catch (e) {
       say(errMsg(e), true);

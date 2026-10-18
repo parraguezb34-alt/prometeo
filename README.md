@@ -90,9 +90,12 @@ lienzo es un **centro de mando conversacional para dirigir un equipo de agentes 
    en `team_context`, en las instrucciones del MCP y en cada prompt vía hooks. El líder
    coordina y reparte; elige uno o deja que sea el primero que conecte.
 3. **Progreso**: el avance (`1/4`) y los bloqueos están siempre en la cabecera; el panel de Tareas lo detalla.
-4. **Tareas**: crea tareas en la pestaña Tareas (o pídeselo a un agente con
-   `team_task_create`); los agentes las reclaman (`team_task_claim`) y las cierran
-   (`team_task_done`) — el progreso se ve en el panel.
+4. **Tareas con dependencias y entrega**: crea tareas en el panel de Tareas (con el candado eliges de cuáles depende) o pídeselo a un agente con
+   `team_task_create` y `parents`. Una tarea con padres queda **bloqueada** hasta que todos estén hechos, así lo independiente
+   corre en paralelo y lo demás espera su turno. Los agentes reclaman (`team_task_claim`) y cierran (`team_task_done`);
+   - **Un solo ganador**: reclamar falla si la tarea ya es de otro agente, si está hecha o si espera a sus padres.
+   - **Entrega estructurada**: cerrar exige `summary` (qué hizo y decidió) y admite `files` y `evidence` (cómo lo comprobó). Se guarda en la tarea y se ve en el panel.
+   - **Los dependientes la reciben**: al reclamar una tarea, el agente recibe las entregas de sus padres; `team_context` también las resume.
 
 ## Relevo con memoria (compactar sin amnesia)
 

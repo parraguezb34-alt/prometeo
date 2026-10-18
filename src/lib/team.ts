@@ -37,6 +37,15 @@ export type TeamHandover = {
   files: string[];
 };
 
+/** Entrega al cerrar una tarea: qué se hizo, dónde y con qué prueba. */
+export type TeamTaskResult = {
+  summary: string;
+  files: string[];
+  evidence: string;
+  by: string;
+  ts_ms: number;
+};
+
 export type TeamTask = {
   id: number;
   title: string;
@@ -46,7 +55,16 @@ export type TeamTask = {
   created_ms: number;
   /** Último relevo con memoria guardado por su dueño (team_handover_save). */
   handover?: TeamHandover | null;
+  /** Tareas que deben estar hechas antes de poder reclamar esta. */
+  parents?: number[];
+  /** Entrega al cerrarla. */
+  result?: TeamTaskResult | null;
 };
+
+/** Ids de los padres de una tarea que aún no están hechos. */
+export function waitingFor(task: TeamTask, tasks: TeamTask[]): number[] {
+  return (task.parents ?? []).filter((id) => tasks.some((t) => t.id === id && t.status !== "done"));
+}
 
 export type TeamClaim = {
   path: string;
@@ -139,8 +157,8 @@ export const teamCharter = (charter: string | null, leader: string | null) =>
 /** Change who coordinates the team (without touching the charter). */
 export const teamLeader = (leader: string | null) =>
   invoke<void>("team_leader", { leader });
-export const teamAddTask = (title: string) =>
-  invoke<void>("team_add_task", { title });
+export const teamAddTask = (title: string, parents: number[] = []) =>
+  invoke<void>("team_add_task", { title, parents });
 export const teamTaskOp = (id: number, op: string) =>
   invoke<void>("team_task_op", { id, op });
 /** Log a direct user message to one agent in the feed (the text is typed into

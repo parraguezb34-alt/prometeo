@@ -74,6 +74,23 @@ pub struct TaskHandover {
     pub files: Vec<String>,
 }
 
+/// Entrega estructurada de una tarea: lo que su dueño deja al cerrarla para que
+/// las tareas que dependen de ella (y tú) sepan qué se hizo, dónde y con qué prueba.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TaskResult {
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// Cómo se comprobó (tests, comando, captura…).
+    #[serde(default)]
+    pub evidence: String,
+    #[serde(default)]
+    pub by: String,
+    #[serde(default)]
+    pub ts_ms: u64,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: u64,
@@ -88,6 +105,35 @@ pub struct Task {
     /// Último relevo guardado por su dueño (qué hizo, decisiones, qué falta).
     #[serde(default)]
     pub handover: Option<TaskHandover>,
+    /// Tareas que deben estar hechas antes de poder reclamar esta.
+    #[serde(default)]
+    pub parents: Vec<u64>,
+    /// Entrega al cerrarla (resumen, archivos y evidencia).
+    #[serde(default)]
+    pub result: Option<TaskResult>,
+}
+
+/// Padres de `task` que aún no están hechos (un padre que ya no existe cuenta como cumplido).
+pub fn unmet_parents(tasks: &[Task], task: &Task) -> Vec<u64> {
+    task.parents
+        .iter()
+        .copied()
+        .filter(|p| tasks.iter().any(|t| t.id == *p && t.status != "done"))
+        .collect()
+}
+
+/// Valida los padres de una tarea nueva: deben existir y no repetirse.
+pub fn check_parents(tasks: &[Task], parents: &[u64]) -> Result<Vec<u64>, String> {
+    let mut out: Vec<u64> = vec![];
+    for p in parents {
+        if !tasks.iter().any(|t| t.id == *p) {
+            return Err(format!("la tarea padre #{p} no existe"));
+        }
+        if !out.contains(p) {
+            out.push(*p);
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -618,8 +664,13 @@ pub fn team_charter(
 }
 
 #[tauri::command]
-pub fn team_add_task(hub: tauri::State<'_, Hub>, title: String) -> Result<(), String> {
+pub fn team_add_task(
+    hub: tauri::State<'_, Hub>,
+    title: String,
+    parents: Option<Vec<u64>>,
+) -> Result<(), String> {
     let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    let parents = check_parents(&inner.tasks, &parents.unwrap_or_default())?;
     inner.task_seq += 1;
     let id = inner.task_seq;
     inner.tasks.push(Task {
@@ -630,6 +681,8 @@ pub fn team_add_task(hub: tauri::State<'_, Hub>, title: String) -> Result<(), St
         notes: String::new(),
         created_ms: now_ms(),
         handover: None,
+        parents,
+        result: None,
     });
     push_event(
         &mut inner,
@@ -669,6 +722,7 @@ pub fn team_task_op(hub: tauri::State<'_, Hub>, id: u64, op: String) -> Result<(
             "reopen" => {
                 task.status = "open".into();
                 task.owner = String::new();
+                task.result = None; // la entrega anterior ya no vale
             }
             _ => return Err("operación desconocida".into()),
         }
@@ -796,4 +850,49 @@ pub fn with_inner<R>(app: &AppHandle, f: impl FnOnce(&mut HubInner) -> R) -> Opt
     let hub = app.try_state::<Hub>()?;
     let mut inner = hub.0.lock().ok()?;
     Some(f(&mut inner))
+}
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+
+    fn task(id: u64, status: &str, parents: &[u64]) -> Task {
+        Task {
+            id,
+            title: format!("t{id}"),
+            status: status.into(),
+            owner: String::new(),
+            notes: String::new(),
+            created_ms: 0,
+            handover: None,
+            parents: parents.to_vec(),
+            result: None,
+        }
+    }
+
+    #[test]
+    fn unmet_parents_lists_only_pending_ones() {
+        let tasks = vec![task(1, "done", &[]), task(2, "claimed", &[]), task(3, "open", &[1, 2])];
+        assert_eq!(unmet_parents(&tasks, &tasks[2]), vec![2]);
+    }
+
+    #[test]
+    fn missing_parent_counts_as_met() {
+        let tasks = vec![task(3, "open", &[9])];
+        assert!(unmet_parents(&tasks, &tasks[0]).is_empty());
+    }
+
+    #[test]
+    fn check_parents_rejects_unknown_and_dedupes() {
+        let tasks = vec![task(1, "open", &[]), task(2, "open", &[])];
+        assert_eq!(check_parents(&tasks, &[2, 1, 2]).unwrap(), vec![2, 1]);
+        assert!(check_parents(&tasks, &[7]).is_err());
+    }
+
+    #[test]
+    fn old_state_without_new_fields_still_loads() {
+        let json = r#"{"id":1,"title":"x","status":"open","created_ms":5}"#;
+        let t: Task = serde_json::from_str(json).unwrap();
+        assert!(t.parents.is_empty() && t.result.is_none());
+    }
 }

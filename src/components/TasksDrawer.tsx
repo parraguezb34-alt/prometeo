@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { agentColor, agentInitial, agentLabel, ago, shortPath } from "../lib/team";
+import { waitingFor } from "../lib/team";
 import type { TeamEvent, TeamTask } from "../lib/team";
 import { GLYPHS } from "./FeedList";
 import { Icon } from "./Icon";
@@ -44,7 +45,7 @@ export function TasksDrawer({
   onClose: () => void;
   onOpenTask: (id: number) => void;
   onTaskOp: (id: number, op: string) => void;
-  onAddTask: (title: string) => Promise<void>;
+  onAddTask: (title: string, parents: number[]) => Promise<void>;
   onAnswer: (name: string) => void;
   onTerminal: (name: string) => void;
   onSelectAgent: (name: string) => void;
@@ -52,6 +53,8 @@ export function TasksDrawer({
   const [tab, setTab] = useState<"tasks" | "feed" | "memory">(initialTab);
   const [filter, setFilter] = useState<Filter>("all");
   const [draft, setDraft] = useState("");
+  const [deps, setDeps] = useState<number[]>([]);
+  const [depsOpen, setDepsOpen] = useState(false);
 
   const done = tasks.filter((t) => t.status === "done").length;
   const pct = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
@@ -71,8 +74,10 @@ export function TasksDrawer({
   const add = async () => {
     const t = draft.trim();
     if (!t) return;
-    await onAddTask(t);
+    await onAddTask(t, deps);
     setDraft("");
+    setDeps([]);
+    setDepsOpen(false);
   };
 
   return (
@@ -159,7 +164,9 @@ export function TasksDrawer({
                 </div>
               )}
 
-              {shown.map((t) => (
+              {shown.map((t) => {
+                const waiting = waitingFor(t, tasks);
+                return (
                 <div
                   className="cc-td-task"
                   key={t.id}
@@ -175,6 +182,19 @@ export function TasksDrawer({
                   <span className="cc-td-id">#{t.id}</span>
                   <div className="cc-td-main">
                     <div className="cc-td-title">{t.title}</div>
+                    {t.status !== "done" && waiting.length > 0 && (
+                      <div className="cc-td-wait" title="No se puede reclamar hasta que terminen sus tareas padre">
+                        <Icon name="lock" size={12} />
+                        Espera a {waiting.map((id) => `#${id}`).join(", ")}
+                      </div>
+                    )}
+                    {t.status === "done" || waiting.length === 0
+                      ? (t.parents ?? []).length > 0 && (
+                          <div className="cc-td-deps">
+                            Depende de {(t.parents ?? []).map((id) => `#${id}`).join(", ")}
+                          </div>
+                        )
+                      : null}
                     <div className="cc-td-meta">
                       {t.owner ? (
                         <span
@@ -199,6 +219,22 @@ export function TasksDrawer({
                         </span>
                       )}
                     </div>
+                    {t.result && (
+                      <details className="cc-td-result" onClick={(e) => e.stopPropagation()}>
+                        <summary>Entrega de {agentLabel(t.result.by)}</summary>
+                        <p>{t.result.summary}</p>
+                        {t.result.files.length > 0 && (
+                          <div className="cc-td-rfiles">
+                            {t.result.files.map((f) => (
+                              <span className="cc-file-chip" key={f} title={f}>
+                                {shortPath(f)}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {t.result.evidence && <p className="cc-td-evidence">Comprobado: {t.result.evidence}</p>}
+                      </details>
+                    )}
                   </div>
                   <div className="cc-td-side">
                     <span className="cc-td-status" data-s={t.status}>
@@ -218,7 +254,8 @@ export function TasksDrawer({
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </>
           ) : tab === "memory" ? (
             <MemoryTab tasks={tasks} onOpenTask={onOpenTask} onPreview={onPreview} />
@@ -251,19 +288,54 @@ export function TasksDrawer({
         </div>
 
         {tab === "tasks" && (
-          <div className="cc-tdrawer-add">
-            <input
-              type="text"
-              value={draft}
-              placeholder="Nueva tarea…"
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void add();
-              }}
-            />
-            <button className="cc-send-mini" onClick={() => void add()} disabled={!draft.trim()} aria-label="Crear tarea">
-              <Icon name="plus" size={15} />
-            </button>
+          <div className="cc-tdrawer-addwrap">
+            {depsOpen && (
+              <div className="cc-deps-pick">
+                <span className="cc-deps-l">Depende de</span>
+                {tasks.filter((t) => t.status !== "done").length === 0 && (
+                  <span className="cc-deps-none">No hay tareas pendientes.</span>
+                )}
+                {tasks
+                  .filter((t) => t.status !== "done")
+                  .map((t) => (
+                    <button
+                      key={t.id}
+                      className="cc-deps-chip"
+                      data-on={deps.includes(t.id) ? "1" : "0"}
+                      title={t.title}
+                      onClick={() =>
+                        setDeps((cur) => (cur.includes(t.id) ? cur.filter((x) => x !== t.id) : [...cur, t.id]))
+                      }
+                    >
+                      #{t.id}
+                    </button>
+                  ))}
+              </div>
+            )}
+            <div className="cc-tdrawer-add">
+              <input
+                type="text"
+                value={draft}
+                placeholder={deps.length > 0 ? `Nueva tarea (tras ${deps.map((x) => `#${x}`).join(", ")})…` : "Nueva tarea…"}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void add();
+                }}
+              />
+              <button
+                className="cc-deps-btn"
+                data-on={deps.length > 0 ? "1" : "0"}
+                onClick={() => setDepsOpen((o) => !o)}
+                title="Que esta tarea espere a otras"
+                aria-label="Dependencias"
+              >
+                <Icon name="lock" size={14} />
+                {deps.length > 0 ? deps.length : null}
+              </button>
+              <button className="cc-send-mini" onClick={() => void add()} disabled={!draft.trim()} aria-label="Crear tarea">
+                <Icon name="plus" size={15} />
+              </button>
+            </div>
           </div>
         )}
       </aside>
