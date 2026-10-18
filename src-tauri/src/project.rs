@@ -557,5 +557,7 @@ pub fn project_save_image(path: String, data: String, ext: Option<String>) -> Re
         .unwrap_or(0);
     let file = dir.join(format!("captura-{ms}.{ext}"));
     std::fs::write(&file, bytes).map_err(|e| e.to_string())?;
-    Ok(file.display().to_string())
+    // `canonicalize` deja el prefijo `\\?\` de Windows: los agentes no lo esperan en una ruta.
+    let shown = file.display().to_string();
+    Ok(shown.strip_prefix(r"\\?\").unwrap_or(&shown).to_string())
 }

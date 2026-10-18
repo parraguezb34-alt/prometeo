@@ -100,6 +100,16 @@ export function samePath(a: string, b: string): boolean {
  * publica un progreso («Tarea #14 completada: …»). En un mismo turno sobra el progreso.
  */
 function dropEchoes(t: Turn) {
+  // Su respuesta en terminal que solo repite (cita) el mensaje que acaba de mandar: sobra.
+  const said = t.parts
+    .filter((p): p is Extract<Part, { k: "text" }> => p.k === "text" && p.e.kind !== "reply")
+    .map((p) => p.e.text.replace(/\s+/g, " ").slice(0, 60))
+    .filter((s) => s.length >= 20);
+  if (said.length > 0) {
+    t.parts = t.parts.filter(
+      (p) => !(p.k === "text" && p.e.kind === "reply" && said.some((s) => p.e.text.replace(/\s+/g, " ").includes(s))),
+    );
+  }
   const done = new Set<number>();
   for (const p of t.parts) if (p.k === "task" && p.task.op === "hecha") done.add(p.task.id);
   if (done.size === 0) return;

@@ -453,9 +453,16 @@ export function CommandCenter() {
     let n = 0;
     for (const p of getLayout().panels) {
       if (p.kind !== "terminal" || !p.cmd || !p.sessionId) continue;
-      const cmd = resetCommand(agentKeyFromCmd(p.cmd));
+      const name = agentKeyFromCmd(p.cmd);
+      const cmd = resetCommand(name);
       if (!cmd) continue;
       try {
+        // Un diálogo abierto del CLI (avisos, selectores) se comería el comando: Esc antes,
+        // salvo si está trabajando, que Esc lo interrumpiría.
+        if (!liveRef.current.some((l) => l.name === name && l.busy)) {
+          await termWrite(p.sessionId, "\x1b");
+          await new Promise((ok) => window.setTimeout(ok, 300));
+        }
         await termWrite(p.sessionId, `${cmd}\r`);
         n++;
       } catch {
@@ -791,7 +798,8 @@ export function CommandCenter() {
         let ref: string | null = null;
         if (a.name === "claude" || a.name === "codex") ref = a.cli_session ?? null;
         else if (a.name === "antigravity") ref = await teamAgentSession(a.name, project).catch(() => null);
-        ref ??= chat.sessions?.[a.name] ? null : LATEST;
+        // Sin id, solo OpenCode puede retomar «la última de la carpeta» (ver withResume).
+        if (a.name === "opencode") ref ??= chat.sessions?.[a.name] ? null : LATEST;
         if (ref && chat.sessions?.[a.name] !== ref) chats.setSession(chat.id, a.name, ref);
       }
     };
@@ -1295,7 +1303,10 @@ export function CommandCenter() {
       const act = p?.sessionId ? activity.get(p.sessionId) : undefined;
       const lastTool = evs.find((e) => e.agent === a.name && e.kind === "tool");
       const toolAge = lastTool ? now - lastTool.ts_ms : Infinity;
-      const busy = !!act?.busy || toolAge < 20_000;
+      // Si ya cerró su turno (o contestó) después de su última acción, no sigue trabajando.
+      const ended = evs.find((e) => e.agent === a.name && (e.kind === "stop" || e.kind === "reply"));
+      const finished = !!ended && !!lastTool && ended.seq > lastTool.seq;
+      const busy = !!act?.busy || (toolAge < 20_000 && !finished);
       if (!busy) continue;
       // Sin terminal que mirar, la racha empieza en la primera acción seguida (sin pausas largas).
       let streak = lastTool?.ts_ms ?? now;

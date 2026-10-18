@@ -24,8 +24,19 @@ export const termSpawn = (
   command: string | null = null,
 ) => invoke<SessionInfo>("term_spawn", { cwd, cols, rows, command });
 
-export const termWrite = (id: string, data: string) =>
-  invoke<void>("term_write", { id, data });
+/**
+ * Escribe en una terminal. Un texto con su Enter al final llegaría de un solo golpe y
+ * Claude Code lo toma por un pegado: el Enter queda como salto de línea y el mensaje no se
+ * envía. Por eso el Enter va aparte, un instante después.
+ */
+export async function termWrite(id: string, data: string): Promise<void> {
+  if (data.length > 1 && data.endsWith("\r") && !data.startsWith("\x1b")) {
+    await invoke<void>("term_write", { id, data: data.slice(0, -1) });
+    await new Promise((ok) => setTimeout(ok, 180));
+    return invoke<void>("term_write", { id, data: "\r" });
+  }
+  return invoke<void>("term_write", { id, data });
+}
 
 export const termResize = (id: string, cols: number, rows: number) =>
   invoke<void>("term_resize", { id, cols, rows });

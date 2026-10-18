@@ -27,6 +27,9 @@ export function withResume(cmd: string, ref: string | null | undefined): string 
   if (!ref) return base;
   const agent = agentKeyFromCmd(cmd);
   const id = ref !== LATEST && safeId(ref) ? ref : null;
+  // «La última de la carpeta» solo vale para OpenCode: en Claude Code, Codex o Antigravity puede
+  // ser la de otra sesión abierta en la misma carpeta (otra ventana, la app de escritorio).
+  if (!id && agent !== "opencode") return base;
   switch (agent) {
     case "claude":
       return id ? `${base} --resume ${id}` : `${base} --continue`;
