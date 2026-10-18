@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import { addAgentTerminal, getLayout, removePanel, setRespawnResolver, useLayout } from "../store";
 import type { Panel } from "../store";
 import {
@@ -54,6 +53,7 @@ import { AgentQuickCmds } from "./AgentCard";
 import { ChatView } from "./ChatView";
 import type { LiveAgent } from "./ChatView";
 import { ChatsSidebar } from "./ChatsSidebar";
+import { DestPicker } from "./DestPicker";
 import { DiffTab, taskPaths } from "./DiffTab";
 import { FilesTab } from "./FilesTab";
 import { Icon } from "./Icon";
@@ -1219,8 +1219,8 @@ export function CommandCenter() {
     lastByAgent,
   };
 
-  // Fila en vivo del chat: quién trabaja ahora (por su terminal o por sus acciones recientes)
-  // y a quién le escribiste sin que haya contestado.
+  // Quién trabaja ahora (por su terminal o por sus acciones recientes): su «pensando…» en el chat.
+  // Si alguien no contesta, lo dice el acuse de tu mensaje (ChatView).
   const live = useMemo<LiveAgent[]>(() => {
     const out: LiveAgent[] = [];
     const evs = state?.events ?? [];
@@ -1232,18 +1232,7 @@ export function CommandCenter() {
       const lastTool = evs.find((e) => e.agent === a.name && e.kind === "tool");
       const toolAge = lastTool ? now - lastTool.ts_ms : Infinity;
       const busy = !!act?.busy || toolAge < 20_000;
-      let waitingSince: number | undefined;
-      if (!busy && a.online) {
-        const mine = evs.find((e) => e.agent === "tú" && e.kind === "message" && e.to === a.name);
-        const age = mine ? now - mine.ts_ms : Infinity;
-        if (mine && age > 15_000 && age < 30 * 60_000) {
-          const answered = evs.some(
-            (e) => e.agent === a.name && e.seq > mine.seq && !HIDDEN_KINDS.has(e.kind),
-          );
-          if (!answered) waitingSince = mine.ts_ms;
-        }
-      }
-      if (!busy && waitingSince == null) continue;
+      if (!busy) continue;
       // Sin terminal que mirar, la racha empieza en la primera acción seguida (sin pausas largas).
       let streak = lastTool?.ts_ms ?? now;
       for (const e of evs) {
@@ -1257,7 +1246,6 @@ export function CommandCenter() {
         since: act?.busy ? act.since : streak,
         status: act?.status ?? "",
         lastAction: toolAge < 120_000 ? lastTool?.text : undefined,
-        waitingSince,
         hasTerminal: !!p?.sessionId,
       });
     }
@@ -1426,6 +1414,7 @@ export function CommandCenter() {
           }}
         />
         <div className="cc-c-row">
+          <DestPicker dest={dest} names={destNames} leader={leader} states={states} onChange={setDest} />
           <div
             className="cc-shoot"
             title="Planificar = analiza y propone sin tocar código; Directo = a trabajar ya"
@@ -1438,28 +1427,7 @@ export function CommandCenter() {
               Directo
             </button>
           </div>
-          <button
-            className="cc-dest"
-            data-active={dest.kind === "team" ? "1" : "0"}
-            onClick={() => setDest({ kind: "team" })}
-            title="La misión va al equipo (o al líder en modo plan)"
-          >
-            @equipo
-          </button>
-          {destNames.map((n) => (
-            <button
-              key={n}
-              className="cc-dest"
-              data-active={dest.kind === "agent" && dest.name === n ? "1" : "0"}
-              style={{ "--ac": agentColor(n) } as CSSProperties}
-              onClick={() => setDest({ kind: "agent", name: n })}
-              title={`Mensaje directo a ${n}${n === leader ? " (líder)" : ""}`}
-            >
-              <span className="cc-dot" />
-              {n === leader && <Icon name="crown" size={12} />}
-              {agentLabel(n)}
-            </button>
-          ))}
+          <span className="cc-c-grow" />
           <button className="cc-send" disabled={!draft.trim()} onClick={send} aria-label="Enviar" title="Enviar">
             <Icon name="send" />
           </button>
@@ -1545,7 +1513,17 @@ export function CommandCenter() {
               events={msgs}
               resetKey={`${selKey}|${activeChat?.id ?? ""}`}
               live={live}
+              team={(agentView ? [agentView] : online.map((a) => a.name)).filter((n) => !!n)}
+              terminals={layout.panels
+                .filter((p) => p.kind === "terminal" && !!p.cmd && !!p.sessionId)
+                .map((p) => agentKeyFromCmd(p.cmd ?? ""))}
+              leader={leader}
+              tasks={tasks}
               project={project}
+              onOpenTask={(id) => {
+                setDiffTask(id);
+                setView("diff");
+              }}
               onOpenPath={openPath}
               onTerminal={openTerm}
               onInterrupt={(n) => void interrupt(n)}

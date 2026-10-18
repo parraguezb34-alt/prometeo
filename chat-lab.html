@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Banco del chat</title>
+    <style>
+      body {
+        margin: 0;
+      }
+      .lab-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--text);
+        font: 12px var(--mono, monospace);
+      }
+      .lab-bar b {
+        margin-right: 8px;
+      }
+      .lab-bar button {
+        cursor: pointer;
+        padding: 4px 9px;
+        border-radius: 7px;
+        border: 1px solid var(--line);
+        background: var(--raised);
+        color: var(--text-soft);
+        font: inherit;
+      }
+      .lab-bar button[data-on="1"] {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/lab/ChatLab.tsx"></script>
+  </body>
+</html>

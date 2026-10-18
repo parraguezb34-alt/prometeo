@@ -20,7 +20,7 @@ export function agentState(
   return working ? "work" : "idle";
 }
 
-const STATE_LABEL: Record<AgentState, string> = {
+export const STATE_LABEL: Record<AgentState, string> = {
   work: "Trabajando",
   idle: "Libre",
   blocked: "Espera tu respuesta",

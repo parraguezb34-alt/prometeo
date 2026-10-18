@@ -7,17 +7,26 @@ import type { TeamEvent } from "./team";
  * contestar) se junta en un único turno con su cabecera, en vez de una tarjeta
  * suelta por evento.
  */
+
+/** Qué le pasó a una tarea en un aviso del hub («#15 tomada por …», «#15 hecha por …: resumen»). */
+export type TaskOp = "creada" | "tomada" | "liberada" | "hecha" | "borrada";
+export type TaskInfo = { id: number; op: TaskOp; detail: string };
+
 export type Part =
   | { k: "text"; key: string; e: TeamEvent }
   | { k: "work"; key: string; events: TeamEvent[] }
+  | { k: "task"; key: string; e: TeamEvent; task: TaskInfo }
   | { k: "note"; key: string; e: TeamEvent }
+  /** Pidió permiso o una respuesta en su terminal. */
+  | { k: "ask"; key: string; e: TeamEvent }
   | { k: "images"; key: string; paths: string[]; ts: number };
+
+export type Turn = { k: "turn"; key: string; agent: string; ts: number; lastTs: number; parts: Part[] };
 
 export type Row =
   | { k: "day"; key: string; label: string }
   | { k: "user"; key: string; e: TeamEvent }
-  | { k: "turn"; key: string; agent: string; ts: number; lastTs: number; parts: Part[] }
-  | { k: "alert"; key: string; e: TeamEvent }
+  | Turn
   | { k: "sys"; key: string; e: TeamEvent };
 
 /** Acciones de bajo nivel: van plegadas en «Trabajó · N acciones». */
@@ -33,6 +42,9 @@ const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp)$/i;
 const IMAGE_IN_TEXT =
   /[A-Za-z]:[\\/](?:[^\\/:*?"<>|\r\n]+[\\/])*[^\\/:*?"<>|\s]+\.(?:png|jpe?g|gif|webp|bmp)\b|(?:\.{0,2}[\\/])?(?:[\w@.-]+[\\/])*[\w@.-]+\.(?:png|jpe?g|gif|webp|bmp)\b/gi;
 
+const TASK_RE =
+  /^#(\d+)\s+(creada|tomada|claimed|liberada|open|hecha|borrada)\b(?:\s+por\s+[^\s:]+)?:?\s*([\s\S]*)$/i;
+
 /** Aviso automático del despachador de lienzo («📌 Despacho: #15 «…»»). */
 export function isDispatch(e: TeamEvent): boolean {
   return e.agent === "tú" && e.text.startsWith("📌 Despacho");
@@ -41,6 +53,16 @@ export function isDispatch(e: TeamEvent): boolean {
 /** Aviso de un agente que no pide nada aunque llegue como «waiting» («login successful»). */
 export function isNotice(e: TeamEvent): boolean {
   return e.kind === "waiting" && /successful/i.test(e.text);
+}
+
+/** Lee un aviso de tarea del hub. */
+export function parseTask(e: TeamEvent): TaskInfo | null {
+  if (e.kind !== "task") return null;
+  const m = TASK_RE.exec(e.text.trim());
+  if (!m) return null;
+  const raw = m[2].toLowerCase();
+  const op: TaskOp = raw === "claimed" ? "tomada" : raw === "open" ? "liberada" : (raw as TaskOp);
+  return { id: Number(m[1]), op, detail: m[3].trim() };
 }
 
 export function isImagePath(p: string): boolean {
@@ -65,45 +87,51 @@ export function samePath(a: string, b: string): boolean {
   return x === y || x.endsWith(`/${y}`) || y.endsWith(`/${x}`);
 }
 
+/**
+ * Un agente suele contar lo mismo dos veces: cierra la tarea («#14 hecha por …: resumen») y
+ * publica un progreso («Tarea #14 completada: …»). En un mismo turno sobra el progreso.
+ */
+function dropEchoes(t: Turn) {
+  const done = new Set<number>();
+  for (const p of t.parts) if (p.k === "task" && p.task.op === "hecha") done.add(p.task.id);
+  if (done.size === 0) return;
+  t.parts = t.parts.filter((p) => {
+    if (p.k !== "note" || p.e.kind !== "update") return true;
+    const ids = [...p.e.text.matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
+    return !ids.some((id) => done.has(id));
+  });
+}
+
 export function buildTimeline(events: TeamEvent[]): Row[] {
   const rows: Row[] = [];
-  let turn: Extract<Row, { k: "turn" }> | null = null;
+  let turn: Turn | null = null;
   let day = "";
-
-  const close = () => {
-    turn = null;
-  };
 
   for (const e of events) {
     const label = dayGroup(e.ts_ms);
     if (label !== day) {
       day = label;
       rows.push({ k: "day", key: `d${e.ts_ms}`, label });
-      close();
+      turn = null;
     }
     const key = `${e.seq}`;
 
     if (e.agent === "tú") {
-      close();
+      turn = null;
       // Los despachos los escribe lienzo en tu nombre: son un aviso, no un mensaje tuyo.
       const mine = TEXT_KINDS.has(e.kind) && !isDispatch(e);
       rows.push(mine ? { k: "user", key, e } : { k: "sys", key, e });
       continue;
     }
-    if (e.kind === "waiting" && !isNotice(e)) {
-      close();
-      rows.push({ k: "alert", key, e });
-      continue;
-    }
     // Imagen nueva en el proyecto que ningún agente reclamó.
     if (!e.agent) {
-      close();
+      turn = null;
       rows.push({ k: "sys", key, e });
       continue;
     }
 
-    const cur = turn as Extract<Row, { k: "turn" }> | null;
-    let t: Extract<Row, { k: "turn" }>;
+    const cur = turn as Turn | null;
+    let t: Turn;
     if (cur && cur.agent === e.agent && e.ts_ms - cur.lastTs < TURN_GAP_MS) {
       t = cur;
     } else {
@@ -113,6 +141,7 @@ export function buildTimeline(events: TeamEvent[]): Row[] {
     }
     t.lastTs = e.ts_ms;
     const last = t.parts[t.parts.length - 1];
+    const task = parseTask(e);
 
     if (e.kind === "image") {
       if (last?.k === "images") last.paths.push(...e.files);
@@ -122,10 +151,15 @@ export function buildTimeline(events: TeamEvent[]): Row[] {
       else t.parts.push({ k: "work", key: `w${key}`, events: [e] });
     } else if (TEXT_KINDS.has(e.kind)) {
       t.parts.push({ k: "text", key, e });
+    } else if (task) {
+      t.parts.push({ k: "task", key, e, task });
+    } else if (e.kind === "waiting" && !isNotice(e)) {
+      t.parts.push({ k: "ask", key, e });
     } else {
       t.parts.push({ k: "note", key, e });
     }
   }
+  for (const r of rows) if (r.k === "turn") dropEchoes(r);
   return rows;
 }
 
