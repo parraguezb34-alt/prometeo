@@ -40,7 +40,7 @@ import {
   tick as dispatchTick,
 } from "../lib/dispatcher";
 import type { DAgent, DispatchState } from "../lib/dispatcher";
-import { loadAutoStart, loadPrefs, saveAutoStart, savePrefs } from "../lib/agentPrefs";
+import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, savePrefs } from "../lib/agentPrefs";
 import type { AgentPref } from "../lib/agentPrefs";
 import { tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
 import { projectInfo } from "../lib/project";
@@ -152,7 +152,11 @@ export function CommandCenter() {
   const [catalogs, setCatalogs] = useState<Record<string, ModelCatalog | null | undefined>>({});
   const [autoStart, setAutoStart] = useState(loadAutoStart);
   /** Lo último que se aplicó a la sesión de cada agente (modelo y esfuerzo). */
-  const appliedRef = useRef<Record<string, AgentPref | undefined>>({});
+  const appliedRef = useRef<Record<string, AgentPref | undefined>>(loadApplied());
+  const markApplied = (name: string, p: AgentPref) => {
+    appliedRef.current[name] = { model: p.model ?? null, effort: p.effort ?? null };
+    saveApplied(appliedRef.current);
+  };
   const autoRan = useRef<string | null>(null);
   /** Desde cuándo se ve la terminal de un agente sin que se haya conectado al equipo. */
   const startedAtRef = useRef<Record<string, number>>({});
@@ -424,7 +428,7 @@ export function CommandCenter() {
       }
       const p = prefs[id] ?? {};
       const r = await teamOpen(id, shoot, { model: p.model, effort: p.effort });
-      appliedRef.current[id] = { model: p.model ?? null, effort: p.effort ?? null };
+      markApplied(id, p);
       if (r.kind === "app") {
         say(`✓ ${label} se está abriendo en su app de escritorio…`);
       } else {
@@ -469,7 +473,7 @@ export function CommandCenter() {
           if (p.model) await new Promise((r) => window.setTimeout(r, 900));
           await termWrite(panel.sessionId, `/effort ${p.effort}\r`);
         }
-        appliedRef.current[name] = { model: p.model ?? null, effort: p.effort ?? null };
+        markApplied(name, p);
         say(`✓ ${label}: ajustes escritos en su terminal.`);
         return;
       }
@@ -482,7 +486,7 @@ export function CommandCenter() {
       removePanel(panel.id);
       const r = await teamOpen(name, shoot, { model: p.model, effort: p.effort, resume: true });
       if (r.kind === "pty") addAgentTerminal(label, r.cmd);
-      appliedRef.current[name] = { model: p.model ?? null, effort: p.effort ?? null };
+      markApplied(name, p);
       say(`✓ ${label} reiniciado con los ajustes nuevos; retoma su conversación.`);
       refresh();
     } catch (e) {

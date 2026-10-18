@@ -31,6 +31,31 @@ export function prefsFor(agent: string): AgentPref {
   return loadPrefs()[agent] ?? {};
 }
 
+const APPLIED_KEY = "lienzo.agentapplied.v1";
+
+/** Lo último que se aplicó a la sesión de cada agente. Se guarda para que, al reabrir lienzo
+ * (las terminales vuelven con las mismas flags), no aparezca un «Reiniciar con esto» falso. */
+export function loadApplied(): Record<string, AgentPref | undefined> {
+  try {
+    const raw = localStorage.getItem(APPLIED_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, AgentPref>;
+      if (parsed && typeof parsed === "object") return parsed;
+    }
+  } catch {
+    /* sin almacenamiento */
+  }
+  return {};
+}
+
+export function saveApplied(applied: Record<string, AgentPref | undefined>) {
+  try {
+    localStorage.setItem(APPLIED_KEY, JSON.stringify(applied));
+  } catch {
+    /* sin almacenamiento */
+  }
+}
+
 export function loadAutoStart(): boolean {
   try {
     const v = localStorage.getItem(AUTO_KEY);

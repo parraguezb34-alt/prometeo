@@ -142,6 +142,7 @@ fn cmd_join(app: &AppHandle, payload: &Value) -> Result<Value, String> {
 
     hub::with_inner(app, |inner| {
         let now = hub::now_ms();
+        hub::drop_dead_sessions(inner, &name, &project, &sid);
         inner.agents.insert(
             sid.clone(),
             hub::AgentInfo {

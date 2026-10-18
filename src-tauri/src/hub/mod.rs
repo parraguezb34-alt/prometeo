@@ -692,6 +692,54 @@ pub fn report_ctx(
     }
 }
 
+/// ¿Sigue vivo el proceso `pid`? Sin PID conocido (0) se asume que sí.
+#[cfg(windows)]
+pub fn pid_alive(pid: u32) -> bool {
+    use std::ffi::c_void;
+    unsafe extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        fn GetExitCodeProcess(h: *mut c_void, code: *mut u32) -> i32;
+        fn CloseHandle(h: *mut c_void) -> i32;
+    }
+    if pid == 0 {
+        return true;
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code) != 0;
+        CloseHandle(h);
+        !ok || code == STILL_ACTIVE
+    }
+}
+
+#[cfg(not(windows))]
+pub fn pid_alive(_pid: u32) -> bool {
+    true
+}
+
+/// Quita las sesiones de `name` en `project` cuyo proceso ya murió (p. ej. el agente que se
+/// reinició con otro modelo): si no, la tarjeta vieja seguía «en línea» hasta caducar.
+pub fn drop_dead_sessions(inner: &mut HubInner, name: &str, project: &str, keep: &str) {
+    let dead: Vec<String> = inner
+        .agents
+        .iter()
+        .filter(|(k, a)| {
+            k.as_str() != keep && a.name == name && a.project == project && !pid_alive(a.pid)
+        })
+        .map(|(k, _)| k.clone())
+        .collect();
+    for id in dead {
+        inner.agents.remove(&id);
+        inner.claims.retain(|_, c| c.session_id != id);
+    }
+}
+
 /// Drop agents that stopped heartbeating (and their file claims). Also releases
 /// tasks whose owner no longer has any live session (orphaned work).
 pub fn expire_agents(inner: &mut HubInner) -> bool {
@@ -699,7 +747,11 @@ pub fn expire_agents(inner: &mut HubInner) -> bool {
     let stale: Vec<String> = inner
         .agents
         .iter()
-        .filter(|(_, a)| now.saturating_sub(a.last_seen_ms) > AGENT_TTL_MS * 4)
+        .filter(|(_, a)| {
+            let silent = now.saturating_sub(a.last_seen_ms);
+            // Proceso muerto y callado >30s (el latido es cada 8s): fuera sin esperar al TTL.
+            silent > AGENT_TTL_MS * 4 || (silent > 30_000 && !pid_alive(a.pid))
+        })
         .map(|(k, _)| k.clone())
         .collect();
     let mut changed = !stale.is_empty();
