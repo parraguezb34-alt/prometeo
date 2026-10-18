@@ -60,6 +60,23 @@ export function tailText(b64: string, maxLines = 4): string {
   return lines.slice(-maxLines).join("\n");
 }
 
+/** ¿La terminal pide iniciar sesión? (Claude Code: «Not logged in · Run /login».) Solo mira lo último
+ * que escribió: al iniciar sesión la pantalla se repinta y el aviso queda fuera de esa ventana. */
+export function needsLogin(b64: string): boolean {
+  let text = "";
+  try {
+    text = new TextDecoder().decode(base64ToBytes(b64).slice(-1500));
+  } catch {
+    return false;
+  }
+  const clean = text
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
+  return /not logged in|run \/login|please run \/login|invalid api key|oauth token (has )?expired|authentication_error/i.test(clean);
+}
+
 /**
  * Si la terminal muestra un selector con una opción marcada (❯ …) que es claramente un «sí»,
  * devuelve su texto: solo entonces es seguro ofrecer «aceptar con Enter». Si la marcada es un

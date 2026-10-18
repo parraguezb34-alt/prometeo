@@ -42,7 +42,7 @@ import {
 import type { DAgent, DispatchState } from "../lib/dispatcher";
 import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, savePrefs } from "../lib/agentPrefs";
 import type { AgentPref } from "../lib/agentPrefs";
-import { tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
+import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
 import { projectInfo } from "../lib/project";
 import type { ProjectInfo } from "../lib/project";
 import { inWindow, useChats } from "../lib/chats";
@@ -162,6 +162,8 @@ export function CommandCenter() {
   const startedAtRef = useRef<Record<string, number>>({});
   /** Lo último que muestra la terminal de un agente que aún no se conecta (qué está pidiendo). */
   const [tails, setTails] = useState<Record<string, string>>({});
+  /** Agentes cuya terminal pide iniciar sesión (no pueden responder aunque estén «en línea»). */
+  const [authIssues, setAuthIssues] = useState<string[]>([]);
   /** Grupos de actividad desplegados en el chat (por seq del primer evento). */
   const [openGroups, setOpenGroups] = useState<number[]>([]);
   const [hubOk, setHubOk] = useState(true);
@@ -484,7 +486,10 @@ export function CommandCenter() {
       // Reinicio: se cierra su terminal y se abre otra con las flags nuevas.
       if (panel.sessionId) await termKill(panel.sessionId).catch(() => {});
       removePanel(panel.id);
-      const r = await teamOpen(name, shoot, { model: p.model, effort: p.effort, resume: true });
+      // Un reinicio por ajustes conserva el modo con el que ya estaba el agente (plan o no), sin
+      // depender del interruptor Planificar/Directo del chat, que puede estar en otro punto.
+      const mode: Shoot = /(?:--mode|--permission-mode)[ =]plan/.test(panel.cmd ?? "") ? "plan" : "exec";
+      const r = await teamOpen(name, mode, { model: p.model, effort: p.effort, resume: true });
       if (r.kind === "pty") addAgentTerminal(label, r.cmd);
       markApplied(name, p);
       say(`✓ ${label} reiniciado con los ajustes nuevos; retoma su conversación.`);
@@ -523,6 +528,8 @@ export function CommandCenter() {
     blocked: string[];
     panels: Panel[];
     lastByAgent: Map<string, TeamEvent>;
+    events: TeamEvent[];
+    states: Map<string, AgentState>;
   } | null>(null);
 
   useEffect(() => {
@@ -642,6 +649,86 @@ export function CommandCenter() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart, state, detect, project]);
+
+  // Cada pocos segundos se mira si la terminal de algún agente pide iniciar sesión: está «en
+  // línea» (su puente MCP ya se unió) pero no puede contestar, y sin esto el equipo le manda tareas
+  // y mensajes que se pierden.
+  useEffect(() => {
+    let prev: string[] = [];
+    const check = async () => {
+      const found: string[] = [];
+      for (const p of getLayout().panels) {
+        if (p.kind !== "terminal" || !p.cmd || !p.sessionId) continue;
+        try {
+          if (needsLogin(await termScrollback(p.sessionId))) found.push(agentKeyFromCmd(p.cmd));
+        } catch {
+          /* sin sesión: nada que mirar */
+        }
+      }
+      found.sort();
+      if (found.join(",") === prev.join(",")) return;
+      for (const name of found) {
+        if (!prev.includes(name)) {
+          say(`${agentLabel(name)} no tiene la sesión iniciada: abre su terminal y escribe /login.`, true);
+        }
+      }
+      prev = found;
+      setAuthIssues(found);
+    };
+    void check();
+    const id = window.setInterval(() => void check(), 5000);
+    return () => window.clearInterval(id);
+  }, [say]);
+
+  // Mensajes entre agentes: el hub solo se los entrega a quien llama a una herramienta del equipo,
+  // y un agente parado en su prompt no llama a ninguna. Si pasa un rato y el destinatario sigue
+  // libre sin haber dado señales, se le escribe el aviso en su terminal (una sola vez por mensaje).
+  const nudgedRef = useRef<Set<number>>(new Set());
+  const lastNudgeRef = useRef(0);
+  useEffect(() => {
+    const run = async () => {
+      const cur = latestRef.current;
+      const now = Date.now();
+      if (!cur || now - lastNudgeRef.current < 8000) return;
+      const pending = cur.events
+        .filter(
+          (e) =>
+            e.kind === "message" &&
+            !!e.to &&
+            e.to !== "tú" &&
+            e.agent !== "tú" &&
+            e.agent !== e.to &&
+            now - e.ts_ms > 25_000 &&
+            now - e.ts_ms < 20 * 60_000 &&
+            !nudgedRef.current.has(e.seq),
+        )
+        .sort((a, b) => a.seq - b.seq);
+      for (const e of pending) {
+        const to = e.to as string;
+        // Ya dio señales de vida después del mensaje: lo habrá recibido por sus herramientas.
+        if ((cur.lastByAgent.get(to)?.ts_ms ?? 0) > e.ts_ms) {
+          nudgedRef.current.add(e.seq);
+          continue;
+        }
+        const sid = panelForAgent(cur.panels, to)?.sessionId;
+        if (!sid || cur.states.get(to) !== "idle") continue;
+        nudgedRef.current.add(e.seq);
+        lastNudgeRef.current = now;
+        const text = e.text.replace(/\s+/g, " ").slice(0, 300);
+        try {
+          await termWrite(
+            sid,
+            `✉️ Mensaje de ${agentLabel(e.agent)} para ti: «${text}». Respóndele con team_message (y mira team_context).\r`,
+          );
+        } catch {
+          /* terminal cerrada: el mensaje sigue en el hub */
+        }
+        break;
+      }
+    };
+    const id = window.setInterval(() => void run(), 5000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // Con el modal abierto, se lee el final de la terminal de los agentes que aún no se unen al
   // equipo: casi siempre esperan que confirmes algo (confiar en la carpeta, aprobar el MCP…).
@@ -1127,19 +1214,23 @@ export function CommandCenter() {
     const m = new Map<string, AgentState>();
     for (const a of roster) {
       const hasTerminal = !!panelForAgent(layout.panels, a.name)?.sessionId;
-      const s = agentState(a, blockedNames.includes(a.name), claimedBy.has(a.name), hasTerminal);
+      let s = agentState(a, blockedNames.includes(a.name), claimedBy.has(a.name), hasTerminal);
+      if ((s === "idle" || s === "work") && authIssues.includes(a.name)) s = "login";
       if (s === "starting") startedAtRef.current[a.name] ??= Date.now();
       else delete startedAtRef.current[a.name];
       m.set(a.name, s);
     }
     return m;
-  }, [roster, blockedNames, claimedBy, layout.panels]);
+  }, [roster, blockedNames, claimedBy, layout.panels, authIssues]);
 
   latestRef.current = {
     tasks,
     agents,
     leader,
-    blocked: blockedNames,
+    // Un agente sin sesión iniciada no puede tomar tareas: el despachador lo trata como ocupado.
+    blocked: [...blockedNames, ...authIssues],
+    events: state?.events ?? [],
+    states,
     panels: layout.panels,
     lastByAgent,
   };

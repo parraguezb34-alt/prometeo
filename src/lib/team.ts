@@ -293,7 +293,8 @@ export function buildPlanPrompt(text: string, leader: string): string {
     "Analiza el proyecto (team_context, team_feed, los archivos) y NO edites ni reserves archivos " +
     "todavía. Descompón el trabajo en tareas claras con team_task_create (una por parte, con título " +
     "accionable) y publica tu plan con team_update: qué tarea, qué agente debería llevarla y en qué " +
-    "orden. Espera la aprobación del usuario para empezar."
+    "orden. Si la petición nombra una carpeta o archivos, escribe en cada tarea la ruta completa " +
+    "(absoluta) para que todos trabajen en el mismo sitio. Espera la aprobación del usuario para empezar."
   );
 }
 

@@ -164,7 +164,9 @@ Tus herramientas del equipo llegan por MCP (servidor `lienzo-team`):\n\n\
 - `team_feed` / `team_message`: consulta la actividad y habla con los demás agentes.\n\
 - `team_task_create` / `team_task_list` / `team_task_claim` / `team_task_done`: tareas compartidas. Usa `parents` al crear para ordenar el trabajo: una tarea espera a que sus padres estén hechas. \
 Al cerrar una tarea entrega `summary`, `files` y `evidence`: quien dependa de ella los recibe al reclamarla. `team_task_comment` deja notas en el tablón de la tarea. \
-La memoria del proyecto la cura el líder: propón con `team_memory_propose` lo que todos deban recordar y lee `team_memory_list`.\n\n\
+La memoria del proyecto la cura el líder: propón con `team_memory_propose` lo que todos deban recordar y lee `team_memory_list`.\n\
+Los mensajes de otros agentes solo te llegan cuando llamas a una herramienta del equipo: vuelve a llamar a `team_context` cada vez que termines un archivo o un paso largo, y responde con `team_message`. \
+Si una tarea nombra una carpeta o ruta, usa exactamente esa; si no está claro, pregunta antes de crear archivos.\n\n\
 You work alongside other AI agents on this project, coordinated by lienzo. Use the `lienzo-team` MCP tools \
 (`team_context`, `team_update`, `team_feed`, `team_message`, `team_task_*`, `team_claim_files`, `team_release_files`) \
 to coordinate: check context before starting, claim files before editing, and post updates when you finish a step.\n\

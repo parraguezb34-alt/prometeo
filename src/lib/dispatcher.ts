@@ -233,6 +233,7 @@ export function dispatchPrompt(task: DTask): string {
     `📌 Despacho de lienzo: toma la tarea #${task.id} «${title}».${notes} ` +
     `1) Reclámala con team_task_claim (id ${task.id}); recibirás las entregas de las tareas previas. ` +
     `2) Mira team_context y reserva con team_claim_files lo que vayas a editar. ` +
-    `3) Al terminar, ciérrala con team_task_done: summary (qué hiciste), files y evidence (cómo lo comprobaste).`
+    `3) Al terminar, ciérrala con team_task_done: summary (qué hiciste), files y evidence (cómo lo comprobaste). ` +
+    `Usa exactamente las rutas que indique la tarea; si no está claro dónde crear algo, pregunta con team_message antes de crear archivos.`
   );
 }

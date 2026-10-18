@@ -6,8 +6,8 @@ import { confirmChoice } from "../lib/pty";
 import { ctxLevel, ctxOf, fmtTokens, shortModel } from "./AgentCard";
 import { Icon } from "./Icon";
 
-/** work = con tarea · idle = libre · blocked = espera tu respuesta · starting = terminal abierta, aún sin conectar · off = sin sesión */
-export type AgentState = "work" | "idle" | "blocked" | "starting" | "off";
+/** work = con tarea · idle = libre · blocked = espera tu respuesta · login = su terminal pide iniciar sesión · starting = terminal abierta, aún sin conectar · off = sin sesión */
+export type AgentState = "work" | "idle" | "blocked" | "login" | "starting" | "off";
 
 export function agentState(
   agent: TeamAgent,
@@ -24,6 +24,7 @@ const STATE_LABEL: Record<AgentState, string> = {
   work: "Trabajando",
   idle: "Libre",
   blocked: "Espera tu respuesta",
+  login: "Falta iniciar sesión",
   starting: "Conectando…",
   off: "Sin sesión",
 };
@@ -243,6 +244,12 @@ export function TeamModal({
                       {Date.now() - (startedAt[name] ?? Date.now()) > 60_000
                         ? "Todavía no se ha conectado al equipo. Mira su terminal: puede estar pidiéndote confirmar algo (confiar en la carpeta, aprobar el servidor MCP, iniciar sesión)."
                         : "Abriendo su terminal. En cuanto se conecte aparecerá en línea, con su contexto."}
+                    </div>
+                  )}
+                  {state === "login" && (
+                    <div className="cc-field-note" data-warn="1">
+                      Su terminal pide iniciar sesión, así que no puede responder ni tomar tareas. Abre su terminal y escribe
+                      /login.
                     </div>
                   )}
                   {state === "starting" && tails[name] && (

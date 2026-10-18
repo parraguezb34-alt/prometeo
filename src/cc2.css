@@ -237,7 +237,8 @@
 .cc-ring[data-state="off"] {
   --sc: var(--faint);
 }
-.cc-ring[data-state="blocked"] {
+.cc-ring[data-state="blocked"],
+.cc-ring[data-state="login"] {
   --sc: var(--warn);
 }
 .cc-ring[data-lvl="warn"] {
@@ -1068,7 +1069,8 @@ button.cc-lead {
 .cc-acard-state[data-state="work"] {
   color: var(--ok);
 }
-.cc-acard-state[data-state="blocked"] {
+.cc-acard-state[data-state="blocked"],
+.cc-acard-state[data-state="login"] {
   color: var(--warn);
 }
 .cc-acard-opts {
