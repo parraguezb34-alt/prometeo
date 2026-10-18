@@ -3,6 +3,25 @@
 Canvas infinito + terminales para orquestar agentes de IA.
 Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Electron ni 300 MB de asar).
 
+## ¿De qué trata?
+
+lienzo es un **centro de mando conversacional para dirigir un equipo de agentes de IA que ya viven en tu máquina** — Claude Code, OpenCode, Codex y Antigravity — sin saltar entre cuatro terminales y cuatro contextos distintos:
+
+- **Les hablas como a un equipo**: un chat único para pedir una misión al grupo (en modo plan o directo) o un mensaje privado a un agente concreto (`@claude`, `@opencode`…). Lo que escribes llega de verdad a su terminal.
+- **Trabajan sin pisarse**: cada tarea tiene dueño y cada agente reclama los archivos que va a tocar. lienzo te enseña quién hace qué, marca los bloqueos cuando un agente espera tu respuesta y detecta *scope creep* (archivos tocados fuera de lo reclamado).
+- **Las sesiones largas no se pudren**: cuando un agente va a quedarse sin contexto, guarda un **relevo con memoria** pegado a su tarea y lienzo compacta por él; quien retome el trabajo continúa con ese resumen, sin amnesia.
+- **Tú mandas sobre lo que cambia**: diffs filtrados por tarea, aceptar o revertir por archivos/con bloques, commit solo bajo tu OK, y preview en vivo de los HTML/SVG/MD que producen.
+- **Datos reales, nada fingido**: el termómetro de contexto (% y tokens), el feed, las tareas y los diffs salen de las fuentes locales de cada CLI (transcripts, `opencode.db`, rollouts de Codex) y de git. Si algo no se puede medir, no se inventa.
+- Y todo eso sobre un **lienzo espacial** de terminales y paneles (la vista `⬚ Lienzo`) para ver la topología completa del taller cuando quieras.
+
+## ¿Qué se quiere lograr con la aplicación?
+
+1. **Dirigir, no teclear**: que coordinar 2–6 agentes se sienta como hablar con un equipo — pedir un plan, repartir trabajo, desbloquear — y no como copiar y pegar entre terminales.
+2. **Que los agentes no se pisen ni dupliquen trabajo**: tareas con dueño, archivos reclamados y un estado del progreso visible de un vistazo.
+3. **Que las sesiones largas sobrevivan**: relevo + compactación automática para seguir trabajando más allá del límite de contexto sin empezar de cero.
+4. **Que ninguna línea se te cuele**: toda edición pasa por tu revisión, por tarea, con aceptar/revertir y commit explícito.
+5. **Ligera, local y tuya**: una alternativa honesta y liviana a Deska — sin Electron, sin cuentas en la nube y con tus CLIs y tus datos en tu propia máquina.
+
 ## Estado actual (F1 + Equipo) ✅
 
 - **Centro de Mando (vista principal)**: layout tipo estudio. **Columna izquierda** de control: cabecera `lienzo / rama` (clic para cambiar de proyecto), **Equipo activo** en tarjetas compactas (estado, 👑 líder, selector de **modelo**, alternar **modo**, `▸_` terminal, 🔄 **relevo con memoria** y 🧹 **compactar**, con el **termómetro de contexto real** `36% · 71k` en verde/ámbar/rojo alimentado de verdad por Claude Code (transcript vía hooks), **OpenCode** (`opencode.db`) y **Codex** (rollouts)), pestañas **Tareas** (filtros, bloqueos 🚨 arriba con *Responder*, nº de archivos por tarea, ✅/↺) y **Actividad en vivo** (feed compacto; clic en un agente abre su conversación), y el **compositor de misión** siempre abajo con `📋 Planificar` / `⚡ Directo` y selector de destino `@equipo` / `@lider` / `@agente` (las menciones `@…` al principio del texto también funcionan). **Escenario derecho** con cabecera de tarea (`#2 · título`) y conmutador: `💬 Comando` (chat del equipo en vivo, estilo limpio), `± Cambios` (git status + diff con **revisión por tarea**: diffs filtrados a sus archivos y botones *Aceptar (commit)* / *Revertir* con confirmación; **caja de relevo** 📝; sección **⚠️ Scope Creep** con *↺ Revertir* por archivo y **chips con +N/−M reales por archivo**; `👁 Ver Preview` en `.html`/`.svg`/`.md`), `👁 Preview` (HTML/SVG en iframe, MD/CSV como texto; se recarga solo cuando un agente guarda), `⫻ Split` (diff y preview a la vez), `▸_ Terminal` (terminal grande con selector de sesión y comandos rápidos), `📁 Archivos` (explorador + atajos a Normas y `.agents/skills`) y `📝 Memoria` (los **relevos reales** que guardan los agentes con `team_handover_save` antes de compactar: tarea, autor, cuándo y archivos clicables hacia el preview). En plan la misión va **solo al líder** y nadie edita hasta tu OK (Claude arranca con `--permission-mode plan`, Antigravity con `--mode plan`). Los **bloqueos** (agente esperando permiso o respuesta, vía hook `Notification`) aparecen arriba del equipo. El **lienzo espacial** sigue disponible como vista secundaria (`⬚ Lienzo` / `← Comando`); las terminales ocultas siguen vivas (PTY + scrollback) y se re-adjuntan al abrirlas.
