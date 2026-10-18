@@ -153,10 +153,41 @@ const PALETTE = [
   "#ff9e64",
 ];
 
+/** Identidad fija de los agentes conocidos (tokens de App.css). */
+const IDENTITY: [string, string][] = [
+  ["claude", "var(--c-claude)"],
+  ["opencode", "var(--c-opencode)"],
+  ["codex", "var(--c-codex)"],
+  ["antigravity", "var(--c-antigravity)"],
+  ["agy", "var(--c-antigravity)"],
+];
+
 export function agentColor(name: string): string {
+  const low = name.toLowerCase();
+  for (const [key, color] of IDENTITY) if (low.includes(key)) return color;
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return PALETTE[h % PALETTE.length];
+}
+
+/** Nombre para mostrar: «Claude Code», «OpenCode»… (el hub guarda el id en minúsculas). */
+export function agentLabel(name: string): string {
+  const low = name.toLowerCase();
+  if (low.includes("claude")) return "Claude Code";
+  if (low.includes("opencode")) return "OpenCode";
+  if (low.includes("codex")) return "Codex";
+  if (low.includes("antigravity") || low === "agy") return "Antigravity";
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+/** Letra del avatar: C Claude, O OpenCode, X Codex, A Antigravity. */
+export function agentInitial(name: string): string {
+  const low = name.toLowerCase();
+  if (low.includes("claude")) return "C";
+  if (low.includes("opencode")) return "O";
+  if (low.includes("codex")) return "X";
+  if (low.includes("antigravity") || low === "agy") return "A";
+  return (name.trim()[0] ?? "?").toUpperCase();
 }
 
 export function errMsg(e: unknown): string {

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Canvas } from "./components/Canvas";
 import { CommandCenter } from "./components/CommandCenter";
 import "./App.css";
+import "./cc2.css";
 
 type Mode = "command" | "canvas";
 const MODE_KEY = "lienzo.mode.v1";

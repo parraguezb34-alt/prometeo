@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { addAgentTerminal, autoSpot, useLayout } from "../store";
 import type { Panel } from "../store";
 import {
   agentColor,
   agentCommands,
+  agentInitial,
   agentKeyFromCmd,
+  agentLabel,
   ago,
   buildPlanPrompt,
   compactOpencode,
@@ -27,12 +30,22 @@ import type { DetectResult, TeamEvent, TeamState } from "../lib/team";
 import { termWrite } from "../lib/pty";
 import { projectInfo } from "../lib/project";
 import type { ProjectInfo } from "../lib/project";
+import { inWindow, useChats } from "../lib/chats";
+import type { Chat } from "../lib/chats";
 import { GLYPHS } from "./FeedList";
-import { AgentCard, AgentQuickCmds } from "./AgentCard";
+import { AgentQuickCmds } from "./AgentCard";
+import { ChatsSidebar } from "./ChatsSidebar";
 import { DiffTab, taskPaths } from "./DiffTab";
 import { FilesTab } from "./FilesTab";
+import { Icon } from "./Icon";
+import type { IconName } from "./Icon";
 import { MemoryTab } from "./MemoryTab";
+import { NewChatMenu } from "./NewChatMenu";
+import type { NewChatChoice } from "./NewChatMenu";
 import { PreviewTab } from "./PreviewTab";
+import { TasksDrawer } from "./TasksDrawer";
+import { TeamModal, TeamStrip, agentState } from "./TeamModal";
+import type { AgentState } from "./TeamModal";
 import { TeamPanel } from "./TeamPanel";
 import { TerminalPanel } from "./TerminalPanel";
 
@@ -47,9 +60,35 @@ type CenterView = "feed" | "diff" | "preview" | "split" | "term" | "files" | "me
 /** Mission trigger mode: plan-first or straight to execution. */
 type Shoot = "plan" | "exec";
 
+/** Ajustes del equipo (conectar CLIs, normas, proyecto). */
 type Drawer = { kind: "team"; agents?: boolean } | null;
 
+/** Capas flotantes sobre la pantalla: equipo, tareas y menú de nuevo chat. */
+type Overlay = "team" | "tasks" | "newchat" | null;
+
 const SHOOT_KEY = "lienzo.shoot.v1";
+const CHATS_MIN_KEY = "lienzo.chatsmin.v1";
+const ACT_KEY = "lienzo.showact.v1";
+
+/** Eventos de bajo nivel que se ocultan cuando apagas «Mostrar actividad». */
+const QUIET_KINDS = new Set(["tool", "join", "leave", "claim", "release", "session", "stop", "prompt"]);
+
+function loadFlag(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    return v == null ? fallback : v === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+function saveFlag(key: string, on: boolean) {
+  try {
+    localStorage.setItem(key, on ? "1" : "0");
+  } catch {
+    /* sin almacenamiento: no se recordará */
+  }
+}
 
 function loadShoot(): Shoot {
   try {
@@ -85,14 +124,14 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const [view, setView] = useState<CenterView>("feed");
   const [tab, setTab] = useState<"chat" | "term">("chat");
   const [shoot, setShoot] = useState<Shoot>(loadShoot);
-  const [sideTab, setSideTab] = useState<"tasks" | "feed">("tasks");
+  const [overlay, setOverlay] = useState<Overlay>(null);
+  const [chatsMin, setChatsMin] = useState(() => loadFlag(CHATS_MIN_KEY, false));
+  const [showAct, setShowAct] = useState(() => loadFlag(ACT_KEY, true));
   const [termPick, setTermPick] = useState<string | null>(null);
-  const [taskFilter, setTaskFilter] = useState<"all" | "active" | "done">("all");
   const [changeCount, setChangeCount] = useState<number | null>(null);
   const [diffTask, setDiffTask] = useState<number | null>(null);
   const [previewRel, setPreviewRel] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const [taskDraft, setTaskDraft] = useState("");
   const [opening, setOpening] = useState<string | null>(null);
   const [hubOk, setHubOk] = useState(true);
   const [hubUrl, setHubUrl] = useState("");
@@ -100,7 +139,6 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const flashTimer = useRef<number | undefined>(undefined);
   const chatRef = useRef<HTMLDivElement>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
-  const taskInputRef = useRef<HTMLInputElement>(null);
   const stickRef = useRef(true);
 
   const say = useCallback((text: string, err = false) => {
@@ -135,17 +173,20 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     };
   }, [refresh, refreshDetect]);
 
-  // Esc closes the team drawer.
+  // Esc cierra la capa que esté arriba: primero las flotantes, luego los ajustes.
   useEffect(() => {
-    if (!drawer) return;
+    if (!drawer && !overlay) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setDrawer(null);
+      if (e.key !== "Escape") return;
+      if (overlay) setOverlay(null);
+      else setDrawer(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drawer]);
+  }, [drawer, overlay]);
 
   const project = state?.project ?? null;
+  const chats = useChats(project);
 
   // Rama git del proyecto, para la barra superior.
   useEffect(() => {
@@ -168,7 +209,6 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   const leader = state?.leader ?? "";
   const done = tasks.filter((t) => t.status === "done").length;
   const total = tasks.length;
-  const openTasks = tasks.filter((t) => t.status !== "done").length;
 
   // Latest activity per agent (joins/leaves aside) → cards + bloqueos.
   const lastByAgent = useMemo(() => {
@@ -197,16 +237,22 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
   // Messages of the open conversation, oldest → newest (the hub sends the feed
   // newest first). Agent chats show that agent's events; the team chat is the
   // whole feed (messages as bubbles, the rest as system lines).
+  const activeChat = chats.active;
   const msgs = useMemo(() => {
     const all = (state?.events ?? []).slice(0, 400).reverse();
-    if (sel.kind === "team") return all;
-    return all.filter(
-      (e) =>
-        (e.agent === sel.name && e.kind !== "tool") ||
-        e.to === sel.name ||
-        e.kind === "broadcast",
-    );
-  }, [state, sel]);
+    const base =
+      sel.kind === "team"
+        ? all
+        : all.filter(
+            (e) =>
+              (e.agent === sel.name && e.kind !== "tool") ||
+              e.to === sel.name ||
+              e.kind === "broadcast",
+          );
+    // Cada chat solo muestra su ventana de tiempo; «Mostrar actividad» apaga el ruido.
+    const windowed = activeChat ? base.filter((e) => inWindow(activeChat, e)) : base;
+    return showAct ? windowed : windowed.filter((e) => !QUIET_KINDS.has(e.kind));
+  }, [state, sel, activeChat, showAct]);
 
   // Stick to the bottom while the user is reading the latest (like a chat).
   const onChatScroll = () => {
@@ -224,10 +270,66 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
   }, [selKey, tab, view, msgs.length]);
 
-  const selectAgent = (name: string, to: "chat" | "term" = "chat") => {
+  /** Enfoca a un agente (conversación o terminal) sin tocar la lista de chats. */
+  const focusAgent = (name: string, to: "chat" | "term" = "chat") => {
     setSel({ kind: "agent", name });
     setDest({ kind: "agent", name });
     setTab(to);
+    setOverlay(null);
+  };
+
+  /** Habla con un agente: abre (o retoma) su chat privado. */
+  const selectAgent = (name: string, to: "chat" | "term" = "chat") => {
+    focusAgent(name, to);
+    if (to === "chat") chats.openScope("agent", name);
+  };
+
+  /** Vuelve a la conversación del equipo. */
+  const selectTeam = () => {
+    setSel({ kind: "team" });
+    setDest({ kind: "team" });
+    chats.openScope("team");
+  };
+
+  /** Abre un chat de la barra lateral. */
+  const activateChat = (c: Chat) => {
+    chats.select(c.id);
+    if (c.kind === "team") {
+      setSel({ kind: "team" });
+      setDest({ kind: "team" });
+      setView("feed");
+    } else if (c.agent) {
+      focusAgent(c.agent, "chat");
+    }
+  };
+
+  /** Crea el chat elegido en el menú «Nuevo chat». */
+  const startChat = (choice: NewChatChoice) => {
+    setOverlay(null);
+    if (choice.kind === "agent") {
+      chats.create("agent", choice.name);
+      focusAgent(choice.name, "chat");
+      return;
+    }
+    chats.create("team");
+    setSel({ kind: "team" });
+    setDest({ kind: "team" });
+    setView(choice.kind === "handover" ? "memory" : "feed");
+    if (choice.kind === "handover") say("Elige un relevo en Memoria y retómalo con el agente que quieras.");
+  };
+
+  const toggleChats = () => {
+    setChatsMin((m) => {
+      saveFlag(CHATS_MIN_KEY, !m);
+      return !m;
+    });
+  };
+
+  const toggleAct = () => {
+    setShowAct((on) => {
+      saveFlag(ACT_KEY, !on);
+      return !on;
+    });
   };
 
   const setShootMode = (m: Shoot) => {
@@ -403,6 +505,13 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
       body = m[2];
     }
     const flat = body.replace(/\s*\n+\s*/g, " ");
+
+    // Si estás viendo un chat cerrado, lo que escribas abre uno nuevo del mismo
+    // ámbito; el primer mensaje le da título.
+    let chat = chats.active;
+    if (chat && chat.endMs != null) chat = chats.create(chat.kind, chat.agent);
+    if (chat) chats.autoTitle(chat.id, flat);
+
     const clear = () => {
       setDraft("");
       if (areaRef.current) areaRef.current.style.height = "auto";
@@ -473,12 +582,9 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     return names;
   }, [agents, leader, dest]);
 
-  const addTask = async () => {
-    const t = taskDraft.trim();
-    if (!t) return;
+  const addTask = async (title: string) => {
     try {
-      await teamAddTask(t);
-      setTaskDraft("");
+      await teamAddTask(title);
       refresh();
     } catch (e) {
       say(errMsg(e), true);
@@ -501,15 +607,22 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     const mine = e.agent === "tú";
     if (e.kind === "message" || (mine && e.kind === "broadcast")) {
       return (
-        <div className="cc-msg" data-who={mine ? "me" : "agent"} key={e.seq}>
-          <div className="cc-msg-head">
-            <span style={{ color: mine ? undefined : agentColor(e.agent) }}>
-              {mine ? "tú" : e.agent}
-            </span>
-            {e.to ? <span>→ {e.to}</span> : null}
-            <span>{ago(e.ts_ms)}</span>
+        <div
+          className="cc-msg"
+          data-who={mine ? "me" : "agent"}
+          key={e.seq}
+          style={{ "--ac": mine ? "var(--accent)" : agentColor(e.agent) } as CSSProperties}
+        >
+          <div className="cc-msg-av">{mine ? "Tú" : agentInitial(e.agent)}</div>
+          <div className="cc-msg-card">
+            <div className="cc-msg-head">
+              <b>{mine ? "Tú" : agentLabel(e.agent)}</b>
+              {e.to ? <span className="cc-msg-tag">→ {e.to}</span> : null}
+              {e.kind === "broadcast" ? <span className="cc-msg-tag">@equipo</span> : null}
+              <time>{ago(e.ts_ms)}</time>
+            </div>
+            <div className="cc-msg-body">{e.text}</div>
           </div>
-          <div className="cc-msg-body">{e.kind === "broadcast" ? `📣 ${e.text}` : e.text}</div>
         </div>
       );
     }
@@ -517,7 +630,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
       <div className="cc-sys" key={e.seq}>
         <span className="cc-sys-glyph">{GLYPHS[e.kind] ?? "•"}</span>
         <span className="cc-sys-main">
-          <span style={{ color: agentColor(e.agent) }}>{e.agent}</span>
+          <span style={{ color: agentColor(e.agent) }}>{e.agent === "tú" ? "Tú" : agentLabel(e.agent)}</span>
           {e.to ? <span> → {e.to}</span> : null}
           <span data-weak={e.kind === "tool" ? "1" : "0"}> {e.text}</span>
           {e.files.length > 0 && (
@@ -558,17 +671,6 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     (p) => p.kind === "terminal" && !!p.cmd && p.id !== termInlineId,
   );
 
-  const filteredTasks = tasks
-    .filter((t) =>
-      taskFilter === "all"
-        ? true
-        : taskFilter === "done"
-          ? t.status === "done"
-          : t.status !== "done",
-    )
-    .slice()
-    .reverse();
-
   // Archivos ligados a cada tarea (reclamos + avisos de su dueño desde que nació).
   const taskFileCount = useMemo(() => {
     const m = new Map<number, number>();
@@ -578,115 +680,165 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
     return m;
   }, [tasks, state]);
 
-  // Actividad reciente para la pestaña «Actividad en vivo» (ya viene nueva→vieja).
-  const feedTop = useMemo(() => (state?.events ?? []).slice(0, 120), [state]);
+  // Estado de cada agente para los anillos de la barra superior y el modal.
+  const blockedNames = useMemo(() => blocked.map((a) => a.name), [blocked]);
+  const states = useMemo(() => {
+    const m = new Map<string, AgentState>();
+    for (const a of agents) {
+      m.set(a.name, agentState(a, blockedNames.includes(a.name), claimedBy.has(a.name)));
+    }
+    return m;
+  }, [agents, blockedNames, claimedBy]);
 
-  const STAGE_TITLE: Record<CenterView, string> = {
-    feed: "Comando",
-    diff: "Cambios",
-    preview: "Preview",
-    split: "Split",
-    term: "Terminal",
-    files: "Archivos",
-    memory: "Memoria",
-  };
+  const VIEWS: { id: CenterView; label: string; icon: IconName; title: string }[] = [
+    { id: "feed", label: "Comando", icon: "msg", title: "Chat y actividad del equipo" },
+    { id: "diff", label: "Cambios", icon: "diff", title: "Revisar los cambios en git" },
+    { id: "preview", label: "Preview", icon: "eye", title: "Vista previa de html/svg/md en vivo" },
+    { id: "split", label: "Split", icon: "cols", title: "Diff y Preview a la vez" },
+    { id: "term", label: "Terminal", icon: "term", title: "Terminal de un agente a pantalla completa" },
+    { id: "files", label: "Archivos", icon: "folder", title: "Explorar los archivos del proyecto" },
+    { id: "memory", label: "Memoria", icon: "book", title: "Relevos guardados por los agentes (sin amnesia)" },
+  ];
   const stageTask =
     view === "diff" && diffTask != null ? tasks.find((t) => t.id === diffTask) : undefined;
-  const stageHead = (
-    <div className="cc-chat-head">
-      <div className="cc-stage-title">
-        <span className="cc-stage-badge">{stageTask ? `#${stageTask.id}` : "💬"}</span>
-        <span className="cc-stage-name">{stageTask ? stageTask.title : STAGE_TITLE[view]}</span>
-      </div>
-      <div className="cc-seg">
-        <button data-active={view === "feed" ? "1" : "0"} onClick={() => setView("feed")} title="Chat y actividad del equipo">
-          💬 Comando
-        </button>
-        <button data-active={view === "diff" ? "1" : "0"} onClick={() => setView("diff")} title="Revisar los cambios en git">
-          ± Cambios{changeCount ? ` ${changeCount}` : ""}
-        </button>
-        <button data-active={view === "preview" ? "1" : "0"} onClick={() => setView("preview")} title="Vista previa de html/svg/md en vivo">
-          👁 Preview
-        </button>
-        <button data-active={view === "split" ? "1" : "0"} onClick={() => setView("split")} title="Diff y Preview a la vez">
-          ⫻ Split
-        </button>
-        <button data-active={view === "term" ? "1" : "0"} onClick={() => setView("term")} title="Terminal de un agente a pantalla completa">
-          ▸_ Terminal
-        </button>
-        <button data-active={view === "files" ? "1" : "0"} onClick={() => setView("files")} title="Explorar los archivos del proyecto">
-          📁 Archivos
-        </button>
-        <button data-active={view === "memory" ? "1" : "0"} onClick={() => setView("memory")} title="Relevos guardados por los agentes (sin amnesia)">
-          📝 Memoria
-        </button>
-      </div>
-      <span className="cc-stage-info">
-        {online.length} en línea{leader ? ` · 👑 ${leader}` : ""}
+
+  /** Progreso de tareas siempre a la vista; abre el panel lateral. */
+  const tasksBtn = (
+    <button
+      className="cc-tasks-btn"
+      onClick={() => setOverlay("tasks")}
+      title="Tareas y actividad del equipo"
+    >
+      <Icon name="list" size={14} />
+      Tareas
+      <span className="cc-meter sm">
+        <i style={{ width: total ? `${Math.round((done / total) * 100)}%` : "0%" }} />
       </span>
-    </div>
+      <span className="cc-tasks-n">
+        {done}/{total}
+      </span>
+      {blocked.length > 0 && (
+        <span className="cc-warnmark">
+          <Icon name="warn" size={14} />
+        </span>
+      )}
+    </button>
+  );
+
+  const actToggle = (
+    <button
+      className="cc-toggle"
+      aria-pressed={showAct}
+      onClick={toggleAct}
+      title="Muestra u oculta herramientas, reservas y otros avisos de bajo nivel"
+    >
+      <span className="cc-sw" />
+      Mostrar actividad
+    </button>
+  );
+
+  const stageHead = (
+    <>
+      <div className="cc-stage-head">
+        <div className="cc-stage-l">
+          <h2>{stageTask ? `#${stageTask.id} · ${stageTask.title}` : (activeChat?.title ?? "Comando")}</h2>
+          <div className="cc-stage-sub">
+            <span className="cc-dot" data-on={online.length > 0 ? "1" : "0"} />
+            {online.length} en línea
+            {leader ? ` · líder ${agentLabel(leader)}` : ""}
+          </div>
+        </div>
+        <div className="cc-stage-r">
+          {view === "feed" && actToggle}
+          {tasksBtn}
+        </div>
+      </div>
+      <div className="cc-vtabs" role="tablist">
+        {VIEWS.map((v) => (
+          <button
+            key={v.id}
+            role="tab"
+            aria-selected={view === v.id}
+            onClick={() => setView(v.id)}
+            title={v.title}
+          >
+            <Icon name={v.icon} size={14} />
+            {v.label}
+            {v.id === "diff" && changeCount ? <span className="cc-count">{changeCount}</span> : null}
+          </button>
+        ))}
+      </div>
+    </>
   );
 
   const composer = (
-    <div className="cc-compose">
-      <textarea
-        ref={areaRef}
-        rows={2}
-        value={draft}
-        placeholder={
-          dest.kind === "team"
-            ? shoot === "plan"
-              ? "Misión en modo plan: nadie edita hasta tu OK…"
-              : "Enviar misión al equipo o @agente… (Enter envía, Shift+Enter salto)"
-            : shoot === "plan"
-              ? `Plan para ${dest.name}: analiza y propone sin editar nada…`
-              : `Mensaje para ${dest.name}… (se escribe en su terminal)`
-        }
-        onChange={(e) => {
-          setDraft(e.target.value);
-          const el = e.currentTarget;
-          el.style.height = "auto";
-          el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            send();
+    <div className="cc-comp">
+      <div className="cc-cbox">
+        <textarea
+          ref={areaRef}
+          rows={1}
+          value={draft}
+          placeholder={
+            dest.kind === "team"
+              ? shoot === "plan"
+                ? "Misión en modo plan: nadie edita hasta tu OK…"
+                : "Pídele algo al equipo o escribe @agente… (Enter envía, Shift+Enter salto)"
+              : shoot === "plan"
+                ? `Plan para ${agentLabel(dest.name)}: analiza y propone sin editar nada…`
+                : `Mensaje para ${agentLabel(dest.name)}… (se escribe en su terminal)`
           }
-        }}
-      />
-      <div className="cc-compose-row">
-        <div
-          className="cc-shoot"
-          title="Planificar = analiza y propone sin tocar código; Directo = a trabajar ya"
-        >
-          <button data-active={shoot === "plan" ? "1" : "0"} onClick={() => setShootMode("plan")}>
-            📋 Planificar
+          onChange={(e) => {
+            setDraft(e.target.value);
+            const el = e.currentTarget;
+            el.style.height = "auto";
+            el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+        />
+        <div className="cc-c-row">
+          <div
+            className="cc-shoot"
+            title="Planificar = analiza y propone sin tocar código; Directo = a trabajar ya"
+          >
+            <button data-active={shoot === "plan" ? "1" : "0"} onClick={() => setShootMode("plan")}>
+              <Icon name="list" size={13} />
+              Planificar
+            </button>
+            <button data-active={shoot === "exec" ? "1" : "0"} onClick={() => setShootMode("exec")}>
+              Directo
+            </button>
+          </div>
+          <button
+            className="cc-dest"
+            data-active={dest.kind === "team" ? "1" : "0"}
+            onClick={() => setDest({ kind: "team" })}
+            title="La misión va al equipo (o al líder en modo plan)"
+          >
+            @equipo
           </button>
-          <button data-active={shoot === "exec" ? "1" : "0"} onClick={() => setShootMode("exec")}>
-            ⚡ Directo
+          {destNames.map((n) => (
+            <button
+              key={n}
+              className="cc-dest"
+              data-active={dest.kind === "agent" && dest.name === n ? "1" : "0"}
+              style={{ "--ac": agentColor(n) } as CSSProperties}
+              onClick={() => setDest({ kind: "agent", name: n })}
+              title={`Mensaje directo a ${n}${n === leader ? " (líder)" : ""}`}
+            >
+              <span className="cc-dot" />
+              {n === leader && <Icon name="crown" size={12} />}
+              {agentLabel(n)}
+            </button>
+          ))}
+          <button className="cc-send" disabled={!draft.trim()} onClick={send} aria-label="Enviar" title="Enviar">
+            <Icon name="send" />
           </button>
         </div>
-        <select
-          className="cc-dest-select"
-          value={dest.kind === "team" ? "team" : dest.name}
-          onChange={(e) => {
-            const v = e.target.value;
-            setDest(v === "team" ? { kind: "team" } : { kind: "agent", name: v });
-          }}
-          title="A quién va este mensaje (también puedes empezar con @lider, @claude…)"
-        >
-          <option value="team">@equipo</option>
-          {destNames.map((n) => (
-            <option key={n} value={n}>
-              @{n}
-              {n === leader ? " (líder)" : ""}
-            </option>
-          ))}
-        </select>
-        <button className="cc-send2" disabled={!draft.trim()} onClick={send}>
-          Enviar
-        </button>
       </div>
     </div>
   );
@@ -710,274 +862,56 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
             {info?.repo ? info.branch || "…" : project ? shortPath(project) : "sin carpeta"}
           </span>
         </div>
-        <div className="cc-topinfo">
+
+        <TeamStrip agents={agents} states={states} onOpen={() => setOverlay("team")} />
+        {blocked.length > 0 && (
+          <button className="cc-alert" onClick={() => setOverlay("tasks")}>
+            <Icon name="warn" size={14} />
+            {blocked.length === 1 ? "1 espera tu respuesta" : `${blocked.length} esperan tu respuesta`}
+          </button>
+        )}
+
+        <div className="cc-top-r">
           <button
             className="cc-hub"
             data-on={hubOk ? "1" : "0"}
             onClick={() => say(hubUrl ? `Hub local: ${hubUrl}` : "Hub local: sin datos todavía.")}
             title={hubUrl ? `Hub del equipo: ${hubUrl}` : "Hub del equipo"}
           >
-            ● Hub
+            <span className="cc-dot" />
+            {hubOk ? "Hub conectado" : "Hub sin conexión"}
           </button>
-          <span>
-            {done}/{total} tareas
-          </span>
-          <span>·</span>
-          <span>
-            {online.length} agente{online.length === 1 ? "" : "s"}
-          </span>
-        </div>
-        <div className="cc-modes">
-          <button
-            onClick={() => onMode("canvas")}
-            title="Lienzo: terminales y paneles en el espacio (topología / depuración)"
-          >
-            ⬚ Lienzo
-          </button>
-          <button onClick={() => openDrawer(true)} title="Equipo — agentes, normas y proyecto">
-            ⚙
-          </button>
+          <div className="cc-modes">
+            <button
+              onClick={() => onMode("canvas")}
+              title="Lienzo: terminales y paneles en el espacio (topología / depuración)"
+            >
+              <Icon name="canvas" size={14} />
+              Lienzo
+            </button>
+            <button
+              onClick={() => openDrawer(true)}
+              title="Ajustes del equipo: agentes, normas y proyecto"
+              aria-label="Ajustes del equipo"
+            >
+              <Icon name="settings" size={15} />
+            </button>
+          </div>
         </div>
       </header>
 
       <div className="cc-main">
-        <aside className="cc-side">
-          <div className="cc-squad">
-            <div className="cc-side-sec">
-              <span className="cc-side-label">Equipo activo</span>
-              <button
-                className="cc-side-add"
-                onClick={() => openDrawer(true)}
-                title="Conectar CLIs, abrir agentes, normas y proyecto"
-              >
-                ＋ Añadir agente
-              </button>
-            </div>
-
-            {blocked.map((a) => {
-              const ev = lastByAgent.get(a.name);
-              return (
-                <div className="cc-block" key={a.session_id}>
-                  <div className="cc-block-head">
-                    <span className="cc-block-name">{a.name} consulta</span>
-                    {ev ? <span className="cc-block-ago">hace {ago(ev.ts_ms)}</span> : null}
-                  </div>
-                  <div className="cc-block-text">{ev?.text ?? "pide tu respuesta"}</div>
-                  <div className="cc-block-actions">
-                    <button className="cc-task-btn cc-primary" onClick={() => selectAgent(a.name)}>
-                      Responder
-                    </button>
-                    <button className="cc-task-btn" onClick={() => openTerm(a.name)}>
-                      ▸_ Terminal
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-
-            {agents.length === 0 ? (
-              <button className="cc-side-connect" onClick={() => openDrawer(true)}>
-                ＋ Conectar / abrir agentes
-              </button>
-            ) : (
-              agents.map((a) => (
-                <AgentCard
-                  key={a.session_id}
-                  agent={a}
-                  leader={leader}
-                  active={sel.kind === "agent" && sel.name === a.name}
-                  task={claimedBy.get(a.name)}
-                  last={lastByAgent.get(a.name)}
-                  onSelect={() => selectAgent(a.name)}
-                  onTerminal={() => openTerm(a.name)}
-                  onCrown={() => toggleLeader(a.name)}
-                  onCmd={(cmd, note) => writeAgent(a.name, cmd, note)}
-                />
-              ))
-            )}
-          </div>
-
-          <div className="cc-side-tabs">
-            <button data-active={sideTab === "tasks" ? "1" : "0"} onClick={() => setSideTab("tasks")}>
-              Tareas <span className="cc-tab-n">{openTasks}</span>
-            </button>
-            <button data-active={sideTab === "feed" ? "1" : "0"} onClick={() => setSideTab("feed")}>
-              Actividad en vivo
-            </button>
-            <button
-              className="cc-side-add"
-              onClick={() => {
-                setSideTab("tasks");
-                window.setTimeout(() => taskInputRef.current?.focus(), 0);
-              }}
-              title="Añadir una tarea al equipo"
-            >
-              ＋ Nueva
-            </button>
-          </div>
-
-          <div className="cc-side-body">
-            {sideTab === "tasks" ? (
-              <>
-                <div className="cc-filters">
-                  <button data-active={taskFilter === "all" ? "1" : "0"} onClick={() => setTaskFilter("all")}>
-                    Todas
-                  </button>
-                  <button
-                    data-active={taskFilter === "active" ? "1" : "0"}
-                    onClick={() => setTaskFilter("active")}
-                  >
-                    En curso
-                  </button>
-                  <button
-                    data-active={taskFilter === "done" ? "1" : "0"}
-                    onClick={() => setTaskFilter("done")}
-                  >
-                    Hechas
-                  </button>
-                </div>
-                {tasks.length === 0 && (
-                  <div className="cc-side-empty">
-                    Sin tareas. El equipo las crea al trabajar, o añade una aquí abajo.
-                  </div>
-                )}
-                {filteredTasks.map((t) => (
-                  <div
-                    className="cc-task"
-                    key={t.id}
-                    data-done={t.status === "done" ? "1" : "0"}
-                    data-active={diffTask === t.id && view === "diff" ? "1" : "0"}
-                    onClick={() => {
-                      if (project) {
-                        setDiffTask(t.id);
-                        setView("diff");
-                      } else {
-                        openDrawer(true);
-                      }
-                    }}
-                    title={
-                      project
-                        ? `Ver los cambios de la tarea #${t.id} en el escenario`
-                        : "Elige la carpeta del proyecto para ver cambios"
-                    }
-                  >
-                    <div className="cc-task-line">
-                      <span className="cc-task-dot" data-s={t.status} />
-                      <span className="cc-task-id">#{t.id}</span>
-                      <span className="cc-task-status" data-s={t.status}>
-                        {t.status === "done"
-                          ? "Hecha"
-                          : t.status === "claimed"
-                            ? "En curso"
-                            : "Abierta"}
-                      </span>
-                      {t.owner ? (
-                        <span
-                          className="cc-task-owner"
-                          style={{ color: agentColor(t.owner) }}
-                          title={`en manos de ${t.owner}`}
-                        >
-                          {t.owner}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="cc-task-title">{t.title}</div>
-                    <div className="cc-task-foot">
-                      <span className="cc-task-files">
-                        {taskFileCount.get(t.id)
-                          ? `${taskFileCount.get(t.id)} archivo${taskFileCount.get(t.id) === 1 ? "" : "s"}`
-                          : "sin archivos aún"}
-                      </span>
-                      <span className="cc-task-foot-r">
-                        {t.handover && (
-                          <span
-                            className="cc-task-handover"
-                            title={`Relevo de ${t.handover.by} hace ${ago(t.handover.ts_ms)}: ${t.handover.text}`}
-                          >
-                            📝
-                          </span>
-                        )}
-                        {t.status === "done" ? (
-                          <button
-                            className="cc-task-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              taskOp(t.id, "reopen");
-                            }}
-                            title="Reabrir"
-                          >
-                            ↺
-                          </button>
-                        ) : (
-                          <button
-                            className="cc-task-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              taskOp(t.id, "done");
-                            }}
-                            title="Marcar hecha"
-                          >
-                            ✓
-                          </button>
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-                <div className="team-task-add cc-task-add">
-                  <input
-                    ref={taskInputRef}
-                    type="text"
-                    value={taskDraft}
-                    placeholder="Nueva tarea…"
-                    onChange={(e) => setTaskDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") addTask();
-                    }}
-                  />
-                  <button className="agent-btn" onClick={addTask} disabled={!taskDraft.trim()}>
-                    ＋
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                {feedTop.length === 0 && (
-                  <div className="cc-side-empty">Aún no hay actividad del equipo.</div>
-                )}
-                {feedTop.map((e) => (
-                  <div className="cc-feed-item" key={e.seq}>
-                    <div className="cc-feed-l1">
-                      <button
-                        className="cc-feed-agent"
-                        style={{ color: agentColor(e.agent) }}
-                        onClick={() => {
-                          if (agents.some((a) => a.name === e.agent)) selectAgent(e.agent);
-                        }}
-                        title={
-                          agents.some((a) => a.name === e.agent)
-                            ? `Abrir la conversación con ${e.agent}`
-                            : e.agent
-                        }
-                      >
-                        {e.agent}
-                      </button>
-                      <span className="cc-feed-t">hace {ago(e.ts_ms)}</span>
-                    </div>
-                    <div className="cc-feed-txt">
-                      {GLYPHS[e.kind] ?? "•"} {e.text}
-                      {e.files.length > 0 && (
-                        <span className="feed-files"> · {e.files.map(shortPath).join(", ")}</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </>
-            )}
-          </div>
-
-          {composer}
-        </aside>
+        <ChatsSidebar
+          chats={chats.chats}
+          activeId={activeChat?.id ?? ""}
+          events={state?.events ?? []}
+          collapsed={chatsMin}
+          newChatOpen={overlay === "newchat"}
+          onToggle={toggleChats}
+          onNew={() => setOverlay("newchat")}
+          onSelect={activateChat}
+          onRemove={(c) => chats.remove(c.id)}
+        />
 
         <section className="cc-conv">
           {sel.kind === "team" ? (
@@ -1141,36 +1075,50 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
             </>
           ) : (
             <>
-              <div className="cc-chat-head">
+              <div className="cc-stage-head">
                 <button
-                  className="cc-back"
-                  onClick={() => setSel({ kind: "team" })}
-                  title="Volver al escenario del equipo"
+                  className="cc-icon-btn"
+                  onClick={selectTeam}
+                  title="Volver a la conversación del equipo"
+                  aria-label="Volver al equipo"
                 >
-                  ←
+                  <Icon name="users" />
                 </button>
-                <span className="agent-dot" data-on={agentRow?.online ? "1" : "0"} />
-                <span className="cc-chat-title" style={{ color: agentColor(sel.name) }}>
-                  {sel.name}
-                </span>
-                {leader === sel.name && <span className="prog-lead">líder</span>}
-                <span className="cc-chat-sub">
-                  {agentTask
-                    ? `#${agentTask.id} ${agentTask.title}`
-                    : agentRow
-                      ? agentRow.online
-                        ? `en línea · visto hace ${ago(agentRow.last_seen_ms)}`
-                        : "sin sesión viva"
-                      : "sin sesión conectada"}
-                </span>
-                <div className="cc-seg">
-                  <button data-active={tab === "chat" ? "1" : "0"} onClick={() => setTab("chat")}>
-                    💬 Conversación
-                  </button>
-                  <button data-active={tab === "term" ? "1" : "0"} onClick={() => setTab("term")}>
-                    ▸_ Terminal
-                  </button>
+                <div className="cc-stage-l">
+                  <h2 style={{ color: agentColor(sel.name) }}>
+                    {agentLabel(sel.name)}
+                    {leader === sel.name && (
+                      <span className="cc-lead">
+                        <Icon name="crown" size={13} />
+                        Líder
+                      </span>
+                    )}
+                  </h2>
+                  <div className="cc-stage-sub">
+                    <span className="cc-dot" data-on={agentRow?.online ? "1" : "0"} />
+                    {agentTask
+                      ? `#${agentTask.id} ${agentTask.title}`
+                      : agentRow
+                        ? agentRow.online
+                          ? `en línea · visto hace ${ago(agentRow.last_seen_ms)}`
+                          : "sin sesión viva"
+                        : "sin sesión conectada"}
+                  </div>
                 </div>
+                <div className="cc-stage-r">
+                  {tab === "chat" && actToggle}
+                  {tasksBtn}
+                </div>
+              </div>
+              <div className="cc-vtabs" role="tablist">
+                <button role="tab" aria-selected={tab === "chat"} onClick={() => setTab("chat")}>
+                  <Icon name="msg" size={14} />
+                  Conversación
+                </button>
+                <button role="tab" aria-selected={tab === "term"} onClick={() => setTab("term")}>
+                  <Icon name="term" size={14} />
+                  Terminal
+                </button>
               </div>
 
               {tab === "term" ? (
@@ -1209,7 +1157,7 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
                   <div className="cc-chat" ref={chatRef} onScroll={onChatScroll}>
                     {msgs.length === 0 ? (
                       <div className="cc-empty">
-                        Conversación con {sel.name}. Lo que escribas va directo a su terminal; sus
+                        Conversación con {agentLabel(sel.name)}. Lo que escribas va directo a su terminal; sus
                         avances y mensajes aparecerán aquí.
                       </div>
                     ) : (
@@ -1220,8 +1168,80 @@ export function CommandCenter({ onMode }: { onMode: (mode: Mode) => void }) {
               )}
             </>
           )}
+          {composer}
         </section>
       </div>
+
+      {overlay === "newchat" && (
+        <NewChatMenu
+          agents={agents}
+          leader={leader}
+          collapsed={chatsMin}
+          onPick={startChat}
+          onClose={() => setOverlay(null)}
+        />
+      )}
+
+      {overlay === "team" && (
+        <TeamModal
+          agents={agents}
+          states={states}
+          leader={leader}
+          claimedBy={claimedBy}
+          lastByAgent={lastByAgent}
+          onClose={() => setOverlay(null)}
+          onTalk={(name) => selectAgent(name)}
+          onTerminal={(name) => {
+            setOverlay(null);
+            openTerm(name);
+          }}
+          onCrown={(name) => {
+            void toggleLeader(name);
+          }}
+          onCmd={(name, cmd, note) => {
+            void writeAgent(name, cmd, note);
+          }}
+          onSettings={() => {
+            setOverlay(null);
+            openDrawer(true);
+          }}
+        />
+      )}
+
+      {overlay === "tasks" && (
+        <TasksDrawer
+          tasks={tasks}
+          events={state?.events ?? []}
+          agentNames={agents.map((a) => a.name)}
+          blocked={blockedNames}
+          lastByAgent={lastByAgent}
+          taskFileCount={taskFileCount}
+          activeTaskId={view === "diff" ? diffTask : null}
+          hasProject={!!project}
+          onClose={() => setOverlay(null)}
+          onOpenTask={(id) => {
+            if (!project) {
+              setOverlay(null);
+              openDrawer(true);
+              return;
+            }
+            setDiffTask(id);
+            setView("diff");
+            setSel({ kind: "team" });
+            setOverlay(null);
+          }}
+          onTaskOp={(id, op) => {
+            void taskOp(id, op);
+          }}
+          onAddTask={addTask}
+          onAnswer={(name) => selectAgent(name)}
+          onTerminal={(name) => {
+            setOverlay(null);
+            openTerm(name);
+          }}
+          onSelectAgent={(name) => selectAgent(name)}
+        />
+      )}
 
       {/* Terminales ocultas pero vivas: los agentes siguen corriendo aunque no
           estés mirándolos, y aparecen al instante al abrir su pestaña. */}

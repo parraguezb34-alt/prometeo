@@ -1,5 +1,6 @@
-import { agentColor, agentCommands, ago, HANDOVER_SAVE_PROMPT } from "../lib/team";
-import type { TeamAgent, TeamEvent } from "../lib/team";
+import { agentCommands, HANDOVER_SAVE_PROMPT } from "../lib/team";
+import type { TeamAgent } from "../lib/team";
+import { Icon } from "./Icon";
 
 /** Model selector + mode/compact/relevo buttons for one agent. Everything here
  * is typed into the agent's terminal (per-CLI commands we know are safe). */
@@ -49,7 +50,7 @@ export function AgentQuickCmds({
           onClick={() => onCmd(cmds.modeSeq ?? "\x1b[Z", "Shift+Tab (modo)")}
           title="Alterna Plan/Permisos dentro de su TUI (Shift+Tab)"
         >
-          📋/⚡
+          Plan/Directo
         </button>
       )}
       <button
@@ -57,7 +58,7 @@ export function AgentQuickCmds({
         onClick={() => onCmd(`${HANDOVER_SAVE_PROMPT}\r`, "relevo con memoria")}
         title="Relevo con memoria: guarda su resumen pegado a la tarea y lienzo compacta su contexto (sin amnesia)."
       >
-        🔄
+        <Icon name="refresh" size={13} />
       </button>
       {cmds.compact && (
         <button
@@ -68,7 +69,7 @@ export function AgentQuickCmds({
           }}
           title={`Escribe ${cmds.compact ?? "/compact"} en su terminal`}
         >
-          🧹
+          <Icon name="shrink" size={13} />
         </button>
       )}
     </div>
@@ -76,123 +77,29 @@ export function AgentQuickCmds({
 }
 
 /** "62k", "9.4k", "820" */
-function fmtTokens(n: number): string {
+export function fmtTokens(n: number): string {
   if (n >= 10_000) return `${Math.round(n / 1000)}k`;
   if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
   return `${n}`;
-}/** "claude-opus-4-5-20260101" → "opus-4-5" */
-function shortModel(m: string): string {
+}
+
+/** "claude-opus-4-5-20260101" → "opus-4-5" */
+export function shortModel(m: string): string {
   return m.replace(/^claude-/, "").replace(/-\d{8}$/, "");
 }
 
-/** Mini-card of one connected agent in the sidebar. */
-export function AgentCard({
-  agent,
-  leader,
-  active,
-  task,
-  last,
-  onSelect,
-  onTerminal,
-  onCrown,
-  onCmd,
-}: {
-  agent: TeamAgent;
-  leader: string;
-  active: boolean;
-  task?: { id: number; title: string };
-  last?: TeamEvent;
-  onSelect: () => void;
-  onTerminal: () => void;
-  onCrown: () => void;
-  onCmd: (cmd: string, note: string) => void;
-}) {
-  const name = agent.name;
-  const isLeader = leader === name;
-  const ctx =
-    agent.ctx_tokens != null && agent.ctx_window
-      ? {
-          tokens: agent.ctx_tokens,
-          window: agent.ctx_window,
-          pct: Math.min(100, Math.round((agent.ctx_tokens / agent.ctx_window) * 100)),
-        }
-      : null;
-  return (
-    <div
-      className="cc-agent-card"
-      data-active={active ? "1" : "0"}
-      onClick={onSelect}
-      title={`Hablar con ${name}`}
-    >
-      <div className="cc-agent-l1">
-        <span className="agent-dot" data-on={agent.online ? "1" : "0"} />
-        <span className="cc-agent-name" style={{ color: agentColor(name) }}>
-          {name}
-        </span>
-        <button
-          className="cc-crown"
-          data-on={isLeader ? "1" : "0"}
-          onClick={(e) => {
-            e.stopPropagation();
-            onCrown();
-          }}
-          title={isLeader ? "Es el líder (pulsa para quitarlo)" : "Hacer líder del equipo"}
-        >
-          {isLeader ? "👑" : "♔"}
-        </button>
-        <span className="cc-agent-ago">{agent.online ? ago(agent.last_seen_ms) : "offline"}</span>
-        <button
-          className="cc-side-term"
-          onClick={(e) => {
-            e.stopPropagation();
-            onTerminal();
-          }}
-          title="Ver o lanzar su terminal aquí"
-        >
-          ▸_
-        </button>
-      </div>
-      <div className="cc-agent-l2">
-        <span className="cc-agent-act" title={task ? `#${task.id} ${task.title}` : last?.text}>
-          {task ? `#${task.id} ${task.title}` : last ? last.text : "sin actividad aún"}
-        </span>
-      </div>
-      {ctx && (
-        <div
-          className="cc-ctx"
-          data-hot={ctx.pct >= 75 ? "1" : "0"}
-          title={`Contexto usado: ${fmtTokens(ctx.tokens)} de ${fmtTokens(ctx.window)} tokens (${ctx.pct}%)${
-            agent.model ? ` · ${agent.model}` : ""
-          }`}
-        >
-          <div className="cc-ctx-bar">
-            <i
-              data-w={ctx.pct >= 80 ? "hi" : ctx.pct >= 60 ? "mid" : "ok"}
-              style={{ width: `${ctx.pct}%` }}
-            />
-          </div>
-          <span className="cc-ctx-label">
-            {ctx.pct}% · {fmtTokens(ctx.tokens)}
-            {ctx.pct >= 80 ? " ⚠️" : ""}
-          </span>
-          {agent.model ? <span className="cc-ctx-model">{shortModel(agent.model)}</span> : null}
-          <button
-            className="cc-ctx-refresh"
-            onClick={(e) => {
-              e.stopPropagation();
-              onCmd(`${HANDOVER_SAVE_PROMPT}\r`, "relevo con memoria");
-            }}
-            title={
-              ctx.pct >= 75
-                ? `Contexto al ${ctx.pct}%: guarda su memoria y compacta para que baje sin amnesia.`
-                : "Relevo con memoria: guarda su resumen pegado a la tarea y compacta su contexto."
-            }
-          >
-            🔄
-          </button>
-        </div>
-      )}
-      <AgentQuickCmds agent={name} onCmd={onCmd} />
-    </div>
-  );
+/** Contexto real del agente (telemetría del puente), o null si no se puede medir. */
+export function ctxOf(agent: TeamAgent): { tokens: number; window: number; pct: number } | null {
+  if (agent.ctx_tokens == null || !agent.ctx_window) return null;
+  return {
+    tokens: agent.ctx_tokens,
+    window: agent.ctx_window,
+    pct: Math.min(100, Math.round((agent.ctx_tokens / agent.ctx_window) * 100)),
+  };
+}
+
+/** Nivel del termómetro: ok / warn / err (o none si no hay medida). */
+export function ctxLevel(pct: number | null): "ok" | "warn" | "err" | "none" {
+  if (pct == null) return "none";
+  return pct >= 80 ? "err" : pct >= 60 ? "warn" : "ok";
 }
