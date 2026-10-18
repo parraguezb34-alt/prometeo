@@ -39,6 +39,7 @@ pub fn run() {
             hub::connectors::team_open,
             hub::connectors::team_models,
             hub::connectors::opencode_compact,
+            hub::connectors::team_agent_session,
             project::project_info,
             project::project_status,
             project::project_list,

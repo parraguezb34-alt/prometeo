@@ -13,7 +13,7 @@ import {
   termWrite,
 } from "../lib/pty";
 import type { PtyDataEvent, PtyExitEvent } from "../lib/pty";
-import { setPanelSession } from "../store";
+import { respawnCmd, setPanelSession } from "../store";
 import type { Panel } from "../store";
 
 const THEME = {
@@ -111,6 +111,8 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
       );
 
       let sid = sessionRef.current;
+      // Tenía sesión y ya no existe: lienzo se reinició y la terminal se vuelve a abrir.
+      const hadSession = !!sid;
       let reattached = false;
       if (sid) {
         // Re-attach to an existing session (frontend reload): repaint scrollback.
@@ -125,7 +127,9 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
         }
       }
       if (!sid) {
-        const info = await termSpawn(null, term.cols, term.rows, panel.cmd ?? null);
+        // Al reabrir un agente se retoma la conversación del chat actual (ver respawnCmd).
+        const cmd = hadSession ? respawnCmd(panel) : (panel.cmd ?? null);
+        const info = await termSpawn(null, term.cols, term.rows, cmd);
         sid = info.id;
         if (disposedRef.current) {
           termKill(sid).catch(() => {});

@@ -155,6 +155,7 @@ fn cmd_join(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 ctx_tokens: None,
                 ctx_window: None,
                 ctx_ms: None,
+                cli_session: None,
             },
         );
         let norm = project.replace('\\', "/");
@@ -234,6 +235,9 @@ fn cmd_event(app: &AppHandle, payload: &Value) -> Result<Value, String> {
         let ctx_window = payload["ctx_window"].as_u64();
         if model.is_some() || ctx_tokens.is_some() {
             hub::report_ctx(inner, &sid, &agent, model, ctx_tokens, ctx_window);
+        }
+        if let Some(cli) = payload["cli_session"].as_str().filter(|s| !s.is_empty() && s.len() < 100) {
+            hub::report_cli_session(inner, &sid, &agent, cli);
         }
         hub::persist(inner);
         json!({ "seq": ev.seq })

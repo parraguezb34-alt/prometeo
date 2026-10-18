@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { addAgentTerminal, getLayout, removePanel, useLayout } from "../store";
+import { addAgentTerminal, getLayout, removePanel, setRespawnResolver, useLayout } from "../store";
 import type { Panel } from "../store";
 import {
   agentColor,
@@ -16,6 +16,7 @@ import {
   pushPlan,
   shortPath,
   teamAddTask,
+  teamAgentSession,
   teamConnect,
   teamDetails,
   teamDetect,
@@ -44,7 +45,8 @@ import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
 import { projectInfo, projectRecent } from "../lib/project";
 import type { ProjectInfo } from "../lib/project";
-import { inWindow, useChats } from "../lib/chats";
+import { currentTeamChat, inWindow, useChats } from "../lib/chats";
+import { LATEST, resetCommand, withResume } from "../lib/resume";
 import { useTermActivity } from "../lib/activity";
 import { eventImages, samePath } from "../lib/timeline";
 import type { Chat } from "../lib/chats";
@@ -244,6 +246,12 @@ export function CommandCenter() {
   const project = state?.project ?? null;
   const chats = useChats(project);
 
+  /** Conversación que el chat del equipo abierto tiene apuntada para un agente (o null). */
+  const sessionRef = (name: string): string | null =>
+    currentTeamChat(chats.current())?.sessions?.[name] ?? null;
+  // Si lienzo se reinicia, cada agente se reabre retomando la conversación de este chat.
+  setRespawnResolver((panel) => (panel.cmd ? withResume(panel.cmd, sessionRef(agentKeyFromCmd(panel.cmd))) : null));
+
   // Rama git del proyecto, para la barra superior.
   useEffect(() => {
     let alive = true;
@@ -411,6 +419,25 @@ export function CommandCenter() {
     }
   };
 
+  /** Un chat del equipo nuevo empieza conversaciones nuevas: cada agente abierto limpia la suya
+   * (/clear o /new en su terminal), sin cerrar la terminal. Devuelve a cuántos se lo pidió. */
+  const freshConversations = async (): Promise<number> => {
+    let n = 0;
+    for (const p of getLayout().panels) {
+      if (p.kind !== "terminal" || !p.cmd || !p.sessionId) continue;
+      const cmd = resetCommand(agentKeyFromCmd(p.cmd));
+      if (!cmd) continue;
+      try {
+        await termWrite(p.sessionId, `${cmd}\r`);
+        n++;
+      } catch {
+        /* terminal cerrada: al abrirla empezará de cero */
+      }
+    }
+    if (n > 0) say(`Chat nuevo: ${n === 1 ? "el agente empieza" : `${n} agentes empiezan`} una conversación nueva.`);
+    return n;
+  };
+
   /** Crea el chat elegido en el menú «Nuevo chat». */
   const startChat = (choice: NewChatChoice) => {
     setOverlay(null);
@@ -420,6 +447,7 @@ export function CommandCenter() {
       return;
     }
     chats.create("team");
+    void freshConversations();
     setSel({ kind: "team" });
     setDest({ kind: "team" });
     setView("feed");
@@ -470,7 +498,8 @@ export function CommandCenter() {
       if (r.kind === "app") {
         say(`✓ ${label} se está abriendo en su app de escritorio…`);
       } else {
-        addAgentTerminal(label, r.cmd);
+        // Si ya trabajó en este chat, retoma esa conversación; si no, empieza una nueva.
+        addAgentTerminal(label, withResume(r.cmd, sessionRef(id)));
         if (opts.selectTerm) {
           showTerminal(agentKeyFromCmd(r.cmd));
           setDrawer(null);
@@ -525,8 +554,9 @@ export function CommandCenter() {
       // Un reinicio por ajustes conserva el modo con el que ya estaba el agente (plan o no), sin
       // depender del interruptor Planificar/Directo del chat, que puede estar en otro punto.
       const mode: Shoot = /(?:--mode|--permission-mode)[ =]plan/.test(panel.cmd ?? "") ? "plan" : "exec";
-      const r = await teamOpen(name, mode, { model: p.model, effort: p.effort, resume: true });
-      if (r.kind === "pty") addAgentTerminal(label, r.cmd);
+      const r = await teamOpen(name, mode, { model: p.model, effort: p.effort });
+      // Retoma la conversación de este chat (o, si aún no se sabe cuál, la última de la carpeta).
+      if (r.kind === "pty") addAgentTerminal(label, withResume(r.cmd, sessionRef(name) ?? LATEST));
       markApplied(name, p);
       say(`✓ ${label} reiniciado con los ajustes nuevos; retoma su conversación.`);
       refresh();
@@ -715,6 +745,34 @@ export function CommandCenter() {
     const id = window.setInterval(() => void check(), 5000);
     return () => window.clearInterval(id);
   }, [say]);
+
+  // Cada poco se apunta en el chat del equipo abierto con qué conversación trabaja cada agente
+  // que ya hizo algo en él: Claude Code y Codex la dicen por sus hooks, Antigravity en su
+  // historial, y de OpenCode basta con «la última de la carpeta».
+  useEffect(() => {
+    const run = async () => {
+      const cur = latestRef.current;
+      const chat = currentTeamChat(chats.current());
+      if (!cur || !chat || !project) return;
+      for (const a of cur.agents) {
+        if (!a.online || !panelForAgent(cur.panels, a.name)?.sessionId) continue;
+        const worked = cur.events.some(
+          (e) => e.agent === a.name && e.ts_ms >= chat.startMs && !HIDDEN_KINDS.has(e.kind),
+        );
+        if (!worked) continue;
+        let ref: string | null = null;
+        if (a.name === "claude" || a.name === "codex") ref = a.cli_session ?? null;
+        else if (a.name === "antigravity") ref = await teamAgentSession(a.name, project).catch(() => null);
+        ref ??= chat.sessions?.[a.name] ? null : LATEST;
+        if (ref && chat.sessions?.[a.name] !== ref) chats.setSession(chat.id, a.name, ref);
+      }
+    };
+    void run();
+    const id = window.setInterval(() => void run(), 10_000);
+    return () => window.clearInterval(id);
+    // chats.current y chats.setSession son estables; el objeto chats cambia en cada render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chats.current, chats.setSession, project]);
 
   // Mensajes entre agentes: el hub solo se los entrega a quien llama a una herramienta del equipo,
   // y un agente parado en su prompt no llama a ninguna. Si pasa un rato y el destinatario sigue
@@ -977,7 +1035,13 @@ export function CommandCenter() {
     // Si estás viendo un chat cerrado, lo que escribas abre uno nuevo del mismo
     // ámbito; el primer mensaje le da título.
     let chat = chats.active;
-    if (chat && chat.endMs != null) chat = chats.create(chat.kind, chat.agent);
+    if (chat && chat.endMs != null) {
+      chat = chats.create(chat.kind, chat.agent);
+      // Un chat del equipo nuevo: los agentes limpian su conversación antes de recibir el mensaje.
+      if (chat.kind === "team" && (await freshConversations()) > 0) {
+        await new Promise((r) => window.setTimeout(r, 1200));
+      }
+    }
     if (chat) chats.autoTitle(chat.id, flat);
 
     const clear = () => {

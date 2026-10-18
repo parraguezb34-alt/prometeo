@@ -111,6 +111,20 @@ export function removePanel(id: string) {
   set({ panels: state.panels.filter((p) => p.id !== id) });
 }
 
+/**
+ * Orden con la que se reabre la terminal de un agente cuya sesión ya no existe (lienzo se
+ * reinició): el centro de mando la registra para retomar la conversación del chat actual.
+ */
+let respawnResolver: ((panel: Panel) => string | null) | null = null;
+
+export function setRespawnResolver(fn: ((panel: Panel) => string | null) | null) {
+  respawnResolver = fn;
+}
+
+export function respawnCmd(panel: Panel): string | null {
+  return respawnResolver?.(panel) ?? panel.cmd ?? null;
+}
+
 export function setPanelSession(id: string, sessionId: string) {
   set({
     panels: state.panels.map((p) => (p.id === id ? { ...p, sessionId } : p)),

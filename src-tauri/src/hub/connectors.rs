@@ -1016,3 +1016,33 @@ pub fn team_models(agent: String) -> Result<Value, String> {
         other => Err(format!("agente desconocido: {other}")),
     }
 }
+
+/// Id de la conversación más reciente de un agente en la carpeta del proyecto, para
+/// retomarla al reabrirlo. Antigravity anota cada mensaje en su `history.jsonl` con la
+/// carpeta (`workspace`) y la conversación (`conversationId`). Claude Code y Codex lo
+/// mandan con sus hooks (ver `AgentInfo::cli_session`), así que aquí no hace falta.
+#[tauri::command]
+pub fn team_agent_session(agent: String, project: String) -> Option<String> {
+    if agent != "antigravity" {
+        return None;
+    }
+    let path = home().join(".gemini").join("antigravity-cli").join("history.jsonl");
+    let meta = std::fs::metadata(&path).ok()?;
+    let start = meta.len().saturating_sub(256 * 1024);
+    let mut file = std::fs::File::open(&path).ok()?;
+    use std::io::{Read, Seek, SeekFrom};
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let norm = |s: &str| s.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let want = norm(&project);
+    // El último mensaje de esta carpeta manda. El primero de una conversación nueva aún no
+    // lleva id: entonces no se sabe (y no se devuelve el de la conversación anterior).
+    let last = text.lines().rev().find_map(|line| {
+        let v: Value = serde_json::from_str(line).ok()?;
+        (norm(v["workspace"].as_str()?) == want).then_some(v)
+    })?;
+    let id = last["conversationId"].as_str()?;
+    (!id.is_empty() && id.len() < 100).then(|| id.to_string())
+}

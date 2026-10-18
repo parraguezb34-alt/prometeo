@@ -22,7 +22,14 @@ export type Chat = {
   endMs?: number;
   /** Cuándo se creó (orden y agrupación en la barra). */
   createdMs: number;
+  /** Conversación de cada agente en este chat (id del CLI, o «*» = la última de la carpeta). */
+  sessions?: Record<string, string>;
 };
+
+/** El chat del equipo que está abierto ahora: a él pertenecen las conversaciones de los agentes. */
+export function currentTeamChat(chats: Chat[]): Chat | null {
+  return chats.find((c) => c.kind === "team" && c.endMs == null) ?? null;
+}
 
 const MAX_CHATS = 80;
 const DEFAULT_TITLE = "Chat nuevo";
@@ -173,6 +180,19 @@ export function useChats(project: string | null) {
     [update],
   );
 
+  /** Recuerda con qué conversación trabaja un agente en un chat. */
+  const setSession = useCallback(
+    (id: string, agent: string, ref: string) => {
+      update((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, sessions: { ...(c.sessions ?? {}), [agent]: ref } } : c)),
+      );
+    },
+    [update],
+  );
+
+  /** Lista al día (también entre renders), para quien la lea fuera de React. */
+  const current = useCallback(() => ref.current, []);
+
   const remove = useCallback(
     (id: string) => {
       const rest = ref.current.filter((c) => c.id !== id);
@@ -183,7 +203,7 @@ export function useChats(project: string | null) {
     [update],
   );
 
-  return { chats, active, create, openScope, select, autoTitle, remove };
+  return { chats, active, create, openScope, select, autoTitle, remove, setSession, current };
 }
 
 /** "Hoy", "Ayer", "Esta semana" o "Antes". */

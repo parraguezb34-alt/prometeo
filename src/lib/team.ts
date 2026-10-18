@@ -29,6 +29,8 @@ export type TeamAgent = {
   ctx_tokens?: number | null;
   ctx_window?: number | null;
   ctx_ms?: number | null;
+  /** Id de la conversación del propio CLI (Claude Code, Codex), que llega por sus hooks. */
+  cli_session?: string | null;
 };
 
 export type TeamHandover = {
@@ -149,6 +151,10 @@ export const teamOpen = (agent: string, mode: OpenMode = "exec", opts: OpenOpts 
     effort: opts.effort ?? null,
     resume: opts.resume ?? false,
   });
+
+/** Conversación más reciente de un agente en la carpeta, si su CLI la deja leer (Antigravity). */
+export const teamAgentSession = (agent: string, project: string) =>
+  invoke<string | null>("team_agent_session", { agent, project });
 
 export type ModelEntry = { id: string; label: string; efforts: string[] };
 

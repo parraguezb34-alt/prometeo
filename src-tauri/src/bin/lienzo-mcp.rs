@@ -1095,6 +1095,18 @@ fn hook_mode(args: &[String]) {
         }
         "stop" => ("stop", "terminó su turno".to_string(), vec![]),
         "session" => ("session", "sesión iniciada".to_string(), vec![]),
+        // Avisos de Claude que no piden nada («Claude Code login successful»): no lo bloquean.
+        "waiting"
+            if payload["message"]
+                .as_str()
+                .is_some_and(|m| m.to_lowercase().contains("successful")) =>
+        {
+            (
+                "update",
+                trunc(payload["message"].as_str().unwrap_or(""), 240),
+                vec![],
+            )
+        }
         // Claude pide atencion (permiso, pregunta o lleva rato esperando).
         "waiting" => (
             "waiting",
@@ -1118,6 +1130,10 @@ fn hook_mode(args: &[String]) {
     };
 
     let mut body = json!({ "agent": agent, "kind": kind, "text": text, "files": files });
+    // Id de la conversación del CLI: con él lienzo retoma la conversación del chat al reabrirlo.
+    if !session_key.is_empty() {
+        body["cli_session"] = json!(session_key);
+    }
     if let Some(m) = &model {
         body["model"] = json!(m);
     }

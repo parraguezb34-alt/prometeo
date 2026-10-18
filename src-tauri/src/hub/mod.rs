@@ -39,6 +39,10 @@ pub struct AgentInfo {
     pub ctx_window: Option<u64>,
     #[serde(default)]
     pub ctx_ms: Option<u64>,
+    /// Id de la conversación del propio CLI (Claude Code, Codex), que mandan sus hooks:
+    /// lienzo lo usa para retomar esa conversación al reabrir el agente.
+    #[serde(default)]
+    pub cli_session: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -678,6 +682,24 @@ pub fn touch_agent(inner: &mut HubInner, session_id: &str) {
 
 /// Guarda la telemetría de contexto que reporta el puente (uso real de tokens
 /// leído del transcript del agente). Busca por sesión y, si no, por nombre.
+/// Guarda el id de conversación del CLI que reportó un hook (ver `AgentInfo::cli_session`).
+pub fn report_cli_session(inner: &mut HubInner, session_id: &str, agent_name: &str, cli: &str) {
+    let key = if !session_id.is_empty() && inner.agents.contains_key(session_id) {
+        session_id.to_string()
+    } else {
+        inner
+            .agents
+            .iter()
+            .filter(|(_, a)| a.name == agent_name)
+            .max_by_key(|(_, a)| a.last_seen_ms)
+            .map(|(k, _)| k.clone())
+            .unwrap_or_default()
+    };
+    if let Some(agent) = inner.agents.get_mut(&key) {
+        agent.cli_session = Some(cli.to_string());
+    }
+}
+
 pub fn report_ctx(
     inner: &mut HubInner,
     session_id: &str,
