@@ -154,6 +154,11 @@ export function tick(
     const id = Number(key);
     const p = state.pending[id];
     const task = tasks.find((t) => t.id === id);
+    // Quedó fuera del chat abierto (empezaste otro): el aviso ya no cuenta, ni como fallo.
+    if (task?.status === "fuera") {
+      delete state.pending[id];
+      continue;
+    }
     if (!task || task.status === "done" || task.owner) {
       // Reclamada (o cerrada, o desaparecida): el aviso funcionó.
       if (task && task.owner === p.agent) state.agentFails[p.agent] = 0;

@@ -151,6 +151,18 @@ function panelForAgent(panels: Panel[], agentName: string): Panel | undefined {
  * mision con modo Planificar/Ejecutar. Las terminales viven ocultas pero vivas,
  * listas para verse bajo demanda.
  */
+/** Tareas de un chat: las que nacieron en él (o en el que retoma) o que alguien tomó o cerró en él. */
+function taskIdsOfChat(lineage: Chat[], tasks: TeamTask[], events: TeamEvent[]): Set<number> {
+  const ids = new Set<number>();
+  for (const t of tasks) if (inChat(lineage, t.created_ms)) ids.add(t.id);
+  for (const e of events) {
+    if (e.kind !== "task" || !inChat(lineage, e.ts_ms)) continue;
+    const t = parseTask(e);
+    if (t) ids.add(t.id);
+  }
+  return ids;
+}
+
 export function CommandCenter() {
   const layout = useLayout();
   const [state, setState] = useState<TeamState | null>(null);
@@ -354,13 +366,8 @@ export function CommandCenter() {
   // alguien tomó o cerró en él. Las que quedaron sin terminar en chats anteriores van aparte.
   const { chatTasks, earlierTasks } = useMemo(() => {
     if (lineage.length === 0) return { chatTasks: tasks, earlierTasks: [] as TeamTask[] };
-    const touched = new Set<number>();
-    for (const e of state?.events ?? []) {
-      if (e.kind !== "task" || !inChat(lineage, e.ts_ms)) continue;
-      const t = parseTask(e);
-      if (t) touched.add(t.id);
-    }
-    const mine = tasks.filter((t) => inChat(lineage, t.created_ms) || touched.has(t.id));
+    const ids = taskIdsOfChat(lineage, tasks, state?.events ?? []);
+    const mine = tasks.filter((t) => ids.has(t.id));
     const first = Math.min(...lineage.map((c) => c.startMs));
     const earlier = tasks.filter((t) => !mine.includes(t) && t.status !== "done" && t.created_ms < first);
     return { chatTasks: mine, earlierTasks: earlier };
@@ -1299,8 +1306,17 @@ export function CommandCenter() {
     return m;
   }, [roster, blockedNames, claimedBy, layout.panels, authIssues]);
 
+  // El despacho automático solo reparte las tareas del chat del equipo que está abierto: las
+  // abiertas de otros chats se le pasan como «fuera», para que sigan contando como padres
+  // sin terminar pero nunca se pidan.
+  const dispatchTasks = useMemo(() => {
+    const open = currentTeamChat(chats.chats);
+    const ids = open ? taskIdsOfChat(chatLineage(open, chats.chats), tasks, state?.events ?? []) : new Set<number>();
+    return tasks.map((t) => (t.status === "open" && !ids.has(t.id) ? { ...t, status: "fuera" } : t));
+  }, [tasks, chats.chats, state]);
+
   latestRef.current = {
-    tasks,
+    tasks: dispatchTasks,
     agents,
     leader,
     // Un agente sin sesión iniciada no puede tomar tareas: el despachador lo trata como ocupado.

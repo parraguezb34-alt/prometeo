@@ -126,4 +126,19 @@ test("el aviso es de una sola línea y cita la tarea", () => {
   assert.ok(p.includes("#7") && p.includes("team_task_claim") && p.includes("team_task_done"));
 });
 
+test("no reparte tareas de otros chats, pero siguen contando como padres", () => {
+  const solo = tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1, "fuera")], agents: [a("x")], leader: "" });
+  assert.equal(solo.send, null);
+  const hija = tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1, "fuera"), t(2, "open", "", [1])], agents: [a("x")], leader: "" });
+  assert.equal(hija.send, null);
+});
+
+test("un aviso cuya tarea pasa a otro chat se descarta sin contar fallo", () => {
+  const r1 = tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1)], agents: [a("x")], leader: "" });
+  const r2 = tick(r1.state, { now: NOW + C.claimWaitMs + 1, tasks: [t(1, "fuera")], agents: [a("x")], leader: "" });
+  assert.deepEqual(r2.state.pending, {});
+  assert.equal(r2.state.taskFails[1] ?? 0, 0);
+  assert.equal(r2.state.agentFails.x ?? 0, 0);
+});
+
 console.log(`\n${n} pruebas pasadas`);
