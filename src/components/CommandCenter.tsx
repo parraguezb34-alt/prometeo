@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties } from "react";
 import { addAgentTerminal, getLayout, removePanel, useLayout } from "../store";
 import type { Panel } from "../store";
 import {
   agentColor,
   agentCommands,
-  agentInitial,
   agentKeyFromCmd,
   agentLabel,
   ago,
@@ -43,11 +42,15 @@ import type { DAgent, DispatchState } from "../lib/dispatcher";
 import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, savePrefs } from "../lib/agentPrefs";
 import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
-import { projectInfo } from "../lib/project";
+import { projectInfo, projectRecent } from "../lib/project";
 import type { ProjectInfo } from "../lib/project";
 import { inWindow, useChats } from "../lib/chats";
+import { useTermActivity } from "../lib/activity";
+import { eventImages, samePath } from "../lib/timeline";
 import type { Chat } from "../lib/chats";
 import { AgentQuickCmds } from "./AgentCard";
+import { ChatView } from "./ChatView";
+import type { LiveAgent } from "./ChatView";
 import { ChatsSidebar } from "./ChatsSidebar";
 import { DiffTab, taskPaths } from "./DiffTab";
 import { FilesTab } from "./FilesTab";
@@ -79,14 +82,29 @@ type Overlay = "team" | "tasks" | "newchat" | null;
 
 const SHOOT_KEY = "lienzo.shoot.v1";
 const CHATS_MIN_KEY = "lienzo.chatsmin.v1";
-const ACT_KEY = "lienzo.showact.v1";
 const DISPATCH_KEY = "lienzo.dispatch.v1";
 
 /** Ruido de conexión que no aporta a una conversación: nunca se muestra en el chat. */
 const HIDDEN_KINDS = new Set(["join", "leave", "session", "stop", "prompt"]);
 
-/** Lo que hacen los agentes por dentro (herramientas, reservas): solo con «Mostrar herramientas». */
-const QUIET_KINDS = new Set(["tool", "claim", "release"]);
+/** Imágenes que pueden ser capturas de los agentes. */
+const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp"];
+
+/** Agente que estaba trabajando cuando apareció una imagen nueva (o nadie). */
+function imageOwner(events: TeamEvent[], ts: number): string {
+  let best = "";
+  let gap = Infinity;
+  for (const e of events) {
+    if (e.agent === "tú" || !e.agent) continue;
+    const d = ts - e.ts_ms;
+    if (d < -30_000 || d > 120_000) continue;
+    if (Math.abs(d) < gap) {
+      gap = Math.abs(d);
+      best = e.agent;
+    }
+  }
+  return best;
+}
 
 function loadFlag(key: string, fallback: boolean): boolean {
   try {
@@ -141,7 +159,6 @@ export function CommandCenter() {
   const [shoot, setShoot] = useState<Shoot>(loadShoot);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [chatsMin, setChatsMin] = useState(() => loadFlag(CHATS_MIN_KEY, false));
-  const [showAct, setShowAct] = useState(() => loadFlag(ACT_KEY, false));
   const [termPick, setTermPick] = useState<string | null>(null);
   const [changeCount, setChangeCount] = useState<number | null>(null);
   const [diffTask, setDiffTask] = useState<number | null>(null);
@@ -164,15 +181,15 @@ export function CommandCenter() {
   const [tails, setTails] = useState<Record<string, string>>({});
   /** Agentes cuya terminal pide iniciar sesión (no pueden responder aunque estén «en línea»). */
   const [authIssues, setAuthIssues] = useState<string[]>([]);
-  /** Grupos de actividad desplegados en el chat (por seq del primer evento). */
-  const [openGroups, setOpenGroups] = useState<number[]>([]);
+  /** Imágenes nuevas del proyecto (capturas) como eventos sintéticos del chat. */
+  const [newImages, setNewImages] = useState<TeamEvent[]>([]);
+  /** Lo que muestra ahora la terminal de cada agente (trabajando o no). */
+  const activity = useTermActivity();
   const [hubOk, setHubOk] = useState(true);
   const [hubUrl, setHubUrl] = useState("");
   const [flash, setFlash] = useState<{ text: string; err?: boolean } | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
-  const chatRef = useRef<HTMLDivElement>(null);
   const areaRef = useRef<HTMLTextAreaElement>(null);
-  const stickRef = useRef(true);
 
   const say = useCallback((text: string, err = false) => {
     setFlash({ text, err });
@@ -296,36 +313,62 @@ export function CommandCenter() {
   // whole feed (messages as bubbles, the rest as system lines).
   const activeChat = chats.active;
   const msgs = useMemo(() => {
-    const all = (state?.events ?? []).slice(0, 400).reverse();
+    const all = (state?.events ?? []).slice().reverse();
     const base =
       sel.kind === "team"
         ? all
-        : all.filter(
-            (e) =>
-              (e.agent === sel.name && e.kind !== "tool") ||
-              e.to === sel.name ||
-              e.kind === "broadcast",
-          );
-    // Cada chat solo muestra su ventana de tiempo; «Mostrar actividad» apaga el ruido.
+        : all.filter((e) => e.agent === sel.name || e.to === sel.name || (e.kind === "broadcast" && e.agent === "tú"));
+    // Cada chat solo muestra su ventana de tiempo.
     const windowed = activeChat ? base.filter((e) => inWindow(activeChat, e)) : base;
-    return windowed.filter((e) => !HIDDEN_KINDS.has(e.kind) && (showAct || !QUIET_KINDS.has(e.kind)));
-  }, [state, sel, activeChat, showAct]);
+    const list = windowed.filter((e) => !HIDDEN_KINDS.has(e.kind));
+    // Capturas nuevas del proyecto que ningún evento mencionó ya.
+    const extra = newImages.filter(
+      (img) =>
+        (!activeChat || inWindow(activeChat, img)) &&
+        (sel.kind === "team" || img.agent === sel.name) &&
+        !list.some((e) => eventImages(e).some((p) => samePath(p, img.files[0]))),
+    );
+    return extra.length > 0 ? [...list, ...extra].sort((a, b) => a.ts_ms - b.ts_ms) : list;
+  }, [state, sel, activeChat, newImages]);
 
-  // Stick to the bottom while the user is reading the latest (like a chat).
-  const onChatScroll = () => {
-    const el = chatRef.current;
-    if (!el) return;
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 90;
-  };
-
+  // Imágenes nuevas en el proyecto (capturas que guardan los agentes): se miran cada poco.
   useEffect(() => {
-    stickRef.current = true;
-  }, [selKey]);
-
-  useEffect(() => {
-    const el = chatRef.current;
-    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [selKey, view, msgs.length]);
+    if (!project) {
+      setNewImages([]);
+      return;
+    }
+    let alive = true;
+    const scan = () => {
+      projectRecent(project, IMAGE_EXTS, 16)
+        .then((files) => {
+          if (!alive) return;
+          const since = Date.now() - 24 * 3600_000;
+          const evs = state?.events ?? [];
+          setNewImages(
+            files
+              .filter((f) => f.mtime_ms > since)
+              .map((f, i) => ({
+                seq: -1 - (f.mtime_ms % 1_000_000_000) * 20 - i,
+                ts_ms: f.mtime_ms,
+                agent: imageOwner(evs, f.mtime_ms),
+                session_id: "",
+                kind: "image",
+                text: f.rel,
+                files: [f.rel],
+              })),
+          );
+        })
+        .catch(() => {});
+    };
+    scan();
+    const id = window.setInterval(scan, 12_000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+    // El dueño de cada imagen se recalcula en el siguiente escaneo; no hace falta reiniciar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project]);
 
   /** Enfoca la conversación con un agente sin tocar la lista de chats. */
   const focusAgent = (name: string) => {
@@ -390,13 +433,6 @@ export function CommandCenter() {
     setChatsMin((m) => {
       saveFlag(CHATS_MIN_KEY, !m);
       return !m;
-    });
-  };
-
-  const toggleAct = () => {
-    setShowAct((on) => {
-      saveFlag(ACT_KEY, !on);
-      return !on;
     });
   };
 
@@ -1035,143 +1071,6 @@ export function CommandCenter() {
   const openDrawer = (agents = true) => setDrawer({ kind: "team", agents });
   const onDiffCount = useCallback((n: number) => setChangeCount(n), []);
 
-  /** Un mensaje (burbuja) o un aviso del equipo (tarea, progreso, bloqueo…) en una línea clara. */
-  const renderEvent = (e: TeamEvent): ReactNode => {
-    const mine = e.agent === "tú";
-    if (e.kind === "message" || (mine && e.kind === "broadcast")) {
-      return (
-        <div
-          className="cc-msg"
-          data-who={mine ? "me" : "agent"}
-          key={e.seq}
-          style={{ "--ac": mine ? "var(--accent)" : agentColor(e.agent) } as CSSProperties}
-        >
-          <div className="cc-msg-av">{mine ? "Tú" : agentInitial(e.agent)}</div>
-          <div className="cc-msg-card">
-            <div className="cc-msg-head">
-              <b>{mine ? "Tú" : agentLabel(e.agent)}</b>
-              {e.to ? <span className="cc-msg-tag">→ {e.to}</span> : null}
-              {e.kind === "broadcast" ? <span className="cc-msg-tag">@equipo</span> : null}
-              <time>{ago(e.ts_ms)}</time>
-            </div>
-            <div className="cc-msg-body">{e.text}</div>
-          </div>
-        </div>
-      );
-    }
-    const icon: IconName =
-      e.kind === "task"
-        ? "list"
-        : e.kind === "update"
-          ? "pulse"
-          : e.kind === "handover" || e.kind === "memory"
-            ? "book"
-            : e.kind === "waiting"
-              ? "warn"
-              : e.kind === "broadcast"
-                ? "msg"
-                : "check";
-    return (
-      <div
-        className="cc-ev"
-        key={e.seq}
-        data-kind={e.kind}
-        style={{ "--ac": agentColor(e.agent) } as CSSProperties}
-      >
-        <span className="cc-ev-ic">
-          <Icon name={icon} size={14} />
-        </span>
-        <div className="cc-ev-body">
-          <span className="cc-ev-who">{e.agent === "tú" ? "Tú" : agentLabel(e.agent)}</span>
-          {e.to ? <span className="cc-ev-to"> → {e.to}</span> : null}
-          <span className="cc-ev-text"> {e.kind === "waiting" ? `pide tu respuesta: ${e.text}` : e.text}</span>
-          {e.files.length > 0 && (
-            <span className="cc-ev-files">
-              {e.files.slice(0, 4).map((f) => (
-                <span className="cc-file-chip" key={f} title={f}>
-                  {shortPath(f)}
-                </span>
-              ))}
-              {e.files.length > 4 ? <span className="cc-ev-more">+{e.files.length - 4}</span> : null}
-            </span>
-          )}
-        </div>
-        <time>{ago(e.ts_ms)}</time>
-      </div>
-    );
-  };
-
-  /** Una racha de acciones de un agente (Bash, Edit…) en una fila plegable con el resumen de lo que hizo. */
-  const renderGroup = (run: TeamEvent[]): ReactNode => {
-    const key = run[0].seq;
-    const open = openGroups.includes(key);
-    const agent = run[0].agent;
-    const toolOf = (e: TeamEvent) =>
-      e.kind === "tool" ? (/^(\S+)/.exec(e.text)?.[1] ?? "acción") : e.kind === "claim" ? "reservas" : "liberó";
-    const counts = new Map<string, number>();
-    for (const e of run) counts.set(toolOf(e), (counts.get(toolOf(e)) ?? 0) + 1);
-    const summary = [...counts.entries()].sort((x, y) => y[1] - x[1]);
-    return (
-      <div className="cc-grp" key={`g${key}`} data-open={open ? "1" : "0"} style={{ "--ac": agentColor(agent) } as CSSProperties}>
-        <button
-          className="cc-grp-head"
-          aria-expanded={open}
-          onClick={() => setOpenGroups((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]))}
-        >
-          <span className="cc-grp-who">{agentInitial(agent)}</span>
-          <span className="cc-grp-t">
-            {agentLabel(agent)} trabajó · {run.length} {run.length === 1 ? "acción" : "acciones"}
-          </span>
-          <span className="cc-grp-chips">
-            {summary.slice(0, 5).map(([name, n]) => (
-              <span className="cc-grp-chip" key={name}>
-                {name} {n > 1 ? `×${n}` : ""}
-              </span>
-            ))}
-          </span>
-          <Icon name="chev" size={14} />
-        </button>
-        {open && (
-          <div className="cc-grp-list">
-            {run.map((e) => {
-              const m = e.kind === "tool" ? /^(\S+)\s+([\s\S]*)$/.exec(e.text) : null;
-              return (
-                <div className="cc-grp-line" key={e.seq}>
-                  <span className="cc-grp-tool">{m ? m[1] : e.kind === "claim" ? "reserva" : "liberó"}</span>
-                  <span className="cc-grp-txt" title={e.text}>
-                    {m ? m[2] : e.text}
-                  </span>
-                  <time>{ago(e.ts_ms)}</time>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  /** Mensajes y avisos en orden; las acciones de bajo nivel seguidas se agrupan. */
-  const renderRows = (list: TeamEvent[]): ReactNode[] => {
-    const rows: ReactNode[] = [];
-    let run: TeamEvent[] = [];
-    const flush = () => {
-      if (run.length > 0) rows.push(renderGroup(run));
-      run = [];
-    };
-    for (const e of list) {
-      if (QUIET_KINDS.has(e.kind)) {
-        if (run.length > 0 && run[0].agent !== e.agent) flush();
-        run.push(e);
-        continue;
-      }
-      flush();
-      rows.push(renderEvent(e));
-    }
-    flush();
-    return rows;
-  };
-
   const agentView = sel.kind === "agent" ? sel.name : null;
   const agentRow = agentView ? agents.find((a) => a.name === agentView) : undefined;
   const agentTask = agentView ? claimedBy.get(agentView) : undefined;
@@ -1235,6 +1134,82 @@ export function CommandCenter() {
     lastByAgent,
   };
 
+  // Fila en vivo del chat: quién trabaja ahora (por su terminal o por sus acciones recientes)
+  // y a quién le escribiste sin que haya contestado.
+  const live = useMemo<LiveAgent[]>(() => {
+    const out: LiveAgent[] = [];
+    const evs = state?.events ?? [];
+    const now = Date.now();
+    for (const a of roster) {
+      if (sel.kind === "agent" && sel.name !== a.name) continue;
+      const p = panelForAgent(layout.panels, a.name);
+      const act = p?.sessionId ? activity.get(p.sessionId) : undefined;
+      const lastTool = evs.find((e) => e.agent === a.name && e.kind === "tool");
+      const toolAge = lastTool ? now - lastTool.ts_ms : Infinity;
+      const busy = !!act?.busy || toolAge < 20_000;
+      let waitingSince: number | undefined;
+      if (!busy && a.online) {
+        const mine = evs.find((e) => e.agent === "tú" && e.kind === "message" && e.to === a.name);
+        const age = mine ? now - mine.ts_ms : Infinity;
+        if (mine && age > 15_000 && age < 30 * 60_000) {
+          const answered = evs.some(
+            (e) => e.agent === a.name && e.seq > mine.seq && !HIDDEN_KINDS.has(e.kind),
+          );
+          if (!answered) waitingSince = mine.ts_ms;
+        }
+      }
+      if (!busy && waitingSince == null) continue;
+      // Sin terminal que mirar, la racha empieza en la primera acción seguida (sin pausas largas).
+      let streak = lastTool?.ts_ms ?? now;
+      for (const e of evs) {
+        if (e.agent !== a.name || e.kind !== "tool" || e.ts_ms > streak) continue;
+        if (streak - e.ts_ms > 90_000) break;
+        streak = e.ts_ms;
+      }
+      out.push({
+        name: a.name,
+        busy,
+        since: act?.busy ? act.since : streak,
+        status: act?.status ?? "",
+        lastAction: toolAge < 120_000 ? lastTool?.text : undefined,
+        waitingSince,
+        hasTerminal: !!p?.sessionId,
+      });
+    }
+    return out;
+  }, [roster, activity, state, layout.panels, sel]);
+
+  /** Abre un archivo que sale en el chat: en el preview si es del proyecto. */
+  const openPath = (path: string) => {
+    const norm = path.replace(/\\/g, "/");
+    const root = (project ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+    let rel = norm;
+    if (/^([A-Za-z]:)?\//.test(norm)) {
+      if (!root || !norm.toLowerCase().startsWith(`${root.toLowerCase()}/`)) {
+        say(`Está fuera del proyecto: ${path}`);
+        return;
+      }
+      rel = norm.slice(root.length + 1);
+    }
+    setPreviewRel(rel.replace(/^\.\//, ""));
+    setView("preview");
+  };
+
+  /** Detiene lo que esté haciendo un agente (Esc en su terminal; OpenCode pide dos). */
+  const interrupt = async (name: string) => {
+    const p = panelForAgent(layout.panels, name);
+    if (!p?.sessionId) return;
+    try {
+      await termWrite(p.sessionId, "\x1b");
+      if (name.includes("opencode")) {
+        window.setTimeout(() => void termWrite(p.sessionId as string, "\x1b").catch(() => {}), 150);
+      }
+      say(`Detenido: ${agentLabel(name)}`);
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
   const VIEWS: { id: CenterView; label: string; icon: IconName; title: string }[] = [
     { id: "feed", label: "Comando", icon: "msg", title: "Chat y actividad del equipo" },
     { id: "diff", label: "Cambios", icon: "diff", title: "Revisar los cambios en git" },
@@ -1268,18 +1243,6 @@ export function CommandCenter() {
           <Icon name="warn" size={14} />
         </span>
       )}
-    </button>
-  );
-
-  const actToggle = (
-    <button
-      className="cc-toggle"
-      aria-pressed={showAct}
-      onClick={toggleAct}
-      title="Muestra lo que hace cada agente por dentro: comandos, ediciones y reservas de archivos"
-    >
-      <span className="cc-sw" />
-      Mostrar herramientas
     </button>
   );
 
@@ -1327,7 +1290,6 @@ export function CommandCenter() {
           </div>
         </div>
         <div className="cc-stage-r">
-          {view === "feed" && actToggle}
           {tasksBtn}
         </div>
       </div>
@@ -1494,8 +1456,15 @@ export function CommandCenter() {
           {stageHead}
 
           {view === "feed" && (
-            <div className="cc-chat" ref={chatRef} onScroll={onChatScroll}>
-              {msgs.length === 0 ? (
+            <ChatView
+              events={msgs}
+              resetKey={`${selKey}|${activeChat?.id ?? ""}`}
+              live={live}
+              project={project}
+              onOpenPath={openPath}
+              onTerminal={openTerm}
+              onInterrupt={(n) => void interrupt(n)}
+              empty={
                 agentView ? (
                   <div className="cc-empty">
                     Conversación con {agentLabel(agentView)}. Lo que escribas va directo a su terminal; sus
@@ -1526,10 +1495,8 @@ export function CommandCenter() {
                     Escribe abajo una misión y se repartirá con instrucciones de coordinación.
                   </div>
                 )
-              ) : (
-                renderRows(msgs)
-              )}
-            </div>
+              }
+            />
           )}
 
           {view === "diff" && (

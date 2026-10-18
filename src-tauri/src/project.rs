@@ -485,3 +485,47 @@ pub fn project_recent(
     out.truncate(limit);
     Ok(out)
 }
+
+const IMAGE_CAP: u64 = 12 * 1024 * 1024;
+
+fn image_mime(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_string_lossy().to_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        _ => return None,
+    })
+}
+
+/// Una imagen (captura) que un agente generó o miró, como `data:` URL para el chat.
+/// Es la única lectura que puede salir del proyecto: las capturas suelen quedar en
+/// carpetas temporales. Por eso solo acepta extensiones de imagen y con tope de tamaño.
+#[tauri::command]
+pub fn image_data(path: String, project: Option<String>) -> Result<String, String> {
+    use base64::Engine;
+    let raw = PathBuf::from(path.trim());
+    let file = if raw.is_absolute() {
+        raw
+    } else {
+        let root = root_of(project.as_deref().unwrap_or(""))?;
+        join_rel(&root, &path)?
+    };
+    let mime = image_mime(&file).ok_or("no es una imagen")?;
+    let meta = std::fs::metadata(&file).map_err(|_| "la imagen no existe".to_string())?;
+    if !meta.is_file() {
+        return Err("no es un archivo".into());
+    }
+    if meta.len() > IMAGE_CAP {
+        return Err("la imagen es demasiado grande".into());
+    }
+    let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+    Ok(format!(
+        "data:{};base64,{}",
+        mime,
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}

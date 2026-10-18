@@ -32,6 +32,13 @@ fn trunc(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+fn is_image_path(path: &str) -> bool {
+    let low = path.to_lowercase();
+    [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]
+        .iter()
+        .any(|ext| low.ends_with(ext))
+}
+
 fn short_path(path: &str) -> String {
     let norm = path.replace('\\', "/");
     let parts: Vec<&str> = norm.split('/').filter(|s| !s.is_empty()).collect();
@@ -1042,7 +1049,15 @@ fn hook_mode(args: &[String]) {
             let file = input["file_path"]
                 .as_str()
                 .or_else(|| input["notebook_path"].as_str())
+                // Herramientas de captura (MCP de navegador…): dónde guardaron la imagen.
+                .or_else(|| input["filename"].as_str())
+                .or_else(|| input["path"].as_str())
                 .unwrap_or("");
+            // Leer archivos es ruido, salvo cuando el agente mira una imagen (una captura):
+            // eso sí se enseña en el chat.
+            if tool == "Read" && !is_image_path(file) {
+                return;
+            }
             let cmd = input["command"].as_str().unwrap_or("");
             let detail = if !file.is_empty() {
                 short_path(file)
@@ -1093,6 +1108,17 @@ fn hook_mode(args: &[String]) {
         body["ctx_window"] = json!(w);
     }
     let _ = client.post("/event", &body);
+
+    // Al acabar el turno, lo que el agente contestó en su terminal también va al chat
+    // de lienzo: si no, una respuesta que no pasó por team_message no se ve en ningún sitio.
+    if event == "stop" {
+        if let Some(reply) = transcript_reply(payload["transcript_path"].as_str().unwrap_or("")) {
+            let _ = client.post(
+                "/event",
+                &json!({ "agent": agent, "kind": "reply", "text": reply, "files": [] }),
+            );
+        }
+    }
 
     // Broadcasts the user sent to the whole team that this session hasn't seen.
     let pending = fetch_pending(&client, &agent, &session_key);
@@ -1210,6 +1236,72 @@ fn transcript_usage(path: &str) -> (Option<String>, Option<u64>, Option<u64>) {
         return (model, Some(used), Some(window));
     }
     (None, None, None)
+}
+
+/// Texto de la última respuesta del agente en un transcript de Claude Code (JSONL).
+/// Cada bloque de una respuesta va en su propia línea con el mismo `message.id`:
+/// se juntan los de texto de esa última respuesta, en orden.
+fn transcript_reply(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return None;
+    }
+    let text = read_tail(std::path::Path::new(path), 512 * 1024)?;
+    let mut id: Option<String> = None;
+    let mut parts: Vec<String> = Vec::new();
+    for line in text.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v["isSidechain"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        let kind = v["type"].as_str().unwrap_or("");
+        if kind == "user" {
+            // Ya tenemos la respuesta, o llegamos al mensaje que abrió el turno sin
+            // encontrar texto (la respuesta de un turno anterior no se repite).
+            let content = &v["message"]["content"];
+            let is_prompt = content.is_string()
+                || content
+                    .as_array()
+                    .is_some_and(|b| b.iter().any(|x| x["type"].as_str() == Some("text")));
+            if id.is_some() || is_prompt {
+                break;
+            }
+            continue;
+        }
+        if kind != "assistant" {
+            continue;
+        }
+        let msg_id = v["message"]["id"].as_str().unwrap_or("").to_string();
+        if let Some(cur) = &id {
+            if *cur != msg_id {
+                break;
+            }
+        }
+        let texts: Vec<String> = v["message"]["content"]
+            .as_array()
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter(|b| b["type"].as_str() == Some("text"))
+                    .filter_map(|b| b["text"].as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if texts.is_empty() {
+            continue;
+        }
+        if id.is_none() {
+            id = Some(msg_id);
+        }
+        parts.push(texts.join("\n\n"));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    parts.reverse();
+    Some(trunc(&parts.join("\n\n"), 6000))
 }
 
 /// Tamaño de ventana de contexto por modelo (200k por defecto; `…-1m` → 1M).

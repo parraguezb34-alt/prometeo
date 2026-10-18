@@ -209,11 +209,13 @@ fn cmd_event(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     let out = hub::with_inner(app, |inner| {
         let (agent, sid) = hub::agent_label(inner, &sid, payload["agent"].as_str());
         let kind = payload["kind"].as_str().unwrap_or("update").to_string();
+        // La respuesta final de un agente (kind «reply») va entera al chat.
+        let cap = if kind == "reply" { 6000 } else { 2000 };
         let text: String = payload["text"]
             .as_str()
             .unwrap_or("")
             .chars()
-            .take(2000)
+            .take(cap)
             .collect();
         let files: Vec<String> = payload["files"]
             .as_array()
@@ -575,7 +577,12 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                         files_in.clone(),
                     )
                 } else {
-                    (format!("#{} {} por {}", task.id, task.status, agent), vec![])
+                    let verb = match task.status.as_str() {
+                        "claimed" => "tomada",
+                        "open" => "liberada",
+                        other => other,
+                    };
+                    (format!("#{} {} por {}", task.id, verb, agent), vec![])
                 };
                 hub::push_event(inner, &agent, &sid, "task", &text, ev_files, None);
                 hub::persist(inner);

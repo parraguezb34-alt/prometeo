@@ -222,7 +222,12 @@ fn merge_hooks(settings: &mut Value, exe: &str, agent: &str) {
     let mut defs: Vec<(&str, &str, Option<&str>)> = vec![
         ("SessionStart", "session", None),
         ("UserPromptSubmit", "prompt", None),
-        ("PostToolUse", "tool", Some("Edit|Write|MultiEdit|NotebookEdit|Bash")),
+        // Read y las capturas de pantalla solo llegan al chat cuando son imágenes (ver hook_mode).
+        (
+            "PostToolUse",
+            "tool",
+            Some("Edit|Write|MultiEdit|NotebookEdit|Bash|Read|.*[Ss]creenshot.*"),
+        ),
         ("Stop", "stop", None),
     ];
     // Claude avisa cuando un agente se queda esperando permiso o respuesta:

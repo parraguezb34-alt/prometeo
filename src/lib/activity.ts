@@ -1,0 +1,112 @@
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useRef, useState } from "react";
+import { base64ToBytes } from "./pty";
+import type { PtyDataEvent } from "./pty";
+
+/**
+ * Qué está haciendo cada agente ahora mismo, leído de su terminal. Al ponerse
+ * a trabajar, todos los CLIs pintan un aviso para interrumpir (Claude Code y
+ * Codex «esc to interrupt», Antigravity «esc to cancel», OpenCode «esc
+ * interrupt») y animan un spinner. Algunos solo repintan el spinner y no el
+ * aviso, así que la regla es: visto el aviso, el agente trabaja mientras su
+ * terminal siga moviéndose; cuando la salida se para, terminó.
+ */
+export type Activity = {
+  busy: boolean;
+  /** Desde cuándo trabaja sin parar (ms), solo si busy. */
+  since: number;
+  /** Frase de estado del CLI («Pondering…», «Reading file...»), o "" si no hay. */
+  status: string;
+};
+
+const TAIL = 3000;
+/** Sin salida nueva en este tiempo, el spinner paró: ya no trabaja. */
+const QUIET_MS = 4000;
+const MARKER = /esc\W{0,3}(?:to\s+)?(?:interrupt|cancel)|again to interrupt/i;
+/** Frase de estado: «Pondering…», «Reading file...», «Managing tasks...». */
+const PHRASE = /[A-Z][A-Za-z']+(?: [a-z][A-Za-z']*){0,4}(?:…|\.\.\.)/g;
+
+function clean(text: string): string {
+  return (
+    text
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+      // Los saltos de cursor separan palabras en pantalla: se dejan como espacio.
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, " ")
+      // eslint-disable-next-line no-control-regex
+      .replace(/\x1b[()][A-Z0-9]/g, "")
+      // Spinners (braille, estrellas) fuera.
+      .replace(/[⠀-⣿✻✶✳✢✽·•●◐◓◑◒]/g, " ")
+  );
+}
+
+/** La última frase de estado entera que se pintó (los repintados dejan restos sueltos). */
+function lastPhrase(tail: string): string {
+  const found = [...clean(tail).matchAll(PHRASE)].map((m) => m[0]);
+  return found.length > 0 ? found[found.length - 1].slice(0, 60) : "";
+}
+
+type Track = { tail: string; lastMs: number; since: number; armed: boolean; busy: boolean; status: string };
+
+/**
+ * Actividad en vivo por sesión de terminal (id de la PTY). Escucha la salida de
+ * todas las terminales y se reevalúa cada segundo.
+ */
+export function useTermActivity(): Map<string, Activity> {
+  const tracks = useRef(new Map<string, Track>());
+  const [snap, setSnap] = useState<Map<string, Activity>>(new Map());
+  const sizeRef = useRef(0);
+
+  useEffect(() => {
+    // Fuera de la app de escritorio (Vite en un navegador) no hay terminales que escuchar.
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const decoder = new TextDecoder();
+    const un = listen<PtyDataEvent>("pty://data", (e) => {
+      let text = "";
+      try {
+        text = decoder.decode(base64ToBytes(e.payload.data));
+      } catch {
+        return;
+      }
+      const t = tracks.current.get(e.payload.id) ?? {
+        tail: "",
+        lastMs: 0,
+        since: 0,
+        armed: false,
+        busy: false,
+        status: "",
+      };
+      // El aviso puede llegar partido entre dos trozos: se mira con un poco de lo anterior.
+      if (MARKER.test(clean(t.tail.slice(-120) + text))) t.armed = true;
+      t.tail = (t.tail + text).slice(-TAIL);
+      t.lastMs = Date.now();
+      tracks.current.set(e.payload.id, t);
+    });
+    const id = window.setInterval(() => {
+      const now = Date.now();
+      const next = new Map<string, Activity>();
+      let changed = false;
+      for (const [sid, t] of tracks.current) {
+        if (now - t.lastMs > QUIET_MS) t.armed = false;
+        const busy = t.armed;
+        if (busy && !t.busy) t.since = now;
+        const status = busy ? lastPhrase(t.tail) : "";
+        if (busy !== t.busy || status !== t.status) changed = true;
+        t.busy = busy;
+        t.status = status;
+        next.set(sid, { busy, since: t.since, status });
+      }
+      if (changed || next.size !== sizeRef.current) {
+        sizeRef.current = next.size;
+        setSnap(next);
+      }
+    }, 1000);
+    return () => {
+      un.then((f) => f());
+      window.clearInterval(id);
+    };
+  }, []);
+
+  return snap;
+}

@@ -47,6 +47,7 @@ pub fn run() {
             project::project_diff_paths,
             project::project_commit_paths,
             project::project_revert_paths,
+            project::image_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
