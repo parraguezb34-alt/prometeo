@@ -78,8 +78,11 @@ const CHATS_MIN_KEY = "lienzo.chatsmin.v1";
 const ACT_KEY = "lienzo.showact.v1";
 const DISPATCH_KEY = "lienzo.dispatch.v1";
 
-/** Eventos de bajo nivel que se ocultan cuando apagas «Mostrar actividad». */
-const QUIET_KINDS = new Set(["tool", "join", "leave", "claim", "release", "session", "stop", "prompt"]);
+/** Ruido de conexión que no aporta a una conversación: nunca se muestra en el chat. */
+const HIDDEN_KINDS = new Set(["join", "leave", "session", "stop", "prompt"]);
+
+/** Lo que hacen los agentes por dentro (herramientas, reservas): solo con «Mostrar herramientas». */
+const QUIET_KINDS = new Set(["tool", "claim", "release"]);
 
 function loadFlag(key: string, fallback: boolean): boolean {
   try {
@@ -134,7 +137,7 @@ export function CommandCenter() {
   const [shoot, setShoot] = useState<Shoot>(loadShoot);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [chatsMin, setChatsMin] = useState(() => loadFlag(CHATS_MIN_KEY, false));
-  const [showAct, setShowAct] = useState(() => loadFlag(ACT_KEY, true));
+  const [showAct, setShowAct] = useState(() => loadFlag(ACT_KEY, false));
   const [termPick, setTermPick] = useState<string | null>(null);
   const [changeCount, setChangeCount] = useState<number | null>(null);
   const [diffTask, setDiffTask] = useState<number | null>(null);
@@ -295,7 +298,7 @@ export function CommandCenter() {
           );
     // Cada chat solo muestra su ventana de tiempo; «Mostrar actividad» apaga el ruido.
     const windowed = activeChat ? base.filter((e) => inWindow(activeChat, e)) : base;
-    return showAct ? windowed : windowed.filter((e) => !QUIET_KINDS.has(e.kind));
+    return windowed.filter((e) => !HIDDEN_KINDS.has(e.kind) && (showAct || !QUIET_KINDS.has(e.kind)));
   }, [state, sel, activeChat, showAct]);
 
   // Stick to the bottom while the user is reading the latest (like a chat).
@@ -1003,30 +1006,34 @@ export function CommandCenter() {
     );
   };
 
-  /** Una racha de acciones de bajo nivel (herramientas, reservas…) en una sola fila plegable. */
+  /** Una racha de acciones de un agente (Bash, Edit…) en una fila plegable con el resumen de lo que hizo. */
   const renderGroup = (run: TeamEvent[]): ReactNode => {
     const key = run[0].seq;
     const open = openGroups.includes(key);
-    const who = [...new Set(run.map((e) => e.agent))];
-    const last = run[run.length - 1];
+    const agent = run[0].agent;
+    const toolOf = (e: TeamEvent) =>
+      e.kind === "tool" ? (/^(\S+)/.exec(e.text)?.[1] ?? "acción") : e.kind === "claim" ? "reservas" : "liberó";
+    const counts = new Map<string, number>();
+    for (const e of run) counts.set(toolOf(e), (counts.get(toolOf(e)) ?? 0) + 1);
+    const summary = [...counts.entries()].sort((x, y) => y[1] - x[1]);
     return (
-      <div className="cc-grp" key={`g${key}`} data-open={open ? "1" : "0"}>
+      <div className="cc-grp" key={`g${key}`} data-open={open ? "1" : "0"} style={{ "--ac": agentColor(agent) } as CSSProperties}>
         <button
           className="cc-grp-head"
           aria-expanded={open}
           onClick={() => setOpenGroups((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]))}
         >
-          <span className="cc-minis">
-            {who.slice(0, 3).map((n) => (
-              <span key={n} className="cc-mini-av" style={{ "--ac": agentColor(n) } as CSSProperties}>
-                {agentInitial(n)}
+          <span className="cc-grp-who">{agentInitial(agent)}</span>
+          <span className="cc-grp-t">
+            {agentLabel(agent)} trabajó · {run.length} {run.length === 1 ? "acción" : "acciones"}
+          </span>
+          <span className="cc-grp-chips">
+            {summary.slice(0, 5).map(([name, n]) => (
+              <span className="cc-grp-chip" key={name}>
+                {name} {n > 1 ? `×${n}` : ""}
               </span>
             ))}
           </span>
-          <span className="cc-grp-t">
-            {run.length} {run.length === 1 ? "acción" : "acciones"} · {who.map((n) => (n === "tú" ? "Tú" : agentLabel(n))).join(", ")}
-          </span>
-          {!open && <span className="cc-grp-last">{last.text}</span>}
           <Icon name="chev" size={14} />
         </button>
         {open && (
@@ -1034,9 +1041,8 @@ export function CommandCenter() {
             {run.map((e) => {
               const m = e.kind === "tool" ? /^(\S+)\s+([\s\S]*)$/.exec(e.text) : null;
               return (
-                <div className="cc-grp-line" key={e.seq} style={{ "--ac": agentColor(e.agent) } as CSSProperties}>
-                  <span className="cc-grp-who">{agentInitial(e.agent)}</span>
-                  {m ? <span className="cc-grp-tool">{m[1]}</span> : <span className="cc-grp-tool">{e.kind}</span>}
+                <div className="cc-grp-line" key={e.seq}>
+                  <span className="cc-grp-tool">{m ? m[1] : e.kind === "claim" ? "reserva" : "liberó"}</span>
                   <span className="cc-grp-txt" title={e.text}>
                     {m ? m[2] : e.text}
                   </span>
@@ -1060,6 +1066,7 @@ export function CommandCenter() {
     };
     for (const e of list) {
       if (QUIET_KINDS.has(e.kind)) {
+        if (run.length > 0 && run[0].agent !== e.agent) flush();
         run.push(e);
         continue;
       }
@@ -1170,10 +1177,10 @@ export function CommandCenter() {
       className="cc-toggle"
       aria-pressed={showAct}
       onClick={toggleAct}
-      title="Muestra u oculta herramientas, reservas y otros avisos de bajo nivel"
+      title="Muestra lo que hace cada agente por dentro: comandos, ediciones y reservas de archivos"
     >
       <span className="cc-sw" />
-      Mostrar actividad
+      Mostrar herramientas
     </button>
   );
 
@@ -1580,7 +1587,7 @@ export function CommandCenter() {
       {overlay === "tasks" && (
         <TasksDrawer
           tasks={tasks}
-          events={state?.events ?? []}
+          events={(state?.events ?? []).filter((e) => !HIDDEN_KINDS.has(e.kind))}
           agentNames={agents.map((a) => a.name)}
           blocked={blockedNames}
           lastByAgent={lastByAgent}

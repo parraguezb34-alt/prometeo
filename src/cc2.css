@@ -2009,3 +2009,30 @@ button.cc-lead {
   overflow: auto;
   user-select: text;
 }
+
+/* grupo de acciones de un agente: insignia, resumen en chips y chevron */
+.cc-grp-head .cc-grp-who {
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+  flex: none;
+}
+.cc-grp-chips {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  overflow: hidden;
+}
+.cc-grp-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--raised-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.cc-grp-line {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
