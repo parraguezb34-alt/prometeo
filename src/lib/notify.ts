@@ -1,8 +1,10 @@
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { getSettings } from "./settings";
 
 /**
  * Avisos de Windows: solo cuando lienzo no está delante (si lo estás mirando, ya lo
- * ves en el chat). Varios avisos seguidos se juntan en uno para no llenar la esquina.
+ * ves en el chat), salvo que en Ajustes pidas lo contrario. Varios avisos seguidos se
+ * juntan en uno para no llenar la esquina.
  */
 
 let granted: boolean | null = null;
@@ -38,7 +40,14 @@ function flush() {
 
 /** Encola un aviso; se manda tras un respiro corto, junto con los que lleguen a la vez. */
 export function notify(title: string, body: string) {
-  if (document.hasFocus()) return;
+  if (document.hasFocus() && !getSettings().notify.whenFocused) return;
   queue.push({ title, body });
   if (timer === undefined) timer = window.setTimeout(flush, 1500);
+}
+
+/** Aviso de prueba desde Ajustes: sale al momento aunque lienzo esté delante. */
+export async function testNotify(): Promise<boolean> {
+  const ok = await allowed();
+  if (ok) sendNotification({ title: "Aviso de prueba de lienzo", body: "Así te avisaré cuando un agente te necesite." });
+  return ok;
 }

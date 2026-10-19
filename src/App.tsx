@@ -3,6 +3,7 @@ import "./App.css";
 import "./cc2.css";
 import "./chat.css";
 import "./drawer.css";
+import "./settings.css";
 
 function App() {
   return (

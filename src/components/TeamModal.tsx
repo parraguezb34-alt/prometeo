@@ -29,7 +29,7 @@ export const STATE_LABEL: Record<AgentState, string> = {
   off: "Sin sesión",
 };
 
-const EFFORT_LABEL: Record<string, string> = {
+export const EFFORT_LABEL: Record<string, string> = {
   minimal: "Mínimo",
   low: "Bajo",
   medium: "Medio",
@@ -453,8 +453,8 @@ export function TeamModal({
             Abrir el equipo al iniciar
           </label>
           <button className="cc-btn sec" onClick={onSettings}>
-            <Icon name="shield" size={14} />
-            Normas y proyecto
+            <Icon name="settings" size={14} />
+            Ajustes del equipo
           </button>
           <span className="cc-kbd">Esc</span>
         </div>

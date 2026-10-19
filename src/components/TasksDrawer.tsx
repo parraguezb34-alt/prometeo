@@ -4,6 +4,7 @@ import { stampLabel } from "../lib/chats";
 import { agentColor, agentInitial, agentLabel, shortPath, waitingFor } from "../lib/team";
 import { isParked } from "../lib/dispatcher";
 import type { DispatchState } from "../lib/dispatcher";
+import { dispatchConfig, useSettings } from "../lib/settings";
 import type { MemoryEntry, TeamEvent, TeamTask } from "../lib/team";
 import { stepOf } from "../lib/steps";
 import { askPhrase, isNotice, parseTask, span } from "../lib/timeline";
@@ -436,7 +437,8 @@ function TaskRow({
 
   const waiting = t.status !== "done" ? waitingFor(t, all) : [];
   const pending = dispatch.enabled && t.status === "open" ? dispatch.state.pending[t.id] : undefined;
-  const parked = t.status === "open" && isParked(dispatch.state, t.id);
+  const cfg = dispatchConfig(useSettings());
+  const parked = t.status === "open" && isParked(dispatch.state, t.id, cfg);
   const comments = t.comments ?? [];
   const isDone = t.status === "done";
   const nFiles = Math.max(files, t.result?.files.length ?? 0);

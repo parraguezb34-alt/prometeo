@@ -27,7 +27,9 @@ import {
   teamMemoryForget,
   teamMemoryResolve,
   teamModels,
+  teamCharter,
   teamOpen,
+  teamProjectSet,
   teamTaskComment,
   teamState,
   teamTaskOp,
@@ -51,6 +53,7 @@ import { LATEST, resetCommand, withResume } from "../lib/resume";
 import { useTermActivity } from "../lib/activity";
 import { askPhrase, eventImages, isDispatch, isNotice, parseTask, samePath } from "../lib/timeline";
 import { notify } from "../lib/notify";
+import { dispatchConfig, getSettings, rememberProject, useSettings } from "../lib/settings";
 import type { Chat } from "../lib/chats";
 import { AgentQuickCmds } from "./AgentCard";
 import { ChatView } from "./ChatView";
@@ -67,7 +70,8 @@ import { PreviewTab } from "./PreviewTab";
 import { TasksDrawer } from "./TasksDrawer";
 import { TeamModal, TeamStrip, agentState } from "./TeamModal";
 import type { AgentState } from "./TeamModal";
-import { TeamPanel } from "./TeamPanel";
+import { SettingsModal } from "./SettingsModal";
+import type { SettingsSection } from "./SettingsModal";
 import { TerminalPanel } from "./TerminalPanel";
 
 /** Conversation shown in the central chat: the whole team or one agent. */
@@ -79,11 +83,8 @@ type CenterView = "feed" | "diff" | "preview" | "term" | "files";
 /** Mission trigger mode: plan-first or straight to execution. */
 type Shoot = "plan" | "exec";
 
-/** Ajustes del equipo (conectar CLIs, normas, proyecto). */
-type Drawer = { kind: "team"; agents?: boolean } | null;
-
-/** Capas flotantes sobre la pantalla: equipo, tareas y menú de nuevo chat. */
-type Overlay = "team" | "tasks" | "newchat" | null;
+/** Capas flotantes sobre la pantalla: equipo, tareas, menú de nuevo chat y ajustes. */
+type Overlay = "team" | "tasks" | "newchat" | "settings" | null;
 
 const SHOOT_KEY = "lienzo.shoot.v1";
 const CHATS_MIN_KEY = "lienzo.chatsmin.v1";
@@ -168,7 +169,8 @@ export function CommandCenter() {
   const [state, setState] = useState<TeamState | null>(null);
   const [detect, setDetect] = useState<DetectResult | null>(null);
   const [info, setInfo] = useState<ProjectInfo | null>(null);
-  const [drawer, setDrawer] = useState<Drawer>(null);
+  const [settingsAt, setSettingsAt] = useState<SettingsSection>("general");
+  const settings = useSettings();
   const [sel, setSel] = useState<Sel>({ kind: "team" });
   /** Destinatario del compositor (independiente de lo que mires en el escenario). */
   const [dest, setDest] = useState<Sel>({ kind: "team" });
@@ -250,20 +252,25 @@ export function CommandCenter() {
     };
   }, [refresh, refreshDetect]);
 
-  // Esc cierra la capa que esté arriba: primero las flotantes, luego los ajustes.
+  // Esc cierra la capa que esté arriba; Ctrl+, abre los ajustes.
   useEffect(() => {
-    if (!drawer && !overlay) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (overlay) setOverlay(null);
-      else setDrawer(null);
+      if (e.key === "Escape" && overlay) setOverlay(null);
+      if (e.key === "," && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setOverlay((o) => (o === "settings" ? null : "settings"));
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drawer, overlay]);
+  }, [overlay]);
 
   const project = state?.project ?? null;
   const chats = useChats(project);
+  // La carpeta en uso entra en «Recientes» de Ajustes.
+  useEffect(() => {
+    if (project) rememberProject(project);
+  }, [project]);
 
   /** Conversación que el chat del equipo abierto tiene apuntada para un agente (o null). */
   const sessionRef = (name: string): string | null =>
@@ -564,7 +571,7 @@ export function CommandCenter() {
         addAgentTerminal(label, withResume(r.cmd, sessionRef(id)));
         if (opts.selectTerm) {
           showTerminal(agentKeyFromCmd(r.cmd));
-          setDrawer(null);
+          setOverlay(null);
         }
         say(`✓ ${label} lanzado${shoot === "plan" ? " en modo plan" : ""}.`);
       }
@@ -669,7 +676,9 @@ export function CommandCenter() {
       try {
         const now = Date.now();
         const byName = new Map<string, DAgent>();
+        const cfg = getSettings();
         for (const a of cur.agents) {
+          if (cfg.skipAgents.includes(a.name)) continue;
           const prev = byName.get(a.name);
           byName.set(a.name, {
             name: a.name,
@@ -691,7 +700,7 @@ export function CommandCenter() {
           })),
           agents: [...byName.values()],
           leader: cur.leader,
-        });
+        }, dispatchConfig(cfg));
         let next = res.state;
         for (const note of res.notes) say(note, true);
         if (res.send) {
@@ -741,6 +750,13 @@ export function CommandCenter() {
     }
   };
 
+  /** Borra los fallos y pausas del despacho (desde Ajustes). */
+  const clearDispatch = () => {
+    dispatchRef.current = { ...dispatchRef.current, taskFails: {}, triedBy: {}, agentFails: {}, agentPausedUntil: {} };
+    setDispatchView(dispatchRef.current);
+    say("✓ Fallos y pausas del despacho borrados.");
+  };
+
   const retryDispatch = (id: number) => {
     dispatchRef.current = retryTask(dispatchRef.current, id);
     setDispatchView(dispatchRef.current);
@@ -752,7 +768,8 @@ export function CommandCenter() {
     if (!autoStart || !state || !detect || !project || autoRan.current === project) return;
     autoRan.current = project;
     void (async () => {
-      const installed = detect.agents.filter((a) => a.cli_found);
+      const skip = getSettings().skipAgents;
+      const installed = detect.agents.filter((a) => a.cli_found && !skip.includes(a.id));
       let connected = 0;
       let opened = 0;
       for (const a of installed) {
@@ -949,7 +966,7 @@ export function CommandCenter() {
 
   // Al abrir el modal de equipo se carga el catálogo de modelos de cada agente.
   useEffect(() => {
-    if (overlay !== "team") return;
+    if (overlay !== "team" && overlay !== "settings") return;
     for (const a of roster) {
       if (catalogs[a.name] !== undefined) continue;
       setCatalogs((prev) => ({ ...prev, [a.name]: null }));
@@ -967,7 +984,8 @@ export function CommandCenter() {
 
   /** One click: connect + launch every agent CLI found on this machine. */
   const launchSquad = async () => {
-    const list = (detect?.agents ?? []).filter((a) => a.cli_found || a.config_dir_found);
+    const skip = getSettings().skipAgents;
+    const list = (detect?.agents ?? []).filter((a) => (a.cli_found || a.config_dir_found) && !skip.includes(a.id));
     if (list.length === 0) {
       say("No encontré CLIs de agentes (claude, opencode, codex, agy) en este equipo.", true);
       return;
@@ -1252,7 +1270,42 @@ export function CommandCenter() {
     }
   };
 
-  const openDrawer = (agents = true) => setDrawer({ kind: "team", agents });
+  const openSettings = (at: SettingsSection = "general") => {
+    setSettingsAt(at);
+    setOverlay("settings");
+  };
+
+  /** Carpeta del equipo (desde Ajustes): se guarda en el hub y se apunta como reciente. */
+  const saveProject = async (path: string | null) => {
+    try {
+      await teamProjectSet(path);
+      if (path) rememberProject(path);
+      refresh();
+      refreshDetect();
+      say(path ? `✓ Carpeta del equipo: ${path}` : "Carpeta del equipo borrada.");
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
+  /** (Re)escribe la configuración de un agente en la carpeta del proyecto. */
+  const connectAgent = async (id: string) => {
+    try {
+      const res = await teamConnect(id, project);
+      refreshDetect();
+      refresh();
+      const lines = [`✓ ${agentLabel(id)} conectado.`];
+      if (res.files.length) lines.push("Archivos escritos:", ...res.files);
+      say([...lines, ...res.notes].join("\n"));
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
+  const saveTeamRules = async (charter: string | null, lead: string | null) => {
+    await teamCharter(charter, lead);
+    refresh();
+  };
   const onDiffCount = useCallback((n: number) => setChangeCount(n), []);
 
   const agentView = sel.kind === "agent" ? sel.name : null;
@@ -1372,12 +1425,12 @@ export function CommandCenter() {
   const lateWarned = useRef<Set<number>>(new Set());
   const liveRef = useRef(live);
   liveRef.current = live;
-  const toggleNotify = () =>
-    setNotifyOn((on) => {
-      saveFlag(NOTIFY_KEY, !on);
-      say(on ? "Avisos de Windows desactivados." : "Avisos de Windows activados: te aviso si un agente te necesita.");
-      return !on;
-    });
+  const setNotify = (on: boolean) => {
+    setNotifyOn(on);
+    saveFlag(NOTIFY_KEY, on);
+    say(on ? "Avisos de Windows activados: te aviso si un agente te necesita." : "Avisos de Windows desactivados.");
+  };
+  const toggleNotify = () => setNotify(!notifyOn);
 
   // Lo nuevo del feed: alguien pide permiso, termina una tarea o te responde.
   useEffect(() => {
@@ -1391,37 +1444,39 @@ export function CommandCenter() {
     const since = notifSeq.current;
     notifSeq.current = Math.max(since, top);
     const team = new Set(roster.map((a) => a.name));
+    const want = getSettings().notify;
     for (const e of evs.filter((x) => x.seq > since).reverse()) {
       if (e.agent === "tú" || !team.has(e.agent)) continue;
       const who = agentLabel(e.agent);
       if (e.kind === "waiting" && !isNotice(e)) {
-        notify(`${who} necesita tu respuesta`, `Pide ${askPhrase(e.text)}.`);
+        if (want.ask) notify(`${who} necesita tu respuesta`, `Pide ${askPhrase(e.text)}.`);
       } else if (e.kind === "task") {
         const t = parseTask(e);
-        if (t?.op === "hecha") notify(`${who} terminó la tarea #${t.id}`, t.detail || "Tarea hecha.");
+        if (want.done && t?.op === "hecha") notify(`${who} terminó la tarea #${t.id}`, t.detail || "Tarea hecha.");
       } else if (e.kind === "reply" || (e.kind === "message" && e.to === "tú")) {
-        notify(`${who} respondió`, e.text.replace(/\s+/g, " ").slice(0, 160));
+        if (want.reply) notify(`${who} respondió`, e.text.replace(/\s+/g, " ").slice(0, 160));
       }
     }
   }, [state, notifyOn, roster]);
 
-  // Tu último mensaje a un agente lleva 3 minutos sin respuesta y el agente no está trabajando.
+  // Tu último mensaje a un agente lleva unos minutos sin respuesta y el agente no está trabajando.
+  const lateMin = settings.notify.lateMin;
   useEffect(() => {
-    if (!notifyOn) return;
+    if (!notifyOn || lateMin <= 0) return;
     const id = window.setInterval(() => {
       const evs = latestRef.current?.events ?? [];
       const mine = evs.find((e) => e.agent === "tú" && e.kind === "message" && !!e.to && !isDispatch(e));
       if (!mine || lateWarned.current.has(mine.seq)) return;
       const age = Date.now() - mine.ts_ms;
-      if (age < 180_000 || age > 30 * 60_000) return;
+      if (age < lateMin * 60_000 || age > Math.max(30, lateMin * 3) * 60_000) return;
       const a = mine.to as string;
       if (evs.some((e) => e.agent === a && e.seq > mine.seq)) return;
       if (liveRef.current.some((l) => l.name === a && l.busy)) return;
       lateWarned.current.add(mine.seq);
-      notify(`${agentLabel(a)} no ha respondido`, "Lleva 3 minutos sin contestar a tu mensaje. Mira su terminal en lienzo.");
+      notify(`${agentLabel(a)} no ha respondido`, `Lleva ${lateMin} minutos sin contestar a tu mensaje. Mira su terminal en lienzo.`);
     }, 30_000);
     return () => window.clearInterval(id);
-  }, [notifyOn]);
+  }, [notifyOn, lateMin]);
 
   /** Abre un archivo que sale en el chat: en el preview si es del proyecto. */
   const openPath = (path: string) => {
@@ -1713,7 +1768,7 @@ export function CommandCenter() {
       <header className="cc-top">
         <div
           className="cc-projwrap"
-          onClick={() => openDrawer(true)}
+          onClick={() => openSettings("general")}
           title={
             project
               ? `Proyecto: ${project}\nPulsa para cambiarlo`
@@ -1766,9 +1821,9 @@ export function CommandCenter() {
               <Icon name={notifyOn ? "bell" : "belloff"} size={15} />
             </button>
             <button
-              onClick={() => openDrawer(true)}
-              title="Ajustes del equipo: agentes, normas y proyecto"
-              aria-label="Ajustes del equipo"
+              onClick={() => openSettings("general")}
+              title="Ajustes (Ctrl+,)"
+              aria-label="Ajustes"
             >
               <Icon name="settings" size={15} />
             </button>
@@ -1825,13 +1880,13 @@ export function CommandCenter() {
                         <b>Lanzar escuadrón</b>
                         <span>Abre los agentes instalados ya dentro del proyecto (en modo plan si lo tienes puesto).</span>
                       </button>
-                      <button className="cc-quick-card" onClick={() => openDrawer(true)}>
+                      <button className="cc-quick-card" onClick={() => openSettings("general")}>
                         <b>Carpeta del proyecto</b>
                         <span>Elige dónde trabajan los agentes y de dónde salen los diffs y el preview.</span>
                       </button>
-                      <button className="cc-quick-card" onClick={() => openDrawer(true)}>
+                      <button className="cc-quick-card" onClick={() => openSettings("team")}>
                         <b>Normas del equipo</b>
-                        <span>Ajusta el Charter, elige líder y conecta cada CLI.</span>
+                        <span>Escribe las normas del equipo y elige quién lo lidera.</span>
                       </button>
                     </div>
                   </div>
@@ -1849,7 +1904,7 @@ export function CommandCenter() {
           {view === "diff" && (
             <DiffTab
               project={project}
-              onChooseProject={() => openDrawer(true)}
+              onChooseProject={() => openSettings("general")}
               onCount={onDiffCount}
               tasks={tasks}
               events={state?.events ?? []}
@@ -1869,15 +1924,15 @@ export function CommandCenter() {
               project={project}
               events={state?.events ?? []}
               openRel={previewRel}
-              onChooseProject={() => openDrawer(true)}
+              onChooseProject={() => openSettings("general")}
             />
           )}
 
           {view === "files" && (
             <FilesTab
               project={project}
-              onChooseProject={() => openDrawer(true)}
-              onCharter={() => openDrawer(true)}
+              onChooseProject={() => openSettings("general")}
+              onCharter={() => openSettings("team")}
               onPreview={(rel) => {
                 setPreviewRel(rel);
                 setView("preview");
@@ -1932,7 +1987,7 @@ export function CommandCenter() {
                     {opening === teamTermName ? "Abriendo…" : "Lanzar terminal"}
                   </button>
                 ) : (
-                  <button className="agent-btn" onClick={() => openDrawer(true)}>
+                  <button className="agent-btn" onClick={() => openSettings("agents")}>
                     Conectar / abrir agentes
                   </button>
                 )}
@@ -1991,10 +2046,7 @@ export function CommandCenter() {
           startedAt={startedAtRef.current}
           tails={tails}
           onAutoStart={toggleAutoStart}
-          onSettings={() => {
-            setOverlay(null);
-            openDrawer(true);
-          }}
+          onSettings={() => openSettings("team")}
         />
       )}
 
@@ -2059,8 +2111,7 @@ export function CommandCenter() {
           onClose={() => setOverlay(null)}
           onOpenTask={(id) => {
             if (!project) {
-              setOverlay(null);
-              openDrawer(true);
+              openSettings("general");
               return;
             }
             setDiffTask(id);
@@ -2095,28 +2146,41 @@ export function CommandCenter() {
         </div>
       )}
 
-      {drawer && (
-        <>
-          <div className="cc-backdrop" onClick={() => setDrawer(null)} />
-          <aside className="cc-drawer">
-            <div className="cc-drawer-head">
-              <span className="cc-drawer-title">Equipo — agentes, normas y proyecto</span>
-              <button className="panel-close" onClick={() => setDrawer(null)} title="Cerrar (Esc)">
-                ✕
-              </button>
-            </div>
-            <div className="cc-drawer-body">
-              <TeamPanel
-                initialTab={drawer.agents ? "agents" : "feed"}
-                launchMode={shoot}
-                onTerminalOpen={(p) => {
-                  showTerminal(agentKeyFromCmd(p.cmd ?? ""));
-                  setDrawer(null);
-                }}
-              />
-            </div>
-          </aside>
-        </>
+      {overlay === "settings" && (
+        <SettingsModal
+          initial={settingsAt}
+          state={state}
+          detect={detect}
+          info={info}
+          hubOk={hubOk}
+          catalogs={catalogs}
+          prefs={prefs}
+          opening={opening}
+          autoStart={autoStart}
+          shoot={shoot}
+          chatsMin={chatsMin}
+          dispatchOn={dispatchOn}
+          dispatchState={dispatchView}
+          notifyOn={notifyOn}
+          onClose={() => setOverlay(null)}
+          say={say}
+          onPref={setPref}
+          onAutoStart={toggleAutoStart}
+          onShoot={setShootMode}
+          onChatsMin={(m) => {
+            setChatsMin(m);
+            saveFlag(CHATS_MIN_KEY, m);
+          }}
+          onDispatch={toggleDispatch}
+          onDispatchClear={clearDispatch}
+          onNotify={setNotify}
+          onProject={saveProject}
+          onConnect={connectAgent}
+          onOpenAgent={(id) => {
+            void launchAgent(id, agentLabel(id), { selectTerm: false });
+          }}
+          onTeamRules={saveTeamRules}
+        />
       )}
     </div>
   );

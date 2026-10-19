@@ -66,6 +66,8 @@ export type DispatchConfig = {
   globalGapMs: number;
   /** Un agente con actividad más reciente que esto se considera ocupado. */
   idleMs: number;
+  /** last = el líder solo si no hay nadie más · never = nunca · any = como uno más. */
+  leaderMode: "last" | "never" | "any";
 };
 
 export const DISPATCH_CONFIG: DispatchConfig = {
@@ -76,6 +78,7 @@ export const DISPATCH_CONFIG: DispatchConfig = {
   agentCooldownMs: 20_000,
   globalGapMs: 4_000,
   idleMs: 20_000,
+  leaderMode: "last",
 };
 
 export type DispatchResult = {
@@ -202,6 +205,7 @@ export function tick(
       a.online &&
       a.hasTerminal &&
       !a.blocked &&
+      !(cfg.leaderMode === "never" && a.name === leader) &&
       !busy.has(a.name) &&
       now >= (state.agentPausedUntil[a.name] ?? 0) &&
       now - (state.lastSentToAgent[a.name] ?? 0) >= cfg.agentCooldownMs &&
@@ -216,7 +220,7 @@ export function tick(
     const options = free
       .filter((a) => !tried.includes(a.name))
       .sort((a, b) => {
-        const lead = Number(a.name === leader) - Number(b.name === leader);
+        const lead = cfg.leaderMode === "last" ? Number(a.name === leader) - Number(b.name === leader) : 0;
         if (lead !== 0) return lead;
         return (state.lastSentToAgent[a.name] ?? 0) - (state.lastSentToAgent[b.name] ?? 0);
       });

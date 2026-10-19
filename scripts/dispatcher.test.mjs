@@ -47,6 +47,18 @@ test("prefiere a los trabajadores antes que al líder", () => {
   assert.equal(solo.send.agent, "lider");
 });
 
+test("modo del líder: nunca recibe tareas, o cuenta como uno más", () => {
+  const never = { ...C, leaderMode: "never" };
+  const solo = tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1)], agents: [a("lider")], leader: "lider" }, never);
+  assert.equal(solo.send, null);
+  const otro = tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1)], agents: [a("lider"), a("obrero")], leader: "lider" }, never);
+  assert.equal(otro.send.agent, "obrero");
+  const any = { ...C, leaderMode: "any" };
+  const s = { ...EMPTY_DISPATCH, lastSentToAgent: { obrero: NOW - 60_000 } };
+  const r = tick(s, { now: NOW, tasks: [t(1)], agents: [a("obrero"), a("lider")], leader: "lider" }, any);
+  assert.equal(r.send.agent, "lider"); // lleva más tiempo sin recibir nada
+});
+
 test("no hay dos avisos seguidos: freno global y un aviso en vuelo por agente", () => {
   const r1 = tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1), t(2)], agents: [a("x"), a("y")], leader: "" });
   assert.ok(r1.send);
