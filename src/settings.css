@@ -605,6 +605,9 @@
   font-weight: 700;
   color: var(--ac);
 }
+.st-tag + .st-tag {
+  margin-left: 10px;
+}
 
 /* ventana estrecha: las secciones pasan a una fila arriba */
 @media (max-width: 760px) {
