@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { addAgentTerminal, getLayout, removePanel, setRespawnResolver, useLayout } from "../store";
@@ -46,12 +46,14 @@ import type { DAgent, DispatchState } from "../lib/dispatcher";
 import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, savePrefs } from "../lib/agentPrefs";
 import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
-import { projectInfo, projectRecent, projectSaveImage } from "../lib/project";
+import { projectAttachPath, projectInfo, projectRecent, projectSaveAttachment, projectSaveImage } from "../lib/project";
+import { attachMeta, attachmentLine, countLines, isLongPaste, PASTED_NAME, textToBase64 } from "../lib/attach";
+import type { Attachment } from "../lib/attach";
 import type { ProjectInfo } from "../lib/project";
 import { chatLineage, currentTeamChat, inChat, useChats } from "../lib/chats";
 import { LATEST, resetCommand, withResume } from "../lib/resume";
 import { useTermActivity } from "../lib/activity";
-import { askPhrase, eventImages, isDispatch, isNotice, parseTask, samePath } from "../lib/timeline";
+import { askPhrase, eventImages, isDispatch, isImagePath, isNotice, parseTask, samePath } from "../lib/timeline";
 import { notify } from "../lib/notify";
 import { dispatchConfig, getSettings, rememberProject, useSettings } from "../lib/settings";
 import type { Chat } from "../lib/chats";
@@ -96,6 +98,8 @@ const HIDDEN_KINDS = new Set(["join", "leave", "session", "stop", "prompt"]);
 
 /** Imágenes que pueden ser capturas de los agentes. */
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp"];
+/** Adjuntos por mensaje como mucho. */
+const MAX_ATTS = 10;
 
 /** Agente que estaba trabajando cuando apareció una imagen nueva (o nadie). */
 function imageOwner(events: TeamEvent[], ts: number): string {
@@ -184,9 +188,10 @@ export function CommandCenter() {
   const [diffTask, setDiffTask] = useState<number | null>(null);
   const [previewRel, setPreviewRel] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  /** Capturas pegadas o arrastradas al compositor, ya guardadas en el proyecto. */
-  const [shots, setShots] = useState<{ path: string; preview: string }[]>([]);
+  /** Adjuntos del compositor (imágenes, archivos, texto largo pegado), ya listos en disco. */
+  const [atts, setAtts] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const [prefs, setPrefs] = useState<Record<string, AgentPref>>(loadPrefs);
   const [catalogs, setCatalogs] = useState<Record<string, ModelCatalog | null | undefined>>({});
@@ -213,6 +218,13 @@ export function CommandCenter() {
   const [flash, setFlash] = useState<{ text: string; err?: boolean } | null>(null);
   const flashTimer = useRef<number | undefined>(undefined);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  // El cuadro crece con el texto (hasta un tope) también cuando el texto llega sin teclearlo.
+  useLayoutEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+  }, [draft]);
 
   const say = useCallback((text: string, err = false) => {
     setFlash({ text, err });
@@ -1043,13 +1055,9 @@ export function CommandCenter() {
   /** Send the composer. Supports mentions (@todos, @lider, @agente) and the
    * Planificar / Ejecutar trigger. */
   const send = async () => {
-    // Las capturas adjuntas viajan como rutas: el agente las abre con su herramienta de leer archivos.
-    const att =
-      shots.length === 0
-        ? ""
-        : `📎 ${shots.length === 1 ? "Captura adjunta" : "Capturas adjuntas"}: ${shots
-            .map((s) => s.path)
-            .join(" · ")} (ábrela${shots.length === 1 ? "" : "s"} para ver${shots.length === 1 ? "la" : "las"})`;
+    // Los adjuntos viajan como rutas: el agente los abre con su herramienta de leer archivos.
+    if (attaching) return;
+    const att = attachmentLine(atts);
     const raw = [draft.trim(), att].filter(Boolean).join("\n");
     if (!raw) return;
 
@@ -1089,8 +1097,7 @@ export function CommandCenter() {
 
     const clear = () => {
       setDraft("");
-      setShots([]);
-      if (areaRef.current) areaRef.current.style.height = "auto";
+      setAtts([]);
     };
 
     try {
@@ -1149,33 +1156,88 @@ export function CommandCenter() {
     }
   };
 
-  /** Guarda las imágenes pegadas o arrastradas y las deja listas para ir con el mensaje. */
-  const attachImages = async (files: File[]) => {
-    const imgs = files.filter((f) => f.type.startsWith("image/"));
-    if (imgs.length === 0) return false;
-    if (!project) {
-      say("Elige antes la carpeta del proyecto: las capturas se guardan en ella.", true);
-      return true;
+  /** Adjuntos que aún se están guardando: el mensaje espera a que estén en disco. */
+  const [attaching, setAttaching] = useState(0);
+  const addAtt = (a: Attachment) =>
+    setAtts((cur) => (cur.some((x) => samePath(x.path, a.path)) ? cur : [...cur, a].slice(0, MAX_ATTS)));
+  const saving = async (fn: () => Promise<void>) => {
+    setAttaching((n) => n + 1);
+    try {
+      await fn();
+    } finally {
+      setAttaching((n) => n - 1);
     }
-    for (const f of imgs.slice(0, 6)) {
-      try {
-        const preview = await new Promise<string>((ok, ko) => {
-          const r = new FileReader();
-          r.onload = () => ok(String(r.result));
-          r.onerror = () => ko(r.error);
-          r.readAsDataURL(f);
-        });
-        const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
-        const path = await projectSaveImage(project, preview.slice(preview.indexOf(",") + 1), ext);
-        setShots((cur) => [...cur, { path, preview }]);
-      } catch (e) {
-        say(`No pude guardar la imagen: ${errMsg(e)}`, true);
-      }
-    }
-    return true;
   };
 
-  // Arrastrar imágenes a la ventana: Tauri entrega las rutas reales (no hace falta copiarlas).
+  /** Archivos pegados o elegidos con el clip: llegan sin ruta, así que se guardan en el proyecto. */
+  const attachFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    if (!project) {
+      say("Elige antes la carpeta del proyecto: los adjuntos se guardan en ella.", true);
+      return;
+    }
+    if (files.length > MAX_ATTS) say(`Como mucho ${MAX_ATTS} adjuntos por mensaje.`, true);
+    for (const f of files.slice(0, MAX_ATTS)) {
+      const image = f.type.startsWith("image/");
+      if (f.size > (image ? 12 : 25) * 1024 * 1024) {
+        say(`${f.name || "El archivo"} es demasiado grande (máx. ${image ? 12 : 25} MB).`, true);
+        continue;
+      }
+      await saving(async () => {
+        try {
+          const url = await new Promise<string>((ok, ko) => {
+            const r = new FileReader();
+            r.onload = () => ok(String(r.result));
+            r.onerror = () => ko(r.error);
+            r.readAsDataURL(f);
+          });
+          const data = url.slice(url.indexOf(",") + 1);
+          if (image) {
+            const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+            const path = await projectSaveImage(project, data, ext);
+            addAtt({ kind: "image", path, name: f.name || "captura", size: f.size, preview: url });
+          } else {
+            const path = await projectSaveAttachment(project, f.name || "adjunto", data);
+            addAtt({ kind: "file", path, name: f.name || "adjunto", size: f.size });
+          }
+        } catch (e) {
+          say(`No pude adjuntar ${f.name || "el archivo"}: ${errMsg(e)}`, true);
+        }
+      });
+    }
+  };
+
+  /** Un texto largo pegado va como archivo, para no llenar el cuadro ni la terminal del agente. */
+  const attachText = async (text: string) => {
+    if (!project) return;
+    await saving(async () => {
+      try {
+        const path = await projectSaveAttachment(project, PASTED_NAME, textToBase64(text));
+        addAtt({
+          kind: "text",
+          path,
+          name: "Texto pegado",
+          size: new TextEncoder().encode(text).length,
+          lines: countLines(text),
+          preview: text.slice(0, 600),
+          text,
+        });
+      } catch (e) {
+        say(`No pude adjuntar el texto; lo dejo en el cuadro. (${errMsg(e)})`, true);
+        setDraft((d) => d + text);
+      }
+    });
+  };
+
+  /** Devuelve un texto pegado al cuadro, por si lo querías escrito en el mensaje. */
+  const inlineText = (a: Attachment) => {
+    setAtts((cur) => cur.filter((x) => x.path !== a.path));
+    setDraft((d) => (d && !/\s$/.test(d) ? `${d}\n` : d) + (a.text ?? ""));
+    areaRef.current?.focus();
+  };
+
+  // Arrastrar a la ventana: Tauri entrega las rutas reales. Lo que ya está en el proyecto va
+  // por su ruta; un archivo de fuera se copia a `.lienzo/adjuntos/` (ver project_attach_path).
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     const un = getCurrentWebview().onDragDropEvent((ev) => {
@@ -1184,19 +1246,41 @@ export function CommandCenter() {
       else if (t === "leave") setDragOver(false);
       else if (t === "drop") {
         setDragOver(false);
-        const imgs = ev.payload.paths.filter((x) => /.(png|jpe?g|gif|webp|bmp)$/i.test(x)).slice(0, 6);
-        for (const path of imgs) {
-          invoke<string>("image_data", { path, project: null })
-            .then((preview) => setShots((cur) => (cur.some((x) => x.path === path) ? cur : [...cur, { path, preview }])))
-            .catch(() => say(`No pude abrir ${path}`, true));
+        const paths = ev.payload.paths;
+        if (paths.length > MAX_ATTS) say(`Como mucho ${MAX_ATTS} adjuntos por mensaje.`, true);
+        for (const src of paths.slice(0, MAX_ATTS)) {
+          const image = isImagePath(src);
+          if (!project) {
+            if (!image) {
+              say("Elige antes la carpeta del proyecto para adjuntar archivos.", true);
+              continue;
+            }
+            invoke<string>("image_data", { path: src, project: null })
+              .then((preview) => addAtt({ kind: "image", path: src, name: src, size: 0, preview }))
+              .catch(() => say(`No pude abrir ${src}`, true));
+            continue;
+          }
+          void saving(async () => {
+            try {
+              const a = await projectAttachPath(project, src);
+              if (image) {
+                const preview = await invoke<string>("image_data", { path: a.path, project: null });
+                addAtt({ kind: "image", path: a.path, name: a.name, size: a.size, preview });
+              } else {
+                addAtt({ kind: a.dir ? "dir" : "file", path: a.path, name: a.name, size: a.size });
+              }
+            } catch (e) {
+              say(`No pude adjuntar ${src}: ${errMsg(e)}`, true);
+            }
+          });
         }
-        if (imgs.length === 0 && ev.payload.paths.length > 0) say("Solo se pueden adjuntar imágenes.", true);
       }
     });
     return () => {
       void un.then((f) => f());
     };
-  }, [say]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [say, project]);
 
   /** Opciones del selector de destino del compositor (@equipo, líder y agentes). */
   const destNames = useMemo(() => {
@@ -1727,7 +1811,8 @@ export function CommandCenter() {
         className="cc-cbox"
         data-drop={dragOver ? "1" : "0"}
         onDragOver={(e) => {
-          if ([...e.dataTransfer.items].some((i) => i.type.startsWith("image/"))) {
+          // En la app de escritorio el arrastre lo recibe Tauri (con rutas); esto sirve en el navegador.
+          if ([...e.dataTransfer.items].some((i) => i.kind === "file")) {
             e.preventDefault();
             setDragOver(true);
           }
@@ -1736,34 +1821,88 @@ export function CommandCenter() {
         onDrop={(e) => {
           setDragOver(false);
           const files = [...e.dataTransfer.files];
-          if (files.some((f) => f.type.startsWith("image/"))) {
+          if (files.length > 0) {
             e.preventDefault();
-            void attachImages(files);
+            void attachFiles(files);
           }
         }}
       >
-        {shots.length > 0 && (
+        {(atts.length > 0 || attaching > 0) && (
           <div className="cc-shots">
-            {shots.map((s) => (
-              <span className="cc-shot" key={s.path} title={s.path}>
-                <img src={s.preview} alt="" />
+            {atts.map((a) => {
+              const drop = (
                 <button
-                  onClick={() => setShots((cur) => cur.filter((x) => x.path !== s.path))}
-                  aria-label="Quitar la captura"
+                  className="cc-att-x"
+                  onClick={() => setAtts((cur) => cur.filter((x) => x.path !== a.path))}
+                  aria-label={`Quitar ${a.name}`}
                   title="Quitar"
                 >
                   <Icon name="x" size={11} />
                 </button>
+              );
+              if (a.kind === "image") {
+                return (
+                  <span className="cc-shot" key={a.path} title={a.path}>
+                    <img src={a.preview} alt="" />
+                    {drop}
+                  </span>
+                );
+              }
+              return (
+                <span className="cc-att" key={a.path} data-kind={a.kind} title={a.kind === "text" ? undefined : a.path}>
+                  <span className="cc-att-ic">
+                    <Icon name={a.kind === "dir" ? "folder" : "file"} size={15} />
+                  </span>
+                  <span className="cc-att-tx">
+                    <b>{a.name}</b>
+                    {a.kind === "text" && a.preview && <code>{a.preview}</code>}
+                    <small>
+                      {attachMeta(a)}
+                      {a.kind === "text" && a.text != null && (
+                        <button className="cc-att-in" onClick={() => inlineText(a)} title="Quitar el adjunto y poner el texto en el cuadro">
+                          Ponerlo en el cuadro
+                        </button>
+                      )}
+                    </small>
+                  </span>
+                  {drop}
+                </span>
+              );
+            })}
+            {attaching > 0 && (
+              <span className="cc-att" data-kind="busy">
+                <span className="cc-att-ic">
+                  <span className="cv-pulse" />
+                </span>
+                <span className="cc-att-tx">
+                  <b>Preparando…</b>
+                </span>
               </span>
-            ))}
+            )}
           </div>
         )}
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            void attachFiles([...(e.currentTarget.files ?? [])]);
+            e.currentTarget.value = "";
+          }}
+        />
         <textarea
           onPaste={(e) => {
             const files = [...e.clipboardData.files];
-            if (files.some((f) => f.type.startsWith("image/"))) {
+            if (files.length > 0) {
               e.preventDefault();
-              void attachImages(files);
+              void attachFiles(files);
+              return;
+            }
+            const text = e.clipboardData.getData("text/plain");
+            if (project && isLongPaste(text)) {
+              e.preventDefault();
+              void attachText(text);
             }
           }}
           ref={areaRef}
@@ -1780,9 +1919,6 @@ export function CommandCenter() {
           }
           onChange={(e) => {
             setDraft(e.target.value);
-            const el = e.currentTarget;
-            el.style.height = "auto";
-            el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -1792,6 +1928,14 @@ export function CommandCenter() {
           }}
         />
         <div className="cc-c-row">
+          <button
+            className="cc-clip"
+            onClick={() => fileRef.current?.click()}
+            aria-label="Adjuntar archivos"
+            title="Adjuntar archivos o imágenes (también puedes pegarlos o arrastrarlos)"
+          >
+            <Icon name="clip" size={15} />
+          </button>
           <DestPicker dest={dest} names={destNames} leader={leader} states={states} onChange={setDest} />
           <div
             className="cc-shoot"
@@ -1806,7 +1950,7 @@ export function CommandCenter() {
             </button>
           </div>
           <span className="cc-c-grow" />
-          <button className="cc-send" disabled={!draft.trim() && shots.length === 0} onClick={send} aria-label="Enviar" title="Enviar">
+          <button className="cc-send" disabled={(!draft.trim() && atts.length === 0) || attaching > 0} onClick={send} aria-label="Enviar" title="Enviar">
             <Icon name="send" />
           </button>
         </div>

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { displayName, kindOf, splitAttachments } from "../lib/attach";
 import { stampLabel } from "../lib/chats";
 import { agentColor, agentInitial, agentLabel, shortPath } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
@@ -791,13 +792,11 @@ export function ChatView({
     if (r.k === "user") {
       const e = r.e;
       const plan = PLAN_PREFIX.test(e.text);
-      // Capturas que adjuntaste: la línea con sus rutas se cambia por las miniaturas.
-      const att = /📎[^\n]*/.exec(e.text)?.[0] ?? "";
-      const shots = att ? eventImages({ ...e, text: att, files: [] }) : [];
-      const said = e.text
-        .replace(PLAN_PREFIX, "")
-        .replace(/\s*📎[^\n]*/, "")
-        .trim();
+      // Lo que adjuntaste: la línea con sus rutas se cambia por miniaturas y fichas.
+      const { said: rest, paths } = splitAttachments(e.text);
+      const shots = paths.filter((p) => kindOf(p) === "image");
+      const others = paths.filter((p) => kindOf(p) !== "image");
+      const said = rest.replace(PLAN_PREFIX, "").trim();
       const to = e.kind === "broadcast" || !e.to ? "Al equipo" : `A ${agentLabel(e.to)}`;
       return (
         <div className="cv-user" key={r.key} data-new={isNew(r.key)}>
@@ -808,6 +807,18 @@ export function ChatView({
           </div>
           {said && <div className="cv-bubble">{said}</div>}
           {shots.length > 0 && gallery(shots)}
+          {others.length > 0 && (
+            <div className="cv-atts">
+              {others.map((p) => (
+                <button className="cv-att" key={p} data-kind={kindOf(p)} onClick={() => (kindOf(p) === "dir" ? void revealItemInDir(p.replace(/[\\/]+$/, "")).catch(() => {}) : onOpenPath(p))}
+                  title={p}
+                >
+                  <Icon name={kindOf(p) === "dir" ? "folder" : "file"} size={14} />
+                  <span>{displayName(p)}</span>
+                </button>
+              ))}
+            </div>
+          )}
           {r === lastUser && receipt(e)}
         </div>
       );

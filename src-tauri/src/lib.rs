@@ -60,6 +60,8 @@ pub fn run() {
             project::project_revert_paths,
             project::image_data,
             project::project_save_image,
+            project::project_save_attachment,
+            project::project_attach_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

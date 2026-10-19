@@ -50,6 +50,16 @@ export const projectRecent = (path: string, exts: string[], limit = 40) =>
 export const projectSaveImage = (path: string, data: string, ext: string) =>
   invoke<string>("project_save_image", { path, data, ext });
 
+/** Guarda en `.lienzo/adjuntos/` un adjunto (base64) del compositor; devuelve su ruta absoluta. */
+export const projectSaveAttachment = (path: string, name: string, data: string) =>
+  invoke<string>("project_save_attachment", { path, name, data });
+
+export type Attached = { path: string; name: string; size: number; dir: boolean };
+
+/** Prepara un archivo arrastrado: se pasa tal cual si está en el proyecto, si no se copia. */
+export const projectAttachPath = (path: string, src: string) =>
+  invoke<Attached>("project_attach_path", { path, src });
+
 /** Diff y estado limitados a las rutas de una tarea. */
 export const projectDiffPaths = (path: string, paths: string[]) =>
   invoke<TaskDiff>("project_diff_paths", { path, paths });

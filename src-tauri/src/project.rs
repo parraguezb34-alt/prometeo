@@ -557,7 +557,147 @@ pub fn project_save_image(path: String, data: String, ext: Option<String>) -> Re
         .unwrap_or(0);
     let file = dir.join(format!("captura-{ms}.{ext}"));
     std::fs::write(&file, bytes).map_err(|e| e.to_string())?;
-    // `canonicalize` deja el prefijo `\\?\` de Windows: los agentes no lo esperan en una ruta.
-    let shown = file.display().to_string();
-    Ok(shown.strip_prefix(r"\\?\").unwrap_or(&shown).to_string())
+    Ok(shown(&file))
+}
+
+/// `canonicalize` deja el prefijo `\\?\` de Windows: los agentes no lo esperan en una ruta.
+fn shown(p: &Path) -> String {
+    let s = p.display().to_string();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+}
+
+/// Tope de un adjunto que se copia al proyecto; uno más grande se pasa por su ruta original.
+const ATTACH_CAP: u64 = 25 * 1024 * 1024;
+
+/// Nombre de archivo seguro: letras, números, `.`, `-` y `_`, sin rutas ni nombres vacíos.
+fn safe_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let mut out = String::new();
+    for c in base.trim().chars() {
+        if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') {
+            out.push(c);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches(['.', '-']).chars().take(80).collect::<String>();
+    if out.is_empty() {
+        "adjunto".into()
+    } else {
+        out
+    }
+}
+
+/// Ruta libre en `.lienzo/adjuntos/` para `name` (con la hora delante, para que no choquen).
+fn attach_target(root: &Path, name: &str) -> Result<PathBuf, String> {
+    let dir = root.join(".lienzo").join("adjuntos");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let ms = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let name = safe_name(name);
+    let mut file = dir.join(format!("{ms}-{name}"));
+    let mut n = 1;
+    while file.exists() {
+        n += 1;
+        file = dir.join(format!("{ms}-{n}-{name}"));
+    }
+    Ok(file)
+}
+
+/// Guarda en el proyecto algo que pegaste o elegiste en el compositor (texto largo, un archivo)
+/// en `.lienzo/adjuntos/` y devuelve su ruta absoluta, para pasársela a los agentes.
+#[tauri::command]
+pub fn project_save_attachment(path: String, name: String, data: String) -> Result<String, String> {
+    use base64::Engine;
+    let root = root_of(&path)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .map_err(|_| "el adjunto no se pudo leer".to_string())?;
+    if bytes.len() as u64 > ATTACH_CAP {
+        return Err("el adjunto es demasiado grande (máx. 25 MB)".into());
+    }
+    let file = attach_target(&root, &name)?;
+    std::fs::write(&file, bytes).map_err(|e| e.to_string())?;
+    Ok(shown(&file))
+}
+
+#[derive(Serialize)]
+pub struct Attached {
+    path: String,
+    name: String,
+    size: u64,
+    dir: bool,
+}
+
+/// Prepara un archivo o carpeta que arrastraste al compositor. Lo que ya está en el proyecto
+/// se pasa tal cual; un archivo de fuera se copia a `.lienzo/adjuntos/` para que cualquier
+/// agente pueda leerlo (algunos no salen de la carpeta del proyecto).
+#[tauri::command]
+pub fn project_attach_path(path: String, src: String) -> Result<Attached, String> {
+    let root = root_of(&path)?;
+    let src = PathBuf::from(src.trim());
+    let meta = std::fs::metadata(&src).map_err(|_| "el archivo no existe".to_string())?;
+    let name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let real = src.canonicalize().map_err(|e| e.to_string())?;
+    let inside = real.starts_with(&root);
+    if meta.is_dir() || inside || meta.len() > ATTACH_CAP {
+        return Ok(Attached { path: shown(&real), name, size: meta.len(), dir: meta.is_dir() });
+    }
+    let file = attach_target(&root, &name)?;
+    std::fs::copy(&real, &file).map_err(|e| e.to_string())?;
+    Ok(Attached { path: shown(&file), name, size: meta.len(), dir: false })
+}
+
+#[cfg(test)]
+mod attach_tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("lienzo-attach-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn nombres_seguros() {
+        assert_eq!(safe_name("informe final (v2).pdf"), "informe-final-v2-.pdf");
+        assert_eq!(safe_name(r"C:\x\..\notas.txt"), "notas.txt");
+        assert_eq!(safe_name("../../"), "adjunto");
+        assert_eq!(safe_name("año.md"), "año.md");
+    }
+
+    #[test]
+    fn guarda_texto_pegado() {
+        use base64::Engine;
+        let root = tmp("save");
+        let data = base64::engine::general_purpose::STANDARD.encode("hola\nmundo");
+        let p = project_save_attachment(root.display().to_string(), "pegado.txt".into(), data).unwrap();
+        assert!(p.contains(".lienzo") && p.ends_with("-pegado.txt"));
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "hola\nmundo");
+    }
+
+    #[test]
+    fn copia_solo_lo_de_fuera() {
+        let root = tmp("root");
+        let out = tmp("fuera");
+        std::fs::write(root.join("dentro.rs"), "fn main() {}").unwrap();
+        std::fs::write(out.join("fuera.csv"), "a,b").unwrap();
+        let proj = root.display().to_string();
+
+        let a = project_attach_path(proj.clone(), root.join("dentro.rs").display().to_string()).unwrap();
+        assert!(a.path.ends_with("dentro.rs") && !a.path.contains(".lienzo"));
+
+        let b = project_attach_path(proj.clone(), out.join("fuera.csv").display().to_string()).unwrap();
+        assert!(b.path.contains(".lienzo") && b.path.ends_with("-fuera.csv"));
+        assert_eq!(std::fs::read_to_string(&b.path).unwrap(), "a,b");
+
+        let c = project_attach_path(proj, out.display().to_string()).unwrap();
+        assert!(c.dir && !c.path.contains(".lienzo"));
+    }
 }
