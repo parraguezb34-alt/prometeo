@@ -108,6 +108,9 @@ fn handle(mut request: tiny_http::Request, app: &AppHandle) {
         ("GET", "/pending") => cmd_pending(app, &query),
         ("POST", "/broadcast/ack") => cmd_broadcast_ack(app, &payload),
         ("POST", "/charter") => cmd_charter(app, &payload),
+        ("GET", "/inbox") => cmd_inbox(app, &query),
+        ("POST", "/inbox/ack") => cmd_inbox_ack(app, &payload),
+        ("POST", "/usage") => cmd_usage(app, &payload),
         _ => Err(format!("ruta desconocida: {} {}", method, path)),
     };
 
@@ -227,8 +230,21 @@ fn cmd_event(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                     .collect()
             })
             .unwrap_or_default();
-        let to = payload["to"].as_str().map(|s| s.to_string());
-        let ev = hub::push_event(inner, &agent, &sid, &kind, &text, files, to);
+        let to = hub::message_target(inner, payload["to"].as_str().map(|s| s.to_string()));
+        let ev = hub::push_event(inner, &agent, &sid, &kind, &text, files, to.clone());
+        // Quien manda un mensaje ya leyó lo anterior de su buzón (está contestando).
+        if kind == "message" {
+            if let Some(reply_to) = payload["reply_to"].as_u64() {
+                hub::inbox_ack(inner, &agent, reply_to);
+            }
+        }
+        let online = to.as_deref().map(|t| {
+            let now = hub::now_ms();
+            inner
+                .agents
+                .values()
+                .any(|a| a.name.eq_ignore_ascii_case(t) && now.saturating_sub(a.last_seen_ms) < hub::AGENT_TTL_MS)
+        });
         // Telemetría opcional del puente: modelo y uso de contexto reales.
         let model = payload["model"].as_str().map(|s| s.to_string());
         let ctx_tokens = payload["ctx_tokens"].as_u64();
@@ -240,11 +256,81 @@ fn cmd_event(app: &AppHandle, payload: &Value) -> Result<Value, String> {
             hub::report_cli_session(inner, &sid, &agent, cli);
         }
         hub::persist(inner);
-        json!({ "seq": ev.seq })
+        json!({ "seq": ev.seq, "to": to, "online": online })
     })
     .ok_or("hub no inicializado")?;
     hub::notify_ui();
     Ok(out)
+}
+
+/// Buzón de un agente: sus mensajes sin leer. Con `ack=1` quedan leídos.
+fn cmd_inbox(app: &AppHandle, query: &std::collections::HashMap<String, String>) -> Result<Value, String> {
+    let agent = query.get("agent").cloned().unwrap_or_default();
+    if agent.trim().is_empty() {
+        return Ok(json!({ "messages": [], "unread": 0 }));
+    }
+    let ack = query.get("ack").map(|v| v == "1").unwrap_or(false);
+    let out = hub::with_inner(app, |inner| {
+        let list: Vec<Value> = hub::inbox_unread(inner, &agent)
+            .into_iter()
+            .map(|e| {
+                json!({
+                    "seq": e.seq,
+                    "from": e.agent,
+                    "to": e.to,
+                    "text": e.text,
+                    "ts_ms": e.ts_ms,
+                })
+            })
+            .collect();
+        let last = list.last().and_then(|m| m["seq"].as_u64()).unwrap_or(0);
+        if ack && last > 0 {
+            hub::inbox_ack(inner, &agent, last);
+        }
+        json!({ "unread": list.len(), "messages": list })
+    })
+    .ok_or("hub no inicializado")?;
+    if ack {
+        hub::notify_ui();
+    }
+    Ok(out)
+}
+
+fn cmd_inbox_ack(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let agent = payload["agent"].as_str().unwrap_or("").trim().to_string();
+    let seq = payload["seq"].as_u64().unwrap_or(0);
+    if agent.is_empty() {
+        return Err("falta el agente".into());
+    }
+    hub::with_inner(app, |inner| hub::inbox_ack(inner, &agent, seq)).ok_or("hub no inicializado")?;
+    hub::notify_ui();
+    Ok(json!({ "ok": true }))
+}
+
+/// Consumo de tokens del agente: mensajes con su gasto (`items`) y/o tokens ahorrados (`saved`).
+fn cmd_usage(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let sid = payload["session_id"].as_str().unwrap_or("").to_string();
+    let items = payload["items"].as_array().cloned().unwrap_or_default();
+    let saved = payload["saved"].as_u64().unwrap_or(0);
+    hub::with_inner(app, |inner| {
+        let (agent, _) = hub::agent_label(inner, &sid, payload["agent"].as_str());
+        for it in items.iter().take(200) {
+            hub::report_usage(
+                inner,
+                &agent,
+                it["id"].as_str().unwrap_or(""),
+                it["input"].as_u64().unwrap_or(0),
+                it["output"].as_u64().unwrap_or(0),
+                it["cache_read"].as_u64().unwrap_or(0),
+                it["cache_write"].as_u64().unwrap_or(0),
+            );
+        }
+        hub::report_saved(inner, &agent, saved);
+        hub::persist(inner);
+    })
+    .ok_or("hub no inicializado")?;
+    hub::notify_ui();
+    Ok(json!({ "ok": true }))
 }
 
 /// Relevo con memoria: guarda el resumen pegado a la tarea y lo publica.

@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { agentColor, agentCommands, agentInitial, agentLabel, ago, HANDOVER_SAVE_PROMPT } from "../lib/team";
-import type { ModelCatalog, TeamAgent, TeamEvent } from "../lib/team";
+import type { AgentUsage, InboxInfo, ModelCatalog, TeamAgent, TeamEvent } from "../lib/team";
+import { cachePct, sumUsage, totalTokens, usageOf } from "../lib/usage";
 import type { AgentPref } from "../lib/agentPrefs";
 import { confirmChoice } from "../lib/pty";
 import { ctxLevel, ctxOf, fmtTokens, shortModel } from "./AgentCard";
@@ -118,6 +119,9 @@ export function TeamModal({
   onRestart,
   onAutoStart,
   onSettings,
+  usage,
+  inbox,
+  onUsage,
 }: {
   agents: TeamAgent[];
   states: Map<string, AgentState>;
@@ -146,8 +150,12 @@ export function TeamModal({
   onRestart: (name: string) => void;
   onAutoStart: (on: boolean) => void;
   onSettings: () => void;
+  usage?: Record<string, AgentUsage>;
+  inbox?: Record<string, InboxInfo>;
+  onUsage: () => void;
 }) {
   const online = agents.filter((a) => a.online).length;
+  const teamUsage = sumUsage(Object.keys(usage ?? {}).map((n) => usageOf(usage, n)!));
   return (
     <>
       <div className="cc-scrim" onClick={onClose} />
@@ -158,7 +166,9 @@ export function TeamModal({
             <div className="cc-modal-sub">
               {agents.length === 0
                 ? "No encontré agentes instalados en este equipo"
-                : `${online} de ${agents.length} en línea`}
+                : `${online} de ${agents.length} en línea${
+                    teamUsage.turns > 0 ? ` · ${fmtTokens(totalTokens(teamUsage))} tokens gastados` : ""
+                  }`}
             </div>
           </div>
           <button className="cc-icon-btn" onClick={onClose} aria-label="Cerrar" title="Cerrar (Esc)">
@@ -191,6 +201,9 @@ export function TeamModal({
                 (pref.model ?? null) !== (was?.model ?? null) || (pref.effort ?? null) !== (was?.effort ?? null);
               const hasPref = !!pref.model || !!pref.effort;
               const showApply = a.online && dirty && (was !== undefined || hasPref);
+              const spent = usageOf(usage, name);
+              const spentPct = spent ? cachePct(spent) : null;
+              const mail = inbox?.[name];
               return (
                 <article
                   key={a.session_id}
@@ -361,6 +374,34 @@ export function TeamModal({
                   </div>
                   )}
 
+                  {spent && spent.turns > 0 && (
+                    <button
+                      className="cc-usage"
+                      onClick={onUsage}
+                      title="Tokens que ha gastado desde que empezó a contarse (Ajustes › Consumo)"
+                    >
+                      <span>
+                        Gastado <b>{fmtTokens(totalTokens(spent))}</b>
+                      </span>
+                      {spentPct !== null && (
+                        <span>
+                          caché <b>{spentPct} %</b>
+                        </span>
+                      )}
+                      {spent.saved_ctx > 0 && (
+                        <span data-ok="1">
+                          ahorro <b>~{fmtTokens(spent.saved_ctx)}</b>
+                        </span>
+                      )}
+                    </button>
+                  )}
+                  {mail && (
+                    <div className="cc-field-note">
+                      📬 {mail.unread === 1 ? "1 mensaje sin leer" : `${mail.unread} mensajes sin leer`} de{" "}
+                      {mail.from.map(agentLabel).join(", ")}
+                    </div>
+                  )}
+
                   <div className="cc-now">
                     {a.online ? (
                       <time>hace {ago(a.last_seen_ms)}</time>
@@ -455,6 +496,10 @@ export function TeamModal({
           <button className="cc-btn sec" onClick={onSettings}>
             <Icon name="settings" size={14} />
             Ajustes del equipo
+          </button>
+          <button className="cc-btn sec" onClick={onUsage}>
+            <Icon name="pulse" size={14} />
+            Consumo
           </button>
           <span className="cc-kbd">Esc</span>
         </div>

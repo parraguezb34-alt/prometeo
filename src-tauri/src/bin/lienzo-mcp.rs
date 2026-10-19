@@ -90,33 +90,43 @@ fn text_result(text: &str, is_error: bool) -> Value {
 // Renderizado de estado (mismo formato para contexto inyectado y tools)
 // ---------------------------------------------------------------------------
 
-fn render_context(state: &Value, me: &str) -> String {
-    let empty = vec![];
-    let mut out = String::from("[Equipo lienzo]\n");
+const CONTEXT_FOOTER: &str = "Coordínate con las herramientas team_* (MCP lienzo-team): team_update al terminar un paso, \
+team_claim_files antes de editar archivos que otros podrían tocar, team_message para hablar con otro agente.";
 
+/// El contexto del equipo por partes (clave, texto). Los hooks comparan cada parte con la
+/// que ya inyectaron y solo mandan las que cambiaron.
+fn context_sections(state: &Value, me: &str) -> Vec<(&'static str, String)> {
+    let empty = vec![];
+    let mut sections: Vec<(&'static str, String)> = Vec::new();
+
+    let mut lead = String::new();
     if let Some(leader) = state["leader"].as_str().filter(|s| !s.is_empty()) {
-        out.push_str(&format!(
-            "Líder del equipo: {} (coordina y reparte).\n",
-            leader
-        ));
+        lead.push_str(&format!("Líder del equipo: {} (coordina y reparte).\n", leader));
     }
     if let Some(charter) = state["charter"].as_str().filter(|s| !s.is_empty()) {
-        out.push_str(&format!("Normas del equipo:\n{}\n", trunc(charter, 520)));
+        lead.push_str(&format!("Normas del equipo:\n{}\n", trunc(charter, 520)));
     }
+    sections.push(("lead", lead));
 
     let agents = state["agents"].as_array().unwrap_or(&empty);
-    let names: Vec<String> = agents
+    let mut names: Vec<String> = agents
         .iter()
         .filter(|a| a["online"].as_bool().unwrap_or(false))
         .map(|a| a["name"].as_str().unwrap_or("?").to_string())
         .collect();
-    if names.is_empty() {
-        out.push_str("No hay otros agentes en línea ahora mismo.\n");
-    } else {
-        out.push_str(&format!("Agentes en línea: {}\n", names.join(", ")));
-    }
+    names.sort();
+    names.dedup();
+    sections.push((
+        "online",
+        if names.is_empty() {
+            "No hay otros agentes en línea ahora mismo.\n".to_string()
+        } else {
+            format!("Agentes en línea: {}\n", names.join(", "))
+        },
+    ));
 
     let tasks = state["tasks"].as_array().unwrap_or(&empty);
+    let mut work = String::new();
     let open: Vec<String> = tasks
         .iter()
         .filter(|t| t["status"].as_str().unwrap_or("") != "done")
@@ -131,7 +141,7 @@ fn render_context(state: &Value, me: &str) -> String {
         })
         .collect();
     if !open.is_empty() {
-        out.push_str(&format!("Tareas abiertas: {}\n", open.join(" · ")));
+        work.push_str(&format!("Tareas abiertas: {}\n", open.join(" · ")));
     }
     // Entregas de tareas hechas de las que aún depende trabajo pendiente.
     let delivered: Vec<String> = tasks
@@ -154,9 +164,8 @@ fn render_context(state: &Value, me: &str) -> String {
         })
         .collect();
     if !delivered.is_empty() {
-        out.push_str(&format!("Entregas previas: {}\n", delivered.join(" · ")));
+        work.push_str(&format!("Entregas previas: {}\n", delivered.join(" · ")));
     }
-
     // Notas cruzadas: lo último que se dijo en el tablón de las tareas pendientes.
     let mut notes: Vec<(u64, String)> = vec![];
     for t in tasks.iter().filter(|t| t["status"].as_str().unwrap_or("") != "done") {
@@ -175,14 +184,16 @@ fn render_context(state: &Value, me: &str) -> String {
     notes.sort_by(|a, b| b.0.cmp(&a.0));
     if !notes.is_empty() {
         let list: Vec<String> = notes.into_iter().take(3).map(|n| n.1).collect();
-        out.push_str(&format!("Notas del tablón: {}\n", list.join(" · ")));
+        work.push_str(&format!("Notas del tablón: {}\n", list.join(" · ")));
     }
+    sections.push(("tasks", work));
 
     // Memoria del proyecto: lo que el líder decidió que todos deben recordar.
+    let mut mem = String::new();
     let memory = state["memory"].as_array().unwrap_or(&empty);
     let active: Vec<&Value> = memory.iter().filter(|m| m["status"].as_str() == Some("active")).collect();
     if !active.is_empty() {
-        out.push_str("Memoria del proyecto (curada por el líder):\n");
+        mem.push_str("Memoria del proyecto (curada por el líder):\n");
         let mut budget = 900usize;
         for m in active.iter().rev() {
             let line = format!("- [{}] {}\n", m["kind"].as_str().unwrap_or("hecho"), trunc(m["text"].as_str().unwrap_or(""), 200));
@@ -190,18 +201,20 @@ fn render_context(state: &Value, me: &str) -> String {
                 break;
             }
             budget -= line.len();
-            out.push_str(&line);
+            mem.push_str(&line);
         }
     }
     let pending = memory.iter().filter(|m| m["status"].as_str() == Some("proposed")).count();
     let leader_name = state["leader"].as_str().unwrap_or("");
     if pending > 0 && (leader_name.is_empty() || leader_name == me) {
-        out.push_str(&format!(
+        mem.push_str(&format!(
             "Tienes {pending} propuesta(s) de memoria por revisar: mira team_memory_list y decide con team_memory_resolve.\n"
         ));
     }
+    sections.push(("memory", mem));
 
     let claims = state["claims"].as_array().unwrap_or(&empty);
+    let mut cl = String::new();
     if !claims.is_empty() {
         let list: Vec<String> = claims
             .iter()
@@ -214,13 +227,23 @@ fn render_context(state: &Value, me: &str) -> String {
                 )
             })
             .collect();
-        out.push_str(&format!("Archivos reservados: {}\n", list.join(", ")));
+        cl.push_str(&format!("Archivos reservados: {}\n", list.join(", ")));
     }
+    sections.push(("claims", cl));
+    sections
+}
 
+/// Actividad reciente (sin acciones de herramientas), solo la posterior a `since_seq` y,
+/// si se indica, sin lo que hizo el propio agente (eso ya lo sabe).
+fn context_events(state: &Value, since_seq: u64, skip_agent: &str) -> String {
+    let empty = vec![];
     let events = state["events"].as_array().unwrap_or(&empty);
     let recent: Vec<String> = events
         .iter()
         .filter(|e| e["kind"].as_str().unwrap_or("") != "tool")
+        .filter(|e| e["seq"].as_u64().unwrap_or(0) > since_seq)
+        .filter(|e| skip_agent.is_empty() || e["agent"].as_str() != Some(skip_agent))
+        .filter(|e| !matches!(e["kind"].as_str().unwrap_or(""), "join" | "leave" | "session" | "stop" | "prompt"))
         .take(6)
         .map(|e| {
             let mark = if e["kind"].as_str().unwrap_or("") == "broadcast" {
@@ -237,16 +260,20 @@ fn render_context(state: &Value, me: &str) -> String {
             )
         })
         .collect();
-    if !recent.is_empty() {
-        out.push_str("Actividad reciente:\n");
-        out.push_str(&recent.join("\n"));
-        out.push('\n');
+    if recent.is_empty() {
+        String::new()
+    } else {
+        format!("Actividad reciente:\n{}\n", recent.join("\n"))
     }
+}
 
-    out.push_str(
-        "Coordínate con las herramientas team_* (MCP lienzo-team): team_update al terminar un paso, \
-team_claim_files antes de editar archivos que otros podrían tocar, team_message para hablar con otro agente.",
-    );
+fn render_context(state: &Value, me: &str) -> String {
+    let mut out = String::from("[Equipo lienzo]\n");
+    for (_, text) in context_sections(state, me) {
+        out.push_str(&text);
+    }
+    out.push_str(&context_events(state, 0, ""));
+    out.push_str(CONTEXT_FOOTER);
     out
 }
 
@@ -372,6 +399,7 @@ fn initialize_result(params: &Value, client: Option<&HubClient>) -> Value {
     let mut instructions = String::from(
         "Herramientas del equipo compartido de lienzo: varios agentes de IA trabajan juntos en el mismo proyecto. \
 Empieza con team_context, publica avances con team_update, reserva archivos con team_claim_files antes de editarlos y revisa team_feed. \
+Si una herramienta te avisa de 📬 mensajes, léelos con team_inbox y contesta con team_message (to + reply_to); no contestes agradecimientos. \
 Cuando tu contexto esté muy lleno, guarda tu memoria con team_handover_save (incluye tu task_id): queda pegada a la tarea y la app compactará tu contexto sin perder el hilo.",
     );
     if let Some(c) = client {
@@ -432,15 +460,21 @@ fn tools_catalog() -> Value {
         },
         {
             "name": "team_message",
-            "description": "Envía un mensaje al equipo (o a un agente concreto). Aparece en el feed de todos.",
+            "description": "Envía un mensaje a otro agente (o a todo el equipo). Le llega a su buzón y lo ve el usuario. Para responder a un mensaje, pon reply_to con su número.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "text": { "type": "string" },
-                    "to": { "type": "string", "description": "Nombre del agente destinatario (opcional; por defecto todos)" }
+                    "text": { "type": "string", "description": "El mensaje, corto: la pregunta o el dato y las rutas (sin pegar archivos)" },
+                    "to": { "type": "string", "description": "Agente destinatario; \"líder\" llega al líder actual (opcional; por defecto todo el equipo)" },
+                    "reply_to": { "type": "integer", "description": "Número del mensaje al que respondes (lo marca como leído)" }
                 },
                 "required": ["text"]
             }
+        },
+        {
+            "name": "team_inbox",
+            "description": "Lee tu buzón: los mensajes que otros agentes te enviaron y aún no has leído. Quedan marcados como leídos.",
+            "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "team_task_create",
@@ -625,14 +659,33 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                 })
         }
         "team_message" => {
-            let text = trunc(args["text"].as_str().unwrap_or(""), 1500);
-            let to = args["to"].as_str().map(|s| s.to_string());
+            let reply_to = args["reply_to"].as_u64().filter(|n| *n > 0);
+            let body = trunc(args["text"].as_str().unwrap_or(""), 1500);
+            let text = match reply_to {
+                Some(n) => format!("↩ #{n} {body}"),
+                None => body,
+            };
+            let to = args["to"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
             client
                 .post(
                     "/event",
-                    &json!({ "session_id": sid, "kind": "message", "text": text, "to": to }),
+                    &json!({ "session_id": sid, "kind": "message", "text": text, "to": to, "reply_to": reply_to }),
                 )
-                .map(|_| text_result("mensaje enviado al equipo", false))
+                .map(|v| {
+                    let seq = v["seq"].as_u64().unwrap_or(0);
+                    let msg = match (v["to"].as_str(), v["online"].as_bool()) {
+                        (Some(t), Some(true)) => format!("mensaje #{seq} enviado a {t}: le llega a su buzón"),
+                        (Some(t), _) => format!("mensaje #{seq} guardado para {t} (ahora no está en línea: lo leerá al volver)"),
+                        _ => format!("mensaje #{seq} enviado a todo el equipo"),
+                    };
+                    text_result(&msg, false)
+                })
+        }
+        "team_inbox" => {
+            let me = std::env::var("LIENZO_AGENT").unwrap_or_default();
+            client
+                .get(&format!("/inbox?agent={}&ack=1", url_part(&me)))
+                .map(|v| text_result(&render_inbox(&v), false))
         }
         "team_task_create" => {
             let title = trunc(args["title"].as_str().unwrap_or(""), 200);
@@ -826,6 +879,16 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
         other => return Err((-32602, format!("herramienta desconocida: {other}"))),
     };
 
+    let result = result.map(|mut v| {
+        if name != "team_inbox" {
+            if let Some(note) = inbox_notice(client) {
+                if let Some(t) = v["content"][0]["text"].as_str() {
+                    v["content"][0]["text"] = json!(format!("{t}\n\n{note}"));
+                }
+            }
+        }
+        v
+    });
     match result {
         Ok(v) => Ok(v),
         Err(e) => Ok(text_result(
@@ -835,6 +898,61 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
             true,
         )),
     }
+}
+
+/// Codifica lo justo para meter un nombre de agente en la query.
+fn url_part(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{:02X}", b),
+        })
+        .collect()
+}
+
+fn render_inbox(v: &Value) -> String {
+    let empty = vec![];
+    let list = v["messages"].as_array().unwrap_or(&empty);
+    if list.is_empty() {
+        return "No tienes mensajes sin leer.".to_string();
+    }
+    let mut out = format!("📬 {} mensaje(s) nuevo(s):\n", list.len());
+    for m in list {
+        let to = match m["to"].as_str() {
+            Some(_) => "",
+            None => " (a todo el equipo)",
+        };
+        out.push_str(&format!(
+            "- #{} de {}{} · hace {}: {}\n",
+            m["seq"].as_u64().unwrap_or(0),
+            m["from"].as_str().unwrap_or("?"),
+            to,
+            ago(m["ts_ms"].as_u64().unwrap_or(0)),
+            trunc(m["text"].as_str().unwrap_or(""), 1200)
+        ));
+    }
+    out.push_str("Responde con team_message (to = quien escribió, reply_to = su número) solo si aporta algo.");
+    out
+}
+
+/// «📬 tienes N mensajes» si hay algo sin leer en el buzón de este agente.
+fn inbox_notice(client: &HubClient) -> Option<String> {
+    let me = std::env::var("LIENZO_AGENT").ok().filter(|s| !s.is_empty())?;
+    let v = client.get(&format!("/inbox?agent={}", url_part(&me))).ok()?;
+    let n = v["unread"].as_u64().unwrap_or(0);
+    if n == 0 {
+        return None;
+    }
+    let mut from: Vec<String> = v["messages"]
+        .as_array()
+        .map(|l| l.iter().filter_map(|m| m["from"].as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    from.sort();
+    from.dedup();
+    Some(format!(
+        "📬 Tienes {n} mensaje(s) sin leer de {}. Léelos con team_inbox.",
+        from.join(", ")
+    ))
 }
 
 fn read_resource(client: &HubClient, params: &Value) -> Result<Value, (i64, String)> {
@@ -931,11 +1049,20 @@ fn mcp_mode() {
             std::thread::spawn(move || {
                 let mut win_cache: Option<(String, u64)> = None;
                 let mut last: Option<(u64, u64)> = None;
+                // Último mensaje de OpenCode ya sumado (-1 = aún sin línea base: lo anterior a
+                // que arrancara el puente no se cuenta).
+                let mut usage_mark: i64 = -1;
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(12));
                     let sid = sess.lock().map(|s| s.clone()).unwrap_or_default();
                     if sid.is_empty() {
                         continue;
+                    }
+                    if agent_name == "opencode" {
+                        let items = opencode_usage(&cwd, &mut usage_mark);
+                        if !items.is_empty() {
+                            let _ = c.post("/usage", &json!({ "session_id": sid, "items": items }));
+                        }
                     }
                     let Some(sample) = sample_telemetry(&agent_name, &cwd, &mut win_cache) else {
                         continue;
@@ -1178,24 +1305,61 @@ fn hook_mode(args: &[String]) {
         }
     }
 
+    // Consumo de tokens del turno (Claude Code lo deja en su transcript).
+    if event == "stop" && agent == "claude" {
+        let items = transcript_turn_usage(payload["transcript_path"].as_str().unwrap_or(""));
+        if !items.is_empty() {
+            let _ = client.post("/usage", &json!({ "agent": agent, "items": items }));
+        }
+    }
+
+    let cache_path = hook_cache_path(&agent, &session_key);
+    let mut cache = cache_path.as_deref().map(load_cache).unwrap_or_else(|| json!({}));
+
     // Broadcasts the user sent to the whole team that this session hasn't seen.
     let pending = fetch_pending(&client, &agent, &session_key);
+    // Mensajes de otros agentes para este (su buzón).
+    let inbox = fetch_inbox(&client, &agent);
 
     // On stop: if there are pending team messages, keep the turn alive with them.
     if event == "stop" && !pending.is_empty() {
         let joined: Vec<String> = pending.iter().map(|(_, t)| format!("- {}", t)).collect();
         let max_seq = pending.iter().map(|(s, _)| *s).max().unwrap_or(0);
         ack_pending(&client, &agent, &session_key, max_seq);
-        println!(
-            "{}",
-            json!({
-                "decision": "block",
-                "reason": format!(
-                    "📣 El usuario envió este mensaje a TODO el equipo (te llega ahora):\n{}\n\nActúa según tu rol: si eres el líder, reparte y coordina; si no, ejecuta tu parte y publícala con team_update. Mira team_context para el estado del equipo (compañeros, tareas y reservas); reserva los archivos con team_claim_files antes de editarlos y habla con los demás con team_message.",
-                    joined.join("\n")
-                )
-            })
+        let mut reason = format!(
+            "📣 El usuario envió este mensaje a TODO el equipo (te llega ahora):\n{}\n\nActúa según tu rol: si eres el líder, reparte y coordina; si no, ejecuta tu parte y publícala con team_update. Mira team_context para el estado del equipo (compañeros, tareas y reservas); reserva los archivos con team_claim_files antes de editarlos y habla con los demás con team_message.",
+            joined.join("\n")
         );
+        if !inbox.is_empty() {
+            reason.push_str(&format!("\n\n{}", inbox_text(&inbox)));
+            ack_inbox(&client, &agent, &inbox);
+        }
+        println!("{}", json!({ "decision": "block", "reason": reason }));
+        return;
+    }
+
+    // Al acabar el turno con mensajes de compañeros sin leer, el agente sigue para atenderlos.
+    // Con tope: tres seguidos sin que el usuario escriba, para que dos agentes no se queden
+    // contestándose en bucle.
+    if event == "stop" {
+        let streak = cache["inbox_blocks"].as_u64().unwrap_or(0);
+        if !inbox.is_empty() && streak < 3 {
+            ack_inbox(&client, &agent, &inbox);
+            cache["inbox_blocks"] = json!(streak + 1);
+            if let Some(p) = &cache_path {
+                save_cache(p, &cache);
+            }
+            println!(
+                "{}",
+                json!({
+                    "decision": "block",
+                    "reason": format!(
+                        "{}\n\nAtiéndelos si hace falta (team_message con to y reply_to) y vuelve a lo tuyo. No contestes agradecimientos ni confirmaciones.",
+                        inbox_text(&inbox)
+                    )
+                })
+            );
+        }
         return;
     }
 
@@ -1207,7 +1371,10 @@ fn hook_mode(args: &[String]) {
             } else {
                 "UserPromptSubmit"
             };
-            let mut ctx = render_context(&state, &agent);
+            // Una sesión nueva (o recién compactada) no recuerda nada: contexto completo.
+            // En cada mensaje después, solo lo que cambió desde el último.
+            let (mut ctx, saved) = context_for_prompt(&state, &agent, &mut cache, event == "session");
+            cache["inbox_blocks"] = json!(0);
             if !pending.is_empty() {
                 ctx.push_str("\n📣 Mensajes del usuario para todo el equipo (nuevos):\n");
                 for (_, t) in &pending {
@@ -1216,17 +1383,225 @@ fn hook_mode(args: &[String]) {
                 let max_seq = pending.iter().map(|(s, _)| *s).max().unwrap_or(0);
                 ack_pending(&client, &agent, &session_key, max_seq);
             }
-            println!(
-                "{}",
-                json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": hook_event,
-                        "additionalContext": ctx
-                    }
-                })
-            );
+            if !inbox.is_empty() {
+                ctx.push_str(&format!("\n{}\n", inbox_text(&inbox)));
+                ack_inbox(&client, &agent, &inbox);
+            }
+            if let Some(p) = &cache_path {
+                save_cache(p, &cache);
+            }
+            if saved > 0 {
+                let _ = client.post("/usage", &json!({ "agent": agent, "saved": saved }));
+            }
+            if !ctx.trim().is_empty() {
+                println!(
+                    "{}",
+                    json!({
+                        "hookSpecificOutput": {
+                            "hookEventName": hook_event,
+                            "additionalContext": ctx
+                        }
+                    })
+                );
+            }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Memoria del hook entre llamadas, contexto por diferencias y buzón
+// ---------------------------------------------------------------------------
+
+/// Archivo temporal con lo que el hook ya inyectó en esta conversación.
+fn hook_cache_path(agent: &str, session_key: &str) -> Option<std::path::PathBuf> {
+    let safe: String = session_key
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .take(64)
+        .collect();
+    if safe.is_empty() {
+        return None;
+    }
+    let dir = std::env::temp_dir().join("lienzo-hooks");
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.join(format!("{agent}-{safe}.json")))
+}
+
+fn load_cache(path: &std::path::Path) -> Value {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| json!({}))
+}
+
+fn save_cache(path: &std::path::Path, v: &Value) {
+    let _ = std::fs::write(path, v.to_string());
+}
+
+fn fingerprint(text: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    format!("{:x}", h.finish())
+}
+
+/// Lo que una parte del contexto dice cuando se queda vacía (si antes no lo estaba).
+fn emptied_note(key: &str) -> &'static str {
+    match key {
+        "tasks" => "Ya no quedan tareas abiertas.\n",
+        "claims" => "Ya no hay archivos reservados.\n",
+        "memory" => "La memoria del proyecto quedó vacía.\n",
+        _ => "",
+    }
+}
+
+/// Contexto del equipo para un mensaje: completo la primera vez (`full`) y, después, solo
+/// las partes que cambiaron y la actividad nueva. Devuelve el texto y los tokens que se
+/// ahorraron frente a inyectar el contexto completo (estimados a 4 caracteres por token).
+fn context_for_prompt(state: &Value, me: &str, cache: &mut Value, full: bool) -> (String, u64) {
+    let sections = context_sections(state, me);
+    let complete = render_context(state, me);
+    let top_seq = state["events"]
+        .as_array()
+        .map(|l| l.iter().filter_map(|e| e["seq"].as_u64()).max().unwrap_or(0))
+        .unwrap_or(0);
+    let mut fps = serde_json::Map::new();
+    for (k, t) in &sections {
+        fps.insert(k.to_string(), json!(fingerprint(t)));
+    }
+    let known = !full && cache["fp"].is_object();
+    let out = if !known {
+        complete.clone()
+    } else {
+        let mut d = String::new();
+        for (k, t) in &sections {
+            if cache["fp"][*k].as_str() == fps[*k].as_str() {
+                continue;
+            }
+            if t.is_empty() {
+                d.push_str(emptied_note(k));
+            } else {
+                d.push_str(t);
+            }
+        }
+        d.push_str(&context_events(state, cache["seq"].as_u64().unwrap_or(0), me));
+        if d.is_empty() {
+            String::new()
+        } else {
+            format!("[Equipo lienzo · novedades desde tu último mensaje]\n{d}")
+        }
+    };
+    cache["fp"] = serde_json::Value::Object(fps);
+    cache["seq"] = json!(top_seq);
+    let saved = if known {
+        (complete.chars().count().saturating_sub(out.chars().count()) / 4) as u64
+    } else {
+        0
+    };
+    (out, saved)
+}
+
+/// Mensajes sin leer del buzón del agente: (seq, de, texto).
+fn fetch_inbox(client: &HubClient, agent: &str) -> Vec<(u64, String, String)> {
+    if agent.is_empty() {
+        return vec![];
+    }
+    client
+        .get(&format!("/inbox?agent={}", url_part(agent)))
+        .ok()
+        .and_then(|v| {
+            v["messages"].as_array().map(|l| {
+                l.iter()
+                    .map(|m| {
+                        (
+                            m["seq"].as_u64().unwrap_or(0),
+                            m["from"].as_str().unwrap_or("?").to_string(),
+                            m["text"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn inbox_text(list: &[(u64, String, String)]) -> String {
+    let mut out = format!("📬 Mensajes de tus compañeros ({}):\n", list.len());
+    for (seq, from, text) in list {
+        out.push_str(&format!("- #{seq} de {from}: {}\n", trunc(text, 1200)));
+    }
+    out.push_str("Para responder: team_message con to = quien escribió y reply_to = su número.");
+    out
+}
+
+fn ack_inbox(client: &HubClient, agent: &str, list: &[(u64, String, String)]) {
+    if let Some(max) = list.iter().map(|m| m.0).max() {
+        let _ = client.post("/inbox/ack", &json!({ "agent": agent, "seq": max }));
+    }
+}
+
+/// Gasto de tokens del último turno en un transcript de Claude Code: cada mensaje del
+/// asistente desde el último mensaje del usuario, una vez por id (el hub no repite ids).
+fn transcript_turn_usage(path: &str) -> Vec<Value> {
+    if path.is_empty() {
+        return vec![];
+    }
+    let Some(text) = read_tail(std::path::Path::new(path), 512 * 1024) else {
+        return vec![];
+    };
+    let mut by_id: Vec<(String, [u64; 4])> = Vec::new();
+    for line in text.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v["isSidechain"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        match v["type"].as_str().unwrap_or("") {
+            "user" => {
+                let content = &v["message"]["content"];
+                let is_prompt = content.is_string()
+                    || content
+                        .as_array()
+                        .is_some_and(|b| b.iter().any(|x| x["type"].as_str() == Some("text")));
+                if is_prompt {
+                    break;
+                }
+            }
+            "assistant" => {
+                let id = v["message"]["id"].as_str().unwrap_or("").to_string();
+                let u = &v["message"]["usage"];
+                if id.is_empty() || u.is_null() {
+                    continue;
+                }
+                let vals = [
+                    u["input_tokens"].as_u64().unwrap_or(0),
+                    u["output_tokens"].as_u64().unwrap_or(0),
+                    u["cache_read_input_tokens"].as_u64().unwrap_or(0),
+                    u["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+                ];
+                // Cada bloque de una respuesta va en su línea con el mismo id: vale el mayor.
+                match by_id.iter_mut().find(|(k, _)| *k == id) {
+                    Some((_, cur)) => {
+                        for i in 0..4 {
+                            cur[i] = cur[i].max(vals[i]);
+                        }
+                    }
+                    None => by_id.push((id, vals)),
+                }
+            }
+            _ => {}
+        }
+    }
+    by_id
+        .into_iter()
+        .map(|(id, v)| {
+            json!({
+                "id": format!("cc:{id}"),
+                "input": v[0], "output": v[1], "cache_read": v[2], "cache_write": v[3],
+            })
+        })
+        .collect()
 }
 
 /// Lee la cola de un archivo de texto (la primera línea puede venir cortada;
@@ -1474,6 +1849,66 @@ fn opencode_ctx(cwd: &str, win_cache: &mut Option<(String, u64)>) -> Option<CtxS
         None => 200_000,
     };
     Some(CtxSample { model, used, window })
+}
+
+/// Gasto de los mensajes nuevos de OpenCode en este directorio, desde `mark` (rowid).
+fn opencode_usage(cwd: &str, mark: &mut i64) -> Vec<Value> {
+    let Some(db) = home_dir().map(|h| h.join(".local/share/opencode/opencode.db")) else {
+        return vec![];
+    };
+    if !db.is_file() {
+        return vec![];
+    }
+    let Ok(con) = rusqlite::Connection::open_with_flags(
+        &db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return vec![];
+    };
+    let want = norm_dir(cwd);
+    let scope = "session_id in (select id from session_v2 where lower(replace(directory, '\\', '/')) = ?1)";
+    if *mark < 0 {
+        *mark = con
+            .query_row(
+                &format!("select coalesce(max(rowid), 0) from session_message where type = 'assistant' and {scope}"),
+                [&want],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0);
+        return vec![];
+    }
+    let Ok(mut stmt) = con.prepare(&format!(
+        "select rowid, data from session_message where type = 'assistant' and rowid > ?2 and {scope} \
+         order by rowid asc limit 200"
+    )) else {
+        return vec![];
+    };
+    let Ok(rows) = stmt.query_map(rusqlite::params![&want, *mark], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    }) else {
+        return vec![];
+    };
+    let mut out = Vec::new();
+    for (rowid, data) in rows.flatten() {
+        let Ok(v) = serde_json::from_str::<Value>(&data) else {
+            *mark = rowid;
+            continue;
+        };
+        let t = &v["tokens"];
+        // Aún escribiéndose: se mira en la próxima vuelta.
+        if t.is_null() {
+            break;
+        }
+        *mark = rowid;
+        out.push(json!({
+            "id": format!("oc:{rowid}"),
+            "input": t["input"].as_u64().unwrap_or(0),
+            "output": t["output"].as_u64().unwrap_or(0) + t["reasoning"].as_u64().unwrap_or(0),
+            "cache_read": t["cache"]["read"].as_u64().unwrap_or(0),
+            "cache_write": t["cache"]["write"].as_u64().unwrap_or(0),
+        }));
+    }
+    out
 }
 
 /// `limit.context` del modelo en el catálogo de OpenCode (tabla kv).

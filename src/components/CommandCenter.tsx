@@ -34,7 +34,7 @@ import {
   teamState,
   teamTaskOp,
 } from "../lib/team";
-import type { DetectResult, ModelCatalog, TeamAgent, TeamEvent, TeamState, TeamTask } from "../lib/team";
+import type { DetectResult, InboxInfo, ModelCatalog, TeamAgent, TeamEvent, TeamState, TeamTask } from "../lib/team";
 import {
   EMPTY_DISPATCH,
   dispatchPrompt,
@@ -665,6 +665,7 @@ export function CommandCenter() {
     lastByAgent: Map<string, TeamEvent>;
     events: TeamEvent[];
     states: Map<string, AgentState>;
+    inbox: Record<string, InboxInfo>;
   } | null>(null);
 
   useEffect(() => {
@@ -1376,6 +1377,7 @@ export function CommandCenter() {
     blocked: [...blockedNames, ...authIssues],
     events: state?.events ?? [],
     states,
+    inbox: state?.inbox ?? {},
     panels: layout.panels,
     lastByAgent,
   };
@@ -1477,6 +1479,40 @@ export function CommandCenter() {
     }, 30_000);
     return () => window.clearInterval(id);
   }, [notifyOn, lateMin]);
+
+  // ---- Buzón: un agente libre con mensajes de otro sin leer recibe una línea en su terminal.
+  // Claude los recibe también al acabar su turno (hook); OpenCode y Antigravity, solo así o al
+  // usar una herramienta del equipo.
+  const relayed = useRef<Record<string, number>>({});
+  const relayAt = useRef<Record<string, number>>({});
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const cur = latestRef.current;
+      if (!cur || !getSettings().team.relayInbox) return;
+      const now = Date.now();
+      for (const [agent, info] of Object.entries(cur.inbox)) {
+        if ((relayed.current[agent] ?? 0) >= info.last_seq) continue;
+        if (now - (relayAt.current[agent] ?? 0) < 60_000) continue;
+        // Un momento de margen: quizá lo lee él solo con la siguiente herramienta.
+        const msg = cur.events.find((e) => e.seq === info.last_seq);
+        if (msg && now - msg.ts_ms < 8_000) continue;
+        if (cur.blocked.includes(agent) || getSettings().skipAgents.includes(agent)) continue;
+        if (liveRef.current.some((l) => l.name === agent && l.busy)) continue;
+        if (now - (cur.lastByAgent.get(agent)?.ts_ms ?? 0) < 15_000) continue;
+        const panel = panelForAgent(cur.panels, agent);
+        if (!panel?.sessionId) continue;
+        relayed.current[agent] = info.last_seq;
+        relayAt.current[agent] = now;
+        const from = info.from.map(agentLabel).join(", ");
+        const n = info.unread === 1 ? "1 mensaje" : `${info.unread} mensajes`;
+        void termWrite(
+          panel.sessionId,
+          `📬 Tienes ${n} de ${from} en tu buzón: léelos con team_inbox y responde solo si hace falta.`,
+        ).catch(() => {});
+      }
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, []);
 
   /** Abre un archivo que sale en el chat: en el preview si es del proyecto. */
   const openPath = (path: string) => {
@@ -2047,6 +2083,9 @@ export function CommandCenter() {
           tails={tails}
           onAutoStart={toggleAutoStart}
           onSettings={() => openSettings("team")}
+          usage={state?.usage}
+          inbox={state?.inbox}
+          onUsage={() => openSettings("usage")}
         />
       )}
 

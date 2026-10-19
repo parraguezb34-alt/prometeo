@@ -101,7 +101,28 @@ export type TeamState = {
   tasks: TeamTask[];
   claims: TeamClaim[];
   memory?: MemoryEntry[];
+  /** Mensajes sin leer del buzón de cada agente (solo los que tienen alguno). */
+  inbox?: Record<string, InboxInfo>;
+  /** Tokens gastados por agente desde `usage_since`. */
+  usage?: Record<string, AgentUsage>;
+  usage_since?: number;
   now_ms: number;
+};
+
+export type InboxInfo = { unread: number; last_seq: number; from: string[] };
+
+export type AgentUsage = {
+  input: number;
+  output: number;
+  /** Leídos de la caché del proveedor: cuestan una fracción. */
+  cache_read: number;
+  cache_write: number;
+  turns: number;
+  /** Tokens (estimados) que lienzo no inyectó porque el contexto del equipo no cambió. */
+  saved_ctx: number;
+  /** Contexto liberado al compactar. */
+  freed: number;
+  compactions: number;
 };
 
 export type TeamDetails = {
@@ -195,6 +216,8 @@ export const teamTaskOp = (id: number, op: string) =>
  * its terminal by the caller). */
 export const teamDm = (agent: string, text: string) =>
   invoke<void>("team_dm", { agent, text });
+/** Empieza a contar el consumo de tokens desde cero. */
+export const teamUsageReset = () => invoke<void>("team_usage_reset");
 
 /** Compacta la sesión de OpenCode de un proyecto con la API de su servidor
  * local (sin teclear en la TUI: la vía fiable para el relevo con memoria). */

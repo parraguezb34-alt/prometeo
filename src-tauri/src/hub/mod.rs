@@ -340,6 +340,30 @@ pub struct Claim {
     pub ts_ms: u64,
 }
 
+/// Tokens que ha gastado un agente (sumados de su telemetría) y lo que lienzo le ahorró.
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct Usage {
+    #[serde(default)]
+    pub input: u64,
+    #[serde(default)]
+    pub output: u64,
+    /// Leídos de la caché del proveedor: cuestan una fracción de un token normal.
+    #[serde(default)]
+    pub cache_read: u64,
+    #[serde(default)]
+    pub cache_write: u64,
+    #[serde(default)]
+    pub turns: u64,
+    /// Tokens (estimados) que no se inyectaron porque el contexto del equipo no había cambiado.
+    #[serde(default)]
+    pub saved_ctx: u64,
+    /// Contexto liberado al compactar (relevos): lo que dejó de viajar en cada mensaje.
+    #[serde(default)]
+    pub freed: u64,
+    #[serde(default)]
+    pub compactions: u64,
+}
+
 /// A prompt the user sent to the whole team (delivered to hooks on demand).
 #[derive(Clone)]
 pub struct Broadcast {
@@ -370,6 +394,10 @@ pub struct PersistedState {
     pub memory: Vec<MemoryEntry>,
     #[serde(default)]
     pub memory_seq: u64,
+    #[serde(default)]
+    pub usage: HashMap<String, Usage>,
+    #[serde(default)]
+    pub usage_since: u64,
 }
 
 pub struct HubInner {
@@ -387,6 +415,14 @@ pub struct HubInner {
     pub memory_seq: u64,
     /// Broadcast delivery marks: `session:<id>` (hooks) or `agent:<name>` (terminals).
     pub broadcast_marks: HashMap<String, u64>,
+    /// Último mensaje leído del buzón de cada agente (por nombre).
+    pub inbox_marks: HashMap<String, u64>,
+    /// Los mensajes anteriores al arranque del hub cuentan como leídos.
+    pub inbox_floor: u64,
+    pub usage: HashMap<String, Usage>,
+    pub usage_since: u64,
+    /// Mensajes de la telemetría ya sumados (para no contar dos veces un mismo turno).
+    pub usage_seen: VecDeque<String>,
     pub seq: u64,
     pub task_seq: u64,
 }
@@ -467,6 +503,8 @@ pub fn persist(inner: &HubInner) {
         task_seq: inner.task_seq,
         memory: inner.memory.clone(),
         memory_seq: inner.memory_seq,
+        usage: inner.usage.clone(),
+        usage_since: inner.usage_since,
     };
     if let Ok(raw) = serde_json::to_string(&state) {
         let _ = std::fs::write(state_file(), raw);
@@ -611,8 +649,131 @@ pub fn snapshot(inner: &HubInner, limit: usize) -> serde_json::Value {
         "tasks": inner.tasks,
         "memory": inner.memory,
         "claims": inner.claims.values().collect::<Vec<&Claim>>(),
+        "inbox": inbox_summary(inner),
+        "usage": inner.usage,
+        "usage_since": inner.usage_since,
         "now_ms": now,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Buzón: mensajes de un agente a otro (o a todo el equipo) que aún no ha leído
+// ---------------------------------------------------------------------------
+
+/// Nombre del líder si `to` lo nombra con su alias («líder», «lider», «leader»).
+fn resolve_to(inner: &HubInner, to: &str) -> String {
+    let t = to.trim();
+    match t.to_lowercase().as_str() {
+        "líder" | "lider" | "leader" => inner.leader.clone().unwrap_or_else(|| t.to_string()),
+        _ => t.to_string(),
+    }
+}
+
+/// ¿Es `e` un mensaje para `agent`? Directo a él, o de otro agente para todo el equipo.
+/// Los del usuario («tú») no: esos ya se escriben en su terminal.
+fn is_inbox_for(inner: &HubInner, e: &Event, agent: &str) -> bool {
+    if e.kind != "message" || e.agent == "tú" || e.agent.eq_ignore_ascii_case(agent) {
+        return false;
+    }
+    match e.to.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        None => true,
+        Some(to) => {
+            let to = resolve_to(inner, to);
+            to.eq_ignore_ascii_case(agent) || to == "todos" || to == "equipo"
+        }
+    }
+}
+
+pub fn inbox_mark(inner: &HubInner, agent: &str) -> u64 {
+    inner
+        .inbox_marks
+        .get(&agent.to_lowercase())
+        .copied()
+        .unwrap_or(0)
+        .max(inner.inbox_floor)
+}
+
+/// Mensajes sin leer de `agent`, del más antiguo al más nuevo.
+pub fn inbox_unread<'a>(inner: &'a HubInner, agent: &str) -> Vec<&'a Event> {
+    let mark = inbox_mark(inner, agent);
+    inner
+        .events
+        .iter()
+        .filter(|e| e.seq > mark && is_inbox_for(inner, e, agent))
+        .collect()
+}
+
+pub fn inbox_ack(inner: &mut HubInner, agent: &str, seq: u64) {
+    let entry = inner.inbox_marks.entry(agent.to_lowercase()).or_insert(0);
+    if seq > *entry {
+        *entry = seq;
+    }
+}
+
+/// Para la UI: cuántos mensajes tiene sin leer cada agente conectado.
+fn inbox_summary(inner: &HubInner) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    let mut names: Vec<&str> = inner.agents.values().map(|a| a.name.as_str()).collect();
+    names.sort();
+    names.dedup();
+    for name in names {
+        let unread = inbox_unread(inner, name);
+        if unread.is_empty() {
+            continue;
+        }
+        out.insert(
+            name.to_string(),
+            serde_json::json!({
+                "unread": unread.len(),
+                "last_seq": unread.last().map(|e| e.seq).unwrap_or(0),
+                "from": unread.iter().map(|e| e.agent.clone()).collect::<std::collections::BTreeSet<_>>(),
+            }),
+        );
+    }
+    serde_json::Value::Object(out)
+}
+
+/// Normaliza el destinatario de un mensaje antes de guardarlo (alias del líder).
+pub fn message_target(inner: &HubInner, to: Option<String>) -> Option<String> {
+    to.map(|t| resolve_to(inner, &t)).filter(|t| !t.is_empty())
+}
+
+// ---------------------------------------------------------------------------
+// Consumo de tokens
+// ---------------------------------------------------------------------------
+
+/// Suma el gasto de un mensaje del agente (una sola vez por `id`).
+#[allow(clippy::too_many_arguments)]
+pub fn report_usage(
+    inner: &mut HubInner,
+    agent: &str,
+    id: &str,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+) {
+    if !id.is_empty() {
+        if inner.usage_seen.iter().any(|x| x == id) {
+            return;
+        }
+        inner.usage_seen.push_back(id.to_string());
+        while inner.usage_seen.len() > 5000 {
+            inner.usage_seen.pop_front();
+        }
+    }
+    let u = inner.usage.entry(agent.to_string()).or_default();
+    u.input += input;
+    u.output += output;
+    u.cache_read += cache_read;
+    u.cache_write += cache_write;
+    u.turns += 1;
+}
+
+pub fn report_saved(inner: &mut HubInner, agent: &str, tokens: u64) {
+    if tokens > 0 {
+        inner.usage.entry(agent.to_string()).or_default().saved_ctx += tokens;
+    }
 }
 
 /// Team rules shared with every agent (customizable from the UI).
@@ -724,17 +885,30 @@ pub fn report_ctx(
     if key.is_empty() {
         return;
     }
+    let mut freed: Option<(String, u64)> = None;
     if let Some(agent) = inner.agents.get_mut(&key) {
         if model.is_some() {
             agent.model = model;
         }
         if let Some(t) = tokens {
+            // Una caída fuerte del contexto es una compactación (relevo o /compact): lo que se
+            // liberó deja de viajar en cada mensaje siguiente.
+            if let Some(prev) = agent.ctx_tokens {
+                if prev > 30_000 && t < prev / 2 {
+                    freed = Some((agent.name.clone(), prev - t));
+                }
+            }
             agent.ctx_tokens = Some(t);
         }
         if let Some(w) = window {
             agent.ctx_window = Some(w);
         }
         agent.ctx_ms = Some(now_ms());
+    }
+    if let Some((name, n)) = freed {
+        let u = inner.usage.entry(name).or_default();
+        u.freed += n;
+        u.compactions += 1;
     }
 }
 
@@ -1106,6 +1280,18 @@ pub fn team_dm(hub: tauri::State<'_, Hub>, agent: String, text: String) -> Resul
     Ok(())
 }
 
+/// Empieza a contar el consumo de tokens desde cero.
+#[tauri::command]
+pub fn team_usage_reset(hub: tauri::State<'_, Hub>) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    inner.usage.clear();
+    inner.usage_since = now_ms();
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
@@ -1134,6 +1320,11 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         leader: persisted.leader,
         broadcasts: VecDeque::new(),
         broadcast_marks: HashMap::new(),
+        inbox_marks: HashMap::new(),
+        inbox_floor: persisted.seq,
+        usage: persisted.usage,
+        usage_since: if persisted.usage_since > 0 { persisted.usage_since } else { now_ms() },
+        usage_seen: VecDeque::new(),
         seq: persisted.seq,
         task_seq: persisted.task_seq,
         memory: persisted.memory,
@@ -1229,5 +1420,105 @@ mod task_tests {
         let json = r#"{"id":1,"title":"x","status":"open","created_ms":5}"#;
         let t: Task = serde_json::from_str(json).unwrap();
         assert!(t.parents.is_empty() && t.result.is_none());
+    }
+}
+
+#[cfg(test)]
+mod inbox_tests {
+    use super::*;
+
+    fn hub() -> HubInner {
+        HubInner {
+            token: String::new(),
+            port: 0,
+            agents: HashMap::new(),
+            events: VecDeque::new(),
+            tasks: vec![],
+            claims: HashMap::new(),
+            project: None,
+            charter: None,
+            leader: Some("claude".into()),
+            broadcasts: VecDeque::new(),
+            memory: vec![],
+            memory_seq: 0,
+            broadcast_marks: HashMap::new(),
+            inbox_marks: HashMap::new(),
+            inbox_floor: 0,
+            usage: HashMap::new(),
+            usage_since: 0,
+            usage_seen: VecDeque::new(),
+            seq: 0,
+            task_seq: 0,
+        }
+    }
+
+    fn msg(h: &mut HubInner, from: &str, to: Option<&str>, text: &str) -> u64 {
+        let to = message_target(h, to.map(|s| s.to_string()));
+        push_event(h, from, "s", "message", text, vec![], to).seq
+    }
+
+    #[test]
+    fn inbox_gets_direct_and_team_messages_but_not_own_or_user() {
+        let mut h = hub();
+        msg(&mut h, "opencode", Some("claude"), "para ti");
+        msg(&mut h, "opencode", None, "para todos");
+        msg(&mut h, "opencode", Some("antigravity"), "para otro");
+        msg(&mut h, "claude", None, "mío");
+        msg(&mut h, "tú", Some("claude"), "del usuario");
+        let texts: Vec<&str> = inbox_unread(&h, "claude").iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, vec!["para ti", "para todos"]);
+    }
+
+    #[test]
+    fn leader_alias_and_ack() {
+        let mut h = hub();
+        let seq = msg(&mut h, "opencode", Some("líder"), "hola líder");
+        assert_eq!(inbox_unread(&h, "claude").len(), 1);
+        inbox_ack(&mut h, "Claude", seq);
+        assert!(inbox_unread(&h, "claude").is_empty());
+    }
+
+    #[test]
+    fn messages_before_start_count_as_read() {
+        let mut h = hub();
+        msg(&mut h, "opencode", Some("claude"), "viejo");
+        h.inbox_floor = h.seq;
+        msg(&mut h, "opencode", Some("claude"), "nuevo");
+        let texts: Vec<&str> = inbox_unread(&h, "claude").iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, vec!["nuevo"]);
+    }
+
+    #[test]
+    fn usage_counts_each_message_once() {
+        let mut h = hub();
+        report_usage(&mut h, "claude", "cc:1", 10, 5, 100, 20);
+        report_usage(&mut h, "claude", "cc:1", 10, 5, 100, 20);
+        report_usage(&mut h, "claude", "cc:2", 1, 1, 1, 1);
+        let u = &h.usage["claude"];
+        assert_eq!((u.input, u.output, u.cache_read, u.cache_write, u.turns), (11, 6, 101, 21, 2));
+    }
+
+    #[test]
+    fn big_context_drop_counts_as_freed() {
+        let mut h = hub();
+        h.agents.insert(
+            "s1".into(),
+            AgentInfo {
+                session_id: "s1".into(),
+                name: "claude".into(),
+                project: String::new(),
+                pid: 0,
+                last_seen_ms: now_ms(),
+                model: None,
+                ctx_tokens: Some(150_000),
+                ctx_window: Some(200_000),
+                ctx_ms: None,
+                cli_session: None,
+            },
+        );
+        report_ctx(&mut h, "s1", "claude", None, Some(20_000), None);
+        report_ctx(&mut h, "s1", "claude", None, Some(25_000), None);
+        let u = &h.usage["claude"];
+        assert_eq!((u.freed, u.compactions), (130_000, 1));
     }
 }

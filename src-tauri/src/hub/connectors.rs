@@ -120,13 +120,54 @@ fn mcp_exe_path() -> Result<String, String> {
 /// the hub's HTTP API (so scripts can connect agents too).
 pub fn connect_agent(agent: &str, project: &Path) -> Result<(Vec<String>, Vec<String>), String> {
     let exe = mcp_exe_path()?;
-    match agent {
+    let (mut files, notes) = match agent {
         "claude" => connect_claude(project, &exe),
         "codex" => connect_codex(project, &exe),
         "opencode" => connect_opencode(project, &exe),
         "antigravity" => connect_antigravity(project, &exe),
         _ => Err(format!("agente desconocido: {agent}")),
+    }?;
+    files.extend(write_skills(project));
+    Ok((files, notes))
+}
+
+/// Skills internas del equipo: cada CLI solo carga su descripción y lee el resto cuando
+/// le hace falta, así que no gastan contexto mientras no se usan.
+const SKILLS: &[(&str, &str)] = &[
+    ("lienzo-equipo", include_str!("../../skills/lienzo-equipo/SKILL.md")),
+    ("lienzo-ahorro", include_str!("../../skills/lienzo-ahorro/SKILL.md")),
+    ("lienzo-relevo", include_str!("../../skills/lienzo-relevo/SKILL.md")),
+    ("lienzo-revision", include_str!("../../skills/lienzo-revision/SKILL.md")),
+];
+
+/// Marca de las skills que gestiona lienzo: sin ella (el usuario la quitó), no se tocan.
+const SKILL_MARK: &str = "lienzo:gestionado";
+
+/// Escribe las skills en `.claude/skills` (Claude Code y OpenCode) y `.agents/skills`
+/// (Antigravity). Devuelve las rutas que cambiaron.
+fn write_skills(project: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for root in [".claude", ".agents"] {
+        for (name, body) in SKILLS {
+            let path = project.join(root).join("skills").join(name).join("SKILL.md");
+            let current = std::fs::read_to_string(&path).ok();
+            let body = body.replace("\r\n", "\n");
+            match &current {
+                Some(text) if text.replace("\r\n", "\n") == body => continue,
+                Some(text) if !text.contains(SKILL_MARK) => continue,
+                _ => {}
+            }
+            if let Some(dir) = path.parent() {
+                if std::fs::create_dir_all(dir).is_err() {
+                    continue;
+                }
+            }
+            if std::fs::write(&path, body).is_ok() {
+                out.push(path.display().to_string());
+            }
+        }
     }
+    out
 }
 
 fn project_of(app: &tauri::AppHandle) -> Option<String> {
@@ -154,22 +195,18 @@ fn write_json_pretty(path: &Path, v: &Value) -> Result<(), String> {
 }
 
 fn team_block() -> String {
+    // Este bloque se carga en cada mensaje: va lo imprescindible. El detalle vive en las
+    // skills `lienzo-*`, que solo se leen cuando hacen falta.
     format!(
         "{BLOCK_START}\n## Protocolo de equipo (lienzo)\n\n\
-Trabajas junto a otros agentes de IA en el mismo proyecto, coordinados por la app lienzo.\n\
-Tus herramientas del equipo llegan por MCP (servidor `lienzo-team`):\n\n\
-- `team_context`: ANTES de empezar, mira compañeros, tareas y archivos reservados.\n\
-- `team_update`: al terminar un paso importante, publica un resumen de 1 línea.\n\
-- `team_claim_files` / `team_release_files`: reserva los archivos antes de editarlos para no pisar a otros; libéralos al acabar.\n\
-- `team_feed` / `team_message`: consulta la actividad y habla con los demás agentes.\n\
-- `team_task_create` / `team_task_list` / `team_task_claim` / `team_task_done`: tareas compartidas. Usa `parents` al crear para ordenar el trabajo: una tarea espera a que sus padres estén hechas. \
-Al cerrar una tarea entrega `summary`, `files` y `evidence`: quien dependa de ella los recibe al reclamarla. `team_task_comment` deja notas en el tablón de la tarea. \
-La memoria del proyecto la cura el líder: propón con `team_memory_propose` lo que todos deban recordar y lee `team_memory_list`.\n\
-Los mensajes de otros agentes solo te llegan cuando llamas a una herramienta del equipo: vuelve a llamar a `team_context` cada vez que termines un archivo o un paso largo, y responde con `team_message`. \
-Si una tarea nombra una carpeta o ruta, usa exactamente esa; si no está claro, pregunta antes de crear archivos.\n\n\
-You work alongside other AI agents on this project, coordinated by lienzo. Use the `lienzo-team` MCP tools \
-(`team_context`, `team_update`, `team_feed`, `team_message`, `team_task_*`, `team_claim_files`, `team_release_files`) \
-to coordinate: check context before starting, claim files before editing, and post updates when you finish a step.\n\
+Trabajas con otros agentes de IA en este proyecto, coordinados por lienzo con las herramientas MCP `team_*` (servidor `lienzo-team`).\n\n\
+- Al empezar: `team_context`. Reserva con `team_claim_files` antes de editar y libera al acabar.\n\
+- Tareas: `team_task_claim` (trae las entregas previas) y `team_task_done` con `summary`, `files` y `evidence`.\n\
+- 📬 Buzón: cuando una herramienta avise de mensajes, léelos con `team_inbox` y contesta con `team_message` (`to`, `reply_to`). `to: \"líder\"` llega al líder.\n\
+- Avances en 1 línea con `team_update`; notas de una tarea con `team_task_comment`.\n\
+- Usa las rutas exactas de la tarea; si no está claro, pregunta antes de crear archivos.\n\n\
+Guías (skills): `lienzo-equipo` (coordinación), `lienzo-ahorro` (gastar menos tokens), `lienzo-relevo` (relevo con memoria), `lienzo-revision` (revisar entregas). \
+Si tu CLI no tiene skills, léelas en `.claude/skills/<nombre>/SKILL.md` cuando las necesites.\n\
 {BLOCK_END}"
     )
 }

@@ -7,18 +7,21 @@ import { testNotify } from "../lib/notify";
 import type { ProjectInfo } from "../lib/project";
 import { DEFAULT_SETTINGS, resetSettings, updateSettings, useSettings } from "../lib/settings";
 import type { LeaderMode } from "../lib/settings";
-import { agentColor, agentInitial, agentLabel, ago, errMsg, shortPath, teamDetails } from "../lib/team";
+import { agentColor, agentInitial, agentLabel, ago, errMsg, shortPath, teamDetails, teamUsageReset } from "../lib/team";
+import { cachePct, sumUsage, totalTokens, usageOf } from "../lib/usage";
+import { fmtTokens } from "./AgentCard";
 import type { DetectResult, ModelCatalog, TeamDetails, TeamState } from "../lib/team";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import { EFFORT_LABEL } from "./TeamModal";
 
-export type SettingsSection = "general" | "agents" | "team" | "dispatch" | "notify" | "hub";
+export type SettingsSection = "general" | "agents" | "team" | "usage" | "dispatch" | "notify" | "hub";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: IconName; hint: string }[] = [
   { id: "general", label: "General", icon: "settings", hint: "Proyecto y arranque" },
   { id: "agents", label: "Agentes", icon: "users", hint: "Conexión y modelos" },
-  { id: "team", label: "Equipo", icon: "shield", hint: "Líder y normas" },
+  { id: "team", label: "Equipo", icon: "shield", hint: "Líder, normas y mensajes" },
+  { id: "usage", label: "Consumo", icon: "pulse", hint: "Tokens y ahorro" },
   { id: "dispatch", label: "Despacho", icon: "zap", hint: "Reparto de tareas" },
   { id: "notify", label: "Avisos", icon: "bell", hint: "Notificaciones" },
   { id: "hub", label: "Conexión", icon: "plug", hint: "Hub y diagnóstico" },
@@ -119,6 +122,7 @@ export function SettingsModal(props: Props) {
             {section === "general" && <General {...props} />}
             {section === "agents" && <Agents {...props} />}
             {section === "team" && <Team {...props} />}
+            {section === "usage" && <Usage {...props} />}
             {section === "dispatch" && <Dispatch {...props} />}
             {section === "notify" && <Notify {...props} />}
             {section === "hub" && <Hub {...props} />}
@@ -550,6 +554,43 @@ function Agents({ state, detect, catalogs, prefs, opening, onPref, onConnect, on
 
 // ---- Equipo --------------------------------------------------------------------------
 
+function Messages({ state }: Pick<Props, "state" | "say">) {
+  const { team } = useSettings();
+  const inbox = Object.entries(state?.inbox ?? {});
+  return (
+    <Group
+      title="Mensajes entre agentes"
+      desc="Lo que un agente le escribe a otro llega a su buzón. Se lo entrego al usar cualquier herramienta del equipo, al acabar su turno (Claude) o, si está libre, escribiéndole en su terminal."
+    >
+      <Row
+        label="Avisar en su terminal si está libre"
+        hint="Le escribo una línea para que lea su buzón. Si lo apagas, lo leerá en cuanto use una herramienta del equipo."
+      >
+        <Switch
+          on={team.relayInbox}
+          onChange={(relayInbox) => updateSettings({ team: { relayInbox } })}
+          label="Avisar en su terminal si está libre"
+        />
+      </Row>
+      {inbox.length === 0 ? (
+        <div className="st-empty-row">Ningún agente tiene mensajes sin leer.</div>
+      ) : (
+        inbox.map(([agent, info]) => (
+          <Row
+            key={agent}
+            label={agentLabel(agent)}
+            hint={`De ${info.from.map(agentLabel).join(", ")}`}
+          >
+            <span className="st-pill" data-tone="warn">
+              {info.unread} sin leer
+            </span>
+          </Row>
+        ))
+      )}
+    </Group>
+  );
+}
+
 function Team({ state, detect, say, onTeamRules }: Props) {
   const saved = state?.charter ?? "";
   const leader = state?.leader ?? "";
@@ -601,6 +642,8 @@ function Team({ state, detect, say, onTeamRules }: Props) {
         </Row>
       </Group>
 
+      <Messages {...{ state, say }} />
+
       <Group
         title="Normas del equipo"
         desc="Instrucciones que reciben todos los agentes al unirse: cómo trabajar juntos, qué comprobar, qué evitar."
@@ -651,6 +694,159 @@ function Team({ state, detect, say, onTeamRules }: Props) {
             relean en su configuración, usa Reconectar en Agentes.
           </div>
         </div>
+      </Group>
+    </>
+  );
+}
+
+// ---- Consumo -------------------------------------------------------------------------
+
+function Usage({ state, detect, say, onConnect }: Props) {
+  const [confirm, setConfirm] = useState(false);
+  const map = state?.usage ?? {};
+  const names = Object.keys(map).sort();
+  const rows = names.map((n) => ({ name: n, u: usageOf(map, n)! }));
+  const all = sumUsage(rows.map((r) => r.u));
+  const pct = cachePct(all);
+  const since = state?.usage_since ? new Date(state.usage_since) : null;
+  const sinceLabel = since
+    ? since.toLocaleDateString("es", { day: "numeric", month: "short" }) +
+      " " +
+      since.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })
+    : "—";
+  const skillsMissing = (detect?.agents ?? []).some((a) => a.connected) ? null : "Conecta un agente para instalarlas.";
+
+  return (
+    <>
+      <div className="st-stats">
+        <div className="st-stat">
+          <span>Tokens procesados</span>
+          <b>{fmtTokens(totalTokens(all))}</b>
+          <small>{all.turns} respuestas</small>
+        </div>
+        <div className="st-stat" data-tone={pct === null ? undefined : pct >= 70 ? "ok" : pct < 40 ? "warn" : undefined}>
+          <span>Entrada desde caché</span>
+          <b>{pct === null ? "—" : `${pct} %`}</b>
+          <small>{fmtTokens(all.cache_read)} a precio reducido</small>
+        </div>
+        <div className="st-stat" data-tone={all.saved_ctx > 0 ? "ok" : undefined}>
+          <span>Ahorro de lienzo</span>
+          <b>~{fmtTokens(all.saved_ctx)}</b>
+          <small>contexto del equipo no repetido</small>
+        </div>
+        <div className="st-stat">
+          <span>Contexto liberado</span>
+          <b>{fmtTokens(all.freed)}</b>
+          <small>
+            {all.compactions} {all.compactions === 1 ? "compactación" : "compactaciones"}
+          </small>
+        </div>
+      </div>
+
+      <Group
+        title="Por agente"
+        desc={`Desde ${sinceLabel}. Claude y OpenCode informan de lo que gastan; Antigravity no.`}
+        aside={
+          <button
+            className="st-link"
+            disabled={names.length === 0}
+            onClick={() => {
+              if (!confirm) {
+                setConfirm(true);
+                window.setTimeout(() => setConfirm(false), 4000);
+                return;
+              }
+              setConfirm(false);
+              teamUsageReset().then(
+                () => say("✓ El consumo empieza a contar desde cero."),
+                (e) => say(errMsg(e), true),
+              );
+            }}
+          >
+            {confirm ? "Pulsa otra vez para borrar" : "Empezar de cero"}
+          </button>
+        }
+      >
+        {rows.length === 0 ? (
+          <div className="st-empty-row">Aún no hay datos: aparecen cuando los agentes terminan su primera respuesta.</div>
+        ) : (
+          <div className="st-table-wrap">
+            <table className="st-table">
+              <thead>
+                <tr>
+                  <th>Agente</th>
+                  <th>Entrada</th>
+                  <th>Salida</th>
+                  <th>Caché</th>
+                  <th title="Contexto del equipo que lienzo no repitió (estimado)">Ahorro</th>
+                  <th title="Contexto liberado al compactar">Liberado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(({ name, u }) => {
+                  const p = cachePct(u);
+                  return (
+                    <tr key={name}>
+                      <td>
+                        <span className="st-tag" style={{ "--ac": agentColor(name) } as CSSProperties}>
+                          {agentLabel(name)}
+                        </span>
+                      </td>
+                      <td>{fmtTokens(u.input + u.cache_write)}</td>
+                      <td>{fmtTokens(u.output)}</td>
+                      <td>
+                        {fmtTokens(u.cache_read)}
+                        {p !== null && <small> · {p} %</small>}
+                      </td>
+                      <td>~{fmtTokens(u.saved_ctx)}</td>
+                      <td>{u.freed > 0 ? `${fmtTokens(u.freed)} (${u.compactions})` : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Group>
+
+      <Group title="Qué hace lienzo para que duren más">
+        <Row
+          label="Contexto del equipo sin repetir"
+          hint="En cada mensaje solo inyecto lo que cambió desde el anterior (tareas, reservas, actividad), no el resumen entero."
+        >
+          <span className="st-pill" data-tone="ok">activo</span>
+        </Row>
+        <Row
+          label="Instrucciones cortas"
+          hint="CLAUDE.md y AGENTS.md llevan solo lo imprescindible; el detalle está en skills que los agentes leen cuando les hace falta."
+        >
+          <span className="st-pill" data-tone="ok">activo</span>
+        </Row>
+        <Row
+          label="Skills del equipo"
+          hint={
+            <>
+              lienzo-equipo, lienzo-ahorro, lienzo-relevo y lienzo-revision, en <code>.claude/skills</code> y{" "}
+              <code>.agents/skills</code> del proyecto. {skillsMissing ?? "Se instalan o actualizan al conectar."}
+            </>
+          }
+        >
+          <button
+            className="cc-btn sec"
+            disabled={!state?.project}
+            onClick={() => {
+              const ids = (detect?.agents ?? []).filter((a) => a.cli_found || a.connected).map((a) => a.id);
+              void Promise.all(ids.map((id) => onConnect(id)));
+            }}
+          >
+            <Icon name="refresh" size={14} />
+            Instalar ahora
+          </button>
+        </Row>
+        <Row
+          label="Relevo antes de llenarse"
+          hint="Hacia el 70 % de contexto, el panel Equipo recomienda un relevo: el agente guarda su memoria en la tarea y se compacta."
+        />
       </Group>
     </>
   );

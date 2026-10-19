@@ -78,6 +78,7 @@ export function AgentQuickCmds({
 
 /** "62k", "9.4k", "820" */
 export function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
   if (n >= 10_000) return `${Math.round(n / 1000)}k`;
   if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
   return `${n}`;

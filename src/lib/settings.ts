@@ -32,6 +32,10 @@ export type Settings = {
     /** Avisar también cuando lienzo está delante. */
     whenFocused: boolean;
   };
+  team: {
+    /** Escribir en la terminal de un agente libre cuando le llega un mensaje de otro. */
+    relayInbox: boolean;
+  };
   /** Agentes que no se abren al iniciar ni reciben tareas del despacho. */
   skipAgents: string[];
   /** Carpetas de proyecto usadas hace poco, la más reciente primero. */
@@ -48,6 +52,7 @@ export const DEFAULT_SETTINGS: Settings = {
     leader: "last",
   },
   notify: { ask: true, done: true, reply: true, lateMin: 3, whenFocused: false },
+  team: { relayInbox: true },
   skipAgents: [],
   recentProjects: [],
 };
@@ -63,6 +68,7 @@ function load(): Settings {
       return {
         dispatch: { ...DEFAULT_SETTINGS.dispatch, ...(p.dispatch ?? {}) },
         notify: { ...DEFAULT_SETTINGS.notify, ...(p.notify ?? {}) },
+        team: { ...DEFAULT_SETTINGS.team, ...(p.team ?? {}) },
         skipAgents: Array.isArray(p.skipAgents) ? p.skipAgents : [],
         recentProjects: Array.isArray(p.recentProjects) ? p.recentProjects : [],
       };
@@ -83,12 +89,14 @@ export function getSettings(): Settings {
 export function updateSettings(patch: {
   dispatch?: Partial<Settings["dispatch"]>;
   notify?: Partial<Settings["notify"]>;
+  team?: Partial<Settings["team"]>;
   skipAgents?: string[];
   recentProjects?: string[];
 }) {
   current = {
     dispatch: { ...current.dispatch, ...(patch.dispatch ?? {}) },
     notify: { ...current.notify, ...(patch.notify ?? {}) },
+    team: { ...current.team, ...(patch.team ?? {}) },
     skipAgents: patch.skipAgents ?? current.skipAgents,
     recentProjects: patch.recentProjects ?? current.recentProjects,
   };
