@@ -830,6 +830,92 @@ pub fn detach_question(inner: &mut HubInner, id: u64) -> Option<String> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// Un proyecto por carpeta: cada uno con sus tareas, memoria, normas, reservas y actividad
+// ---------------------------------------------------------------------------
+
+/// Lo que es de un proyecto y se aparta al cambiar de carpeta (y vuelve al volver).
+#[derive(Serialize, Deserialize, Default, Clone)]
+pub struct ProjectSlot {
+    /// La carpeta tal cual (la clave va en minúsculas).
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub events: Vec<Event>,
+    #[serde(default)]
+    pub tasks: Vec<Task>,
+    #[serde(default)]
+    pub claims: Vec<Claim>,
+    #[serde(default)]
+    pub charter: Option<String>,
+    #[serde(default)]
+    pub memory: Vec<MemoryEntry>,
+    #[serde(default)]
+    pub memory_seq: u64,
+    #[serde(default)]
+    pub questions: Vec<Question>,
+    /// Cuándo se usó por última vez (para listar los proyectos recientes).
+    #[serde(default)]
+    pub last_ms: u64,
+}
+
+/// Clave de una carpeta: sin mayúsculas, con «/» y sin barra final (C:\A\b\ = c:/a/b).
+pub fn project_key(path: &str) -> String {
+    path.trim().replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+/// Cambia la carpeta del equipo. Lo del proyecto actual se guarda en su estante y se trae lo del
+/// nuevo (vacío si es la primera vez). Devuelve si cambió de proyecto.
+pub fn switch_project(inner: &mut HubInner, path: Option<String>) -> bool {
+    let path = path.map(|p| p.trim().trim_end_matches(['\\', '/']).to_string()).filter(|p| !p.is_empty());
+    let cur = inner.project.as_deref().map(project_key).unwrap_or_default();
+    let next = path.as_deref().map(project_key).unwrap_or_default();
+    if cur == next {
+        inner.project = path;
+        return false;
+    }
+    let slot = ProjectSlot {
+        path: inner.project.clone().unwrap_or_default(),
+        events: inner.events.drain(..).collect(),
+        tasks: std::mem::take(&mut inner.tasks),
+        claims: inner.claims.drain().map(|(_, c)| c).collect(),
+        charter: inner.charter.take(),
+        memory: std::mem::take(&mut inner.memory),
+        memory_seq: inner.memory_seq,
+        questions: std::mem::take(&mut inner.questions),
+        last_ms: now_ms(),
+    };
+    inner.projects.insert(cur, slot);
+    let s = inner.projects.remove(&next).unwrap_or_default();
+    inner.events = s.events.into_iter().collect();
+    inner.tasks = s.tasks;
+    inner.claims = s.claims.into_iter().map(|c| (c.path.clone(), c)).collect();
+    inner.charter = s.charter;
+    inner.memory = s.memory;
+    inner.memory_seq = s.memory_seq;
+    inner.questions = s.questions;
+    // Lo de las entregas en curso era del otro proyecto.
+    inner.bases.clear();
+    inner.focus.clear();
+    inner.project = path;
+    true
+}
+
+/// Los otros proyectos (con carpeta), del usado más recientemente al más antiguo.
+pub fn project_list(inner: &HubInner) -> Vec<serde_json::Value> {
+    let mut list: Vec<&ProjectSlot> = inner.projects.values().filter(|s| !s.path.is_empty()).collect();
+    list.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
+    list.iter()
+        .map(|s| {
+            serde_json::json!({
+                "path": s.path,
+                "last_ms": s.last_ms,
+                "open_tasks": s.tasks.iter().filter(|t| t.status != "done").count(),
+            })
+        })
+        .collect()
+}
+
 /// A prompt the user sent to the whole team (delivered to hooks on demand).
 #[derive(Clone)]
 pub struct Broadcast {
@@ -874,6 +960,9 @@ pub struct PersistedState {
     pub questions: Vec<Question>,
     #[serde(default)]
     pub question_seq: u64,
+    /// Lo de los otros proyectos (carpetas), guardado mientras trabajas en este.
+    #[serde(default)]
+    pub projects: HashMap<String, ProjectSlot>,
 }
 
 pub struct HubInner {
@@ -912,6 +1001,8 @@ pub struct HubInner {
     /// Preguntas de los agentes al usuario (team_ask_user).
     pub questions: Vec<Question>,
     pub question_seq: u64,
+    /// Lo de los otros proyectos, por carpeta (ver `switch_project`).
+    pub projects: HashMap<String, ProjectSlot>,
     pub seq: u64,
     pub task_seq: u64,
 }
@@ -999,6 +1090,7 @@ pub fn persist(inner: &HubInner) {
         strengths: inner.strengths.clone(),
         questions: inner.questions.clone(),
         question_seq: inner.question_seq,
+        projects: inner.projects.clone(),
     };
     if let Ok(raw) = serde_json::to_string(&state) {
         let _ = std::fs::write(state_file(), raw);
@@ -1150,6 +1242,7 @@ pub fn snapshot(inner: &HubInner, limit: usize) -> serde_json::Value {
         "fix_limit": fix_limit(inner),
         "strengths": inner.strengths,
         "questions": inner.questions.iter().rev().take(20).collect::<Vec<_>>(),
+        "projects": project_list(inner),
         "now_ms": now,
     })
 }
@@ -1572,7 +1665,7 @@ pub fn team_details(hub: tauri::State<'_, Hub>) -> Result<serde_json::Value, Str
 #[tauri::command]
 pub fn team_project_set(hub: tauri::State<'_, Hub>, path: Option<String>) -> Result<(), String> {
     let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
-    inner.project = path.filter(|p| !p.trim().is_empty());
+    switch_project(&mut inner, path);
     persist(&inner);
     drop(inner);
     notify_ui();
@@ -1917,6 +2010,7 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         strengths: persisted.strengths,
         questions: persisted.questions,
         question_seq: persisted.question_seq,
+        projects: persisted.projects,
         seq: persisted.seq,
         task_seq: persisted.task_seq,
         memory: persisted.memory,
@@ -2037,6 +2131,7 @@ mod inbox_tests {
             strengths: HashMap::new(),
             questions: Vec::new(),
             question_seq: 0,
+            projects: HashMap::new(),
             seq: 0,
             task_seq: 0,
         }
@@ -2287,5 +2382,33 @@ mod inbox_tests {
         assert_eq!(detach_question(&mut h, id2), None);
         let (_, late) = answer_question(&mut h, id2, None).unwrap();
         assert!(late.unwrap().contains("prefirió no contestar"));
+    }
+
+    #[test]
+    fn cada_carpeta_con_lo_suyo() {
+        let mut h = hub();
+        h.project = Some("C:\\Users\\yo\\juego".into());
+        h.tasks.push(Task::new(1, "Hacer el juego".into(), String::new(), vec![]));
+        h.charter = Some("Normas del juego".into());
+        push_event(&mut h, "claude", "s1", "update", "trabajando en el juego", vec![], None);
+
+        // A otra carpeta (con barra final): empieza vacía.
+        assert!(switch_project(&mut h, Some("C:\\Users\\yo\\revisiones\\".into())));
+        assert_eq!(h.project.as_deref(), Some("C:\\Users\\yo\\revisiones"));
+        assert!(h.tasks.is_empty() && h.events.is_empty() && h.charter.is_none());
+        h.tasks.push(Task::new(2, "Revisar".into(), String::new(), vec![]));
+        let list = project_list(&h);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["path"], "C:\\Users\\yo\\juego");
+        assert_eq!(list[0]["open_tasks"], 1);
+
+        // Volver (aunque cambien mayúsculas o barras) trae lo de antes.
+        assert!(switch_project(&mut h, Some("c:/users/yo/JUEGO".into())));
+        assert_eq!(h.tasks[0].title, "Hacer el juego");
+        assert_eq!(h.charter.as_deref(), Some("Normas del juego"));
+        assert_eq!(h.events.len(), 1);
+        assert!(!switch_project(&mut h, Some("C:\\Users\\yo\\juego".into())));
+        assert!(switch_project(&mut h, Some("C:\\Users\\yo\\revisiones".into())));
+        assert_eq!(h.tasks[0].title, "Revisar");
     }
 }

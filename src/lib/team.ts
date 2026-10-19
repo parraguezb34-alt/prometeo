@@ -122,8 +122,12 @@ export type TeamState = {
   strengths?: Record<string, string>;
   /** Preguntas de los agentes al usuario (las últimas, de la más nueva a la más vieja). */
   questions?: TeamQuestion[];
+  /** Los otros proyectos (carpetas) con lo suyo guardado, del más reciente al más antiguo. */
+  projects?: ProjectEntry[];
   now_ms: number;
 };
+
+export type ProjectEntry = { path: string; last_ms: number; open_tasks: number };
 
 export type QOption = { label: string; description: string };
 export type QItem = { question: string; header: string; options: QOption[]; multi: boolean };

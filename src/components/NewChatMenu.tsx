@@ -1,4 +1,6 @@
+import { useState } from "react";
 import type { CSSProperties } from "react";
+import { projectName } from "../lib/project";
 import { agentColor, agentInitial, agentLabel } from "../lib/team";
 import type { TeamAgent } from "../lib/team";
 import { ctxOf } from "./AgentCard";
@@ -7,26 +9,35 @@ import { Icon } from "./Icon";
 export type NewChatChoice =
   | { kind: "team" }
   | { kind: "agent"; name: string }
-  | { kind: "handover" };
+  | { kind: "handover" }
+  /** Chat del equipo en otra carpeta (se elige en el explorador). */
+  | { kind: "folder" }
+  /** Chat del equipo en un proyecto nuevo (carpeta vacía con ese nombre). */
+  | { kind: "newproject"; name: string };
 
 /** Menú de "Nuevo chat": con el equipo, el líder, un agente en privado o desde un relevo. */
 export function NewChatMenu({
   agents,
   leader,
   collapsed,
+  project,
   onPick,
   onClose,
 }: {
   agents: TeamAgent[];
   leader: string;
   collapsed: boolean;
+  project: string | null;
   onPick: (choice: NewChatChoice) => void;
   onClose: () => void;
 }) {
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
   return (
     <>
       <div className="cc-scrim" data-light="1" onClick={onClose} />
       <div className="cc-menu" data-collapsed={collapsed ? "1" : "0"} role="menu" aria-label="Nuevo chat">
+        {project && <div className="cc-menu-sep">En {projectName(project)}</div>}
         <button className="cc-mi" role="menuitem" onClick={() => onPick({ kind: "team" })}>
           <span className="cc-mi-ic">
             <Icon name="users" />
@@ -71,6 +82,47 @@ export function NewChatMenu({
             </button>
           );
         })}
+
+        <div className="cc-menu-sep">En otro sitio</div>
+        <button className="cc-mi" role="menuitem" onClick={() => onPick({ kind: "folder" })}>
+          <span className="cc-mi-ic">
+            <Icon name="folder" />
+          </span>
+          <span>
+            <b>En otra carpeta…</b>
+            <small>Los agentes se reabren allí, con sus tareas y memoria</small>
+          </span>
+        </button>
+        {naming ? (
+          <form
+            className="ps-new"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (name.trim()) onPick({ kind: "newproject", name: name.trim() });
+            }}
+          >
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Nombre del proyecto"
+              onKeyDown={(e) => e.key === "Escape" && setNaming(false)}
+            />
+            <button className="cc-btn" type="submit" disabled={!name.trim()}>
+              Crear
+            </button>
+          </form>
+        ) : (
+          <button className="cc-mi" role="menuitem" onClick={() => setNaming(true)}>
+            <span className="cc-mi-ic">
+              <Icon name="plus" />
+            </span>
+            <span>
+              <b>En un proyecto nuevo…</b>
+              <small>Carpeta vacía junto a la actual</small>
+            </span>
+          </button>
+        )}
 
         <div className="cc-menu-sep">Retomar</div>
         <button className="cc-mi" role="menuitem" onClick={() => onPick({ kind: "handover" })}>

@@ -49,6 +49,8 @@ import type { DAgent, DispatchState } from "../lib/dispatcher";
 import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, savePrefs } from "../lib/agentPrefs";
 import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { parentDir, projectCreateDir, projectKey, projectName } from "../lib/project";
 import { projectAttachPath, projectInfo, projectRecent, projectSaveAttachment, projectSaveImage } from "../lib/project";
 import { dropOwner } from "../lib/dropzone";
 import { detectPrompt } from "../lib/prompts";
@@ -57,7 +59,7 @@ import { readScreen } from "../lib/screens";
 import { attachMeta, attachmentLine, countLines, isLongPaste, PASTED_NAME, textToBase64 } from "../lib/attach";
 import type { Attachment } from "../lib/attach";
 import type { ProjectInfo } from "../lib/project";
-import { chatLineage, currentTeamChat, inChat, useChats } from "../lib/chats";
+import { chatLineage, currentTeamChat, inChat, prepareChat, useChats } from "../lib/chats";
 import { LATEST, resetCommand, withResume } from "../lib/resume";
 import { useTermActivity } from "../lib/activity";
 import { askPhrase, eventImages, isDispatch, isImagePath, isNotice, parseTask, samePath } from "../lib/timeline";
@@ -575,6 +577,16 @@ export function CommandCenter() {
   /** Crea el chat elegido en el menú «Nuevo chat». */
   const startChat = (choice: NewChatChoice) => {
     setOverlay(null);
+    if (choice.kind === "folder") {
+      void pickFolder().then((p) => {
+        if (p) void switchProject(p, { newChat: true });
+      });
+      return;
+    }
+    if (choice.kind === "newproject") {
+      void createProject(choice.name);
+      return;
+    }
     if (choice.kind === "agent") {
       chats.create("agent", choice.name);
       focusAgent(choice.name);
@@ -1415,6 +1427,118 @@ export function CommandCenter() {
     }
   };
 
+  // ---- proyectos: una carpeta por proyecto, cada uno con sus chats, tareas, memoria y normas --
+
+  const [switching, setSwitching] = useState(false);
+  const recentProjects = useSettings().recentProjects;
+  /** Los otros proyectos: los que el hub tiene guardados y los usados hace poco, sin repetir. */
+  const otherProjects = useMemo(() => {
+    const out: { path: string; openTasks?: number }[] = [];
+    const seen = new Set(project ? [projectKey(project)] : []);
+    for (const p of state?.projects ?? []) {
+      if (seen.has(projectKey(p.path))) continue;
+      seen.add(projectKey(p.path));
+      out.push({ path: p.path, openTasks: p.open_tasks });
+    }
+    for (const path of recentProjects) {
+      if (seen.has(projectKey(path))) continue;
+      seen.add(projectKey(path));
+      out.push({ path });
+    }
+    return out;
+  }, [state?.projects, recentProjects, project]);
+
+  /**
+   * Cambia el equipo a otra carpeta. El hub aparta lo del proyecto actual y trae lo del nuevo;
+   * los agentes abiertos se conectan allí (sus guías, MCP y skills) y se reabren en esa carpeta,
+   * retomando la conversación que tenían en el chat que se abre (o empezando de cero si es nuevo).
+   */
+  const switchProject = async (path: string, opts: { chatId?: string; newChat?: boolean } = {}) => {
+    const target = path.trim();
+    if (!target || switching) return;
+    if (project && projectKey(project) === projectKey(target)) {
+      if (opts.chatId) chats.select(opts.chatId);
+      else if (opts.newChat) startChat({ kind: "team" });
+      return;
+    }
+    setSwitching(true);
+    setOverlay(null);
+    const name = projectName(target);
+    say(`📁 Cambiando a «${name}»…`);
+    try {
+      const chat = prepareChat(target, { chatId: opts.chatId, newTeam: opts.newChat });
+      const sessions = chat?.sessions ?? {};
+      const running = getLayout()
+        .panels.filter((p) => p.kind === "terminal" && !!p.cmd)
+        .map((p) => ({ panel: p, name: agentKeyFromCmd(p.cmd ?? "") }));
+      // Fuera de la carpeta vieja: se cierran sus terminales.
+      for (const { panel } of running) {
+        if (panel.sessionId) await termKill(panel.sessionId).catch(() => {});
+        removePanel(panel.id);
+      }
+      await teamProjectSet(target);
+      rememberProject(target);
+      let reopened = 0;
+      for (const { panel, name: agent } of running) {
+        try {
+          await teamConnect(agent, target);
+          const pref = prefs[agent] ?? {};
+          const mode: Shoot = /(?:--mode|--permission-mode)[ =]plan/.test(panel.cmd ?? "") ? "plan" : "exec";
+          const r = await teamOpen(agent, mode, { model: pref.model, effort: pref.effort });
+          if (r.kind === "pty") {
+            addAgentTerminal(agentLabel(agent), withResume(r.cmd, sessions[agent]));
+            reopened++;
+          }
+        } catch (e) {
+          say(`${agentLabel(agent)}: ${errMsg(e)}`, true);
+        }
+      }
+      setSel({ kind: "team" });
+      setDest({ kind: "team" });
+      setView("feed");
+      refresh();
+      refreshDetect();
+      say(
+        reopened > 0
+          ? `📁 Ahora en «${name}»: ${reopened === 1 ? "1 agente reabierto" : `${reopened} agentes reabiertos`} en esa carpeta.`
+          : `📁 Ahora en «${name}». Abre a los agentes cuando quieras: arrancarán en esa carpeta.`,
+      );
+    } catch (e) {
+      say(errMsg(e), true);
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  /** Elige una carpeta en el explorador de Windows. */
+  const pickFolder = async (): Promise<string | null> => {
+    try {
+      const r = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Elige la carpeta del proyecto",
+        defaultPath: project ? parentDir(project) : undefined,
+      });
+      return typeof r === "string" ? r : null;
+    } catch (e) {
+      say(errMsg(e), true);
+      return null;
+    }
+  };
+
+  /** Crea un proyecto nuevo (carpeta vacía junto a la actual) y se cambia a él con un chat nuevo. */
+  const createProject = async (name: string) => {
+    let parent = project ? parentDir(project) : null;
+    if (!parent) parent = await pickFolder();
+    if (!parent) return;
+    try {
+      const path = await projectCreateDir(parent, name);
+      await switchProject(path, { newChat: true });
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
   /** (Re)escribe la configuración de un agente en la carpeta del proyecto. */
   const connectAgent = async (id: string) => {
     try {
@@ -2189,6 +2313,16 @@ export function CommandCenter() {
           onNew={() => setOverlay("newchat")}
           onSelect={activateChat}
           onRemove={(c) => chats.remove(c.id)}
+          project={project}
+          otherProjects={otherProjects}
+          switching={switching}
+          onSwitchProject={(p, chatId) => void switchProject(p, { chatId })}
+          onOpenFolder={() =>
+            void pickFolder().then((p) => {
+              if (p) void switchProject(p);
+            })
+          }
+          onCreateProject={(n) => void createProject(n)}
         />
 
         <section className="cc-conv">
@@ -2356,6 +2490,7 @@ export function CommandCenter() {
           agents={agents}
           leader={leader}
           collapsed={chatsMin}
+          project={project}
           onPick={startChat}
           onClose={() => setOverlay(null)}
         />
@@ -2530,7 +2665,7 @@ export function CommandCenter() {
           onDispatch={toggleDispatch}
           onDispatchClear={clearDispatch}
           onNotify={setNotify}
-          onProject={saveProject}
+          onProject={(p) => (p ? switchProject(p) : saveProject(null))}
           onConnect={connectAgent}
           onOpenAgent={(id) => {
             void launchAgent(id, agentLabel(id), { selectTerm: false });

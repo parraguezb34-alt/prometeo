@@ -60,6 +60,27 @@ export type Attached = { path: string; name: string; size: number; dir: boolean 
 export const projectAttachPath = (path: string, src: string) =>
   invoke<Attached>("project_attach_path", { path, src });
 
+/** Crea la carpeta de un proyecto nuevo dentro de `parent`; devuelve su ruta. */
+export const projectCreateDir = (parent: string, name: string) =>
+  invoke<string>("project_create_dir", { parent, name });
+
+/** Clave de una carpeta (sin mayúsculas, con «/», sin barra final), como en el hub. */
+export function projectKey(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/** «C:\Users\yo\juego» → «juego». */
+export function projectName(path: string): string {
+  return path.trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
+}
+
+/** Carpeta que contiene a otra («C:\Users\yo\juego» → «C:\Users\yo»). */
+export function parentDir(path: string): string {
+  const p = path.trim().replace(/[\\/]+$/, "");
+  const i = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
+  return i > 0 ? p.slice(0, i) : p;
+}
+
 /** Diff y estado limitados a las rutas de una tarea. */
 export const projectDiffPaths = (path: string, paths: string[]) =>
   invoke<TaskDiff>("project_diff_paths", { path, paths });

@@ -2,7 +2,10 @@ import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { agentColor, agentInitial } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
-import { chatEvents, dayGroup, stampLabel } from "../lib/chats";
+import { chatEvents, dayGroup, loadChats, stampLabel } from "../lib/chats";
+import { projectName } from "../lib/project";
+import { ProjectSwitcher } from "./ProjectSwitcher";
+import type { ProjectItem } from "./ProjectSwitcher";
 import type { Chat } from "../lib/chats";
 import { Icon } from "./Icon";
 
@@ -30,6 +33,12 @@ export function ChatsSidebar({
   onNew,
   onSelect,
   onRemove,
+  project,
+  otherProjects,
+  switching,
+  onSwitchProject,
+  onOpenFolder,
+  onCreateProject,
 }: {
   chats: Chat[];
   activeId: string;
@@ -40,8 +49,16 @@ export function ChatsSidebar({
   onNew: () => void;
   onSelect: (chat: Chat) => void;
   onRemove: (chat: Chat) => void;
+  project: string | null;
+  otherProjects: ProjectItem[];
+  switching: boolean;
+  /** Cambia de proyecto (y, si se da, abre ese chat suyo). */
+  onSwitchProject: (path: string, chatId?: string) => void;
+  onOpenFolder: () => void;
+  onCreateProject: (name: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [openProj, setOpenProj] = useState<string | null>(null);
 
   const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -97,7 +114,14 @@ export function ChatsSidebar({
   return (
     <aside className="cc-chats" aria-label="Chats">
       <div className="cc-chats-head">
-        <span>Chats</span>
+        <ProjectSwitcher
+          project={project}
+          others={otherProjects}
+          busy={switching}
+          onSwitch={(p) => onSwitchProject(p)}
+          onOpenFolder={onOpenFolder}
+          onCreate={onCreateProject}
+        />
         <button className="cc-icon-btn" onClick={onToggle} title="Plegar chats" aria-label="Plegar chats">
           <Icon name="panel" />
         </button>
@@ -163,6 +187,54 @@ export function ChatsSidebar({
             })}
           </div>
         ))}
+        {otherProjects.length > 0 && !query.trim() && (
+          <div className="cc-otherproj">
+            <div className="cc-chats-grp">Otros proyectos</div>
+            {otherProjects.slice(0, 8).map((p) => {
+              const isOpen = openProj === p.path;
+              const list = isOpen
+                ? loadChats(p.path)
+                    .slice()
+                    .sort((a, b) => b.createdMs - a.createdMs)
+                    .slice(0, 6)
+                : [];
+              return (
+                <div key={p.path} className="cc-proj" data-open={isOpen ? "1" : "0"}>
+                  <button
+                    className="cc-proj-head"
+                    onClick={() => setOpenProj(isOpen ? null : p.path)}
+                    aria-expanded={isOpen}
+                    title={p.path}
+                  >
+                    <Icon name="folder" size={14} />
+                    <span>{projectName(p.path)}</span>
+                    {!!p.openTasks && <small>{p.openTasks}</small>}
+                    <Icon name="chev" size={12} />
+                  </button>
+                  {isOpen && (
+                    <div className="cc-proj-chats">
+                      {list.map((c) => (
+                        <button
+                          key={c.id}
+                          className="cc-proj-chat"
+                          disabled={switching}
+                          onClick={() => onSwitchProject(p.path, c.id)}
+                          title={`Abrir este chat (cambia al proyecto ${projectName(p.path)})`}
+                        >
+                          <span>{c.title}</span>
+                          <time>{stampLabel(c.createdMs)}</time>
+                        </button>
+                      ))}
+                      <button className="cc-proj-go" disabled={switching} onClick={() => onSwitchProject(p.path)}>
+                        Ir a este proyecto
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </aside>
   );

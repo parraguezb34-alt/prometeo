@@ -14,6 +14,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(pty::PtyManager::default())
         .setup(|app| {
             if let Err(e) = hub::init(app.handle().clone()) {
@@ -64,6 +65,7 @@ pub fn run() {
             project::project_save_image,
             project::project_save_attachment,
             project::project_attach_path,
+            project::project_create_dir,
             skills::skills_list,
             skills::skills_set,
             skills::skills_remove,

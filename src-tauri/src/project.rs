@@ -653,6 +653,32 @@ pub async fn project_attach_path(path: String, src: String) -> Result<Attached, 
     Ok(Attached { path: shown(&file), name, size: meta.len(), dir: false })
 }
 
+/// Crea la carpeta de un proyecto nuevo dentro de `parent` y devuelve su ruta. Si ya existe,
+/// la devuelve tal cual (no borra nada).
+#[tauri::command]
+pub async fn project_create_dir(parent: String, name: String) -> Result<String, String> {
+    let parent = PathBuf::from(parent.trim());
+    if !parent.is_dir() {
+        return Err("la carpeta donde crearlo no existe".into());
+    }
+    let clean: String = name
+        .trim()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || " -_.()".contains(*c))
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .chars()
+        .take(80)
+        .collect();
+    if clean.is_empty() {
+        return Err("ponle un nombre (letras, números, espacios o guiones)".into());
+    }
+    let dir = parent.join(&clean);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(shown(&dir))
+}
+
 #[cfg(test)]
 mod attach_tests {
     use super::*;

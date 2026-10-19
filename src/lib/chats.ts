@@ -114,6 +114,40 @@ export function chatEvents(chat: Chat, events: TeamEvent[]): TeamEvent[] {
   });
 }
 
+/** Los chats guardados de un proyecto (aunque no sea el abierto). */
+export function loadChats(project: string | null): Chat[] {
+  return load(project);
+}
+
+/** Chat que se abrirá al entrar en un proyecto (lo consume `useChats` al cargarlo). */
+const pendingActive = new Map<string, string>();
+
+/**
+ * Antes de cambiar de proyecto: deja preparado el chat que se abrirá allí. Con `newTeam` crea
+ * uno nuevo del equipo (y cierra el que hubiera abierto); con `chatId`, abre ese.
+ * Devuelve el chat (para saber con qué conversación retomar a cada agente).
+ */
+export function prepareChat(project: string, opts: { chatId?: string; newTeam?: boolean }): Chat | null {
+  const list = load(project);
+  if (opts.newTeam) {
+    const now = Date.now();
+    const chat: Chat = {
+      id: newId(now),
+      kind: "team",
+      title: DEFAULT_TITLE,
+      autoTitle: true,
+      startMs: now,
+      createdMs: now,
+    };
+    save(project, [chat, ...list.map((c) => (c.kind === "team" && c.endMs == null ? { ...c, endMs: now } : c))]);
+    pendingActive.set(storageKey(project), chat.id);
+    return chat;
+  }
+  const chat = opts.chatId ? list.find((c) => c.id === opts.chatId) : currentTeamChat(list);
+  if (chat) pendingActive.set(storageKey(project), chat.id);
+  return chat ?? null;
+}
+
 export function useChats(project: string | null) {
   const [chats, setChats] = useState<Chat[]>(() => load(project));
   const [activeId, setActiveId] = useState<string>(() => chats[0]?.id ?? "");
@@ -129,7 +163,9 @@ export function useChats(project: string | null) {
     const next = load(project);
     ref.current = next;
     setChats(next);
-    setActiveId(next[0]?.id ?? "");
+    const want = pendingActive.get(storageKey(project));
+    pendingActive.delete(storageKey(project));
+    setActiveId(want && next.some((c) => c.id === want) ? want : (next[0]?.id ?? ""));
   }, [project]);
 
   const update = useCallback((fn: (prev: Chat[]) => Chat[]) => {
