@@ -480,7 +480,7 @@ function Agents({ state, detect, catalogs, prefs, opening, onPref, onConnect, on
                         }}
                       >
                         <option value="">
-                          {cat == null ? "Cargando…" : cat.current.model ? `Predeterminado · ${cat.current.model}` : "Predeterminado"}
+                          {cat === null ? "Cargando…" : cat?.current.model ? `Predeterminado · ${cat.current.model}` : "Predeterminado"}
                         </option>
                         {cat?.models.map((m) => (
                           <option key={m.id} value={m.id}>
@@ -738,7 +738,7 @@ function Usage({ state, detect, say, onConnect }: Props) {
           <span>Contexto liberado</span>
           <b>{fmtTokens(all.freed)}</b>
           <small>
-            {all.compactions} {all.compactions === 1 ? "compactación" : "compactaciones"}
+            {all.compactions === 1 ? "1 vez" : `${all.compactions} veces`}, al compactar o empezar de nuevo
           </small>
         </div>
       </div>
@@ -779,7 +779,7 @@ function Usage({ state, detect, say, onConnect }: Props) {
                   <th>Salida</th>
                   <th>Caché</th>
                   <th title="Contexto del equipo que lienzo no repitió (estimado)">Ahorro</th>
-                  <th title="Contexto liberado al compactar">Liberado</th>
+                  <th title="Contexto liberado al compactar o empezar una conversación nueva">Liberado</th>
                 </tr>
               </thead>
               <tbody>

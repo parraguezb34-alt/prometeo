@@ -378,7 +378,7 @@ fn connect_opencode(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<Strin
     let mut files = vec![];
     let notes = vec![
         "OpenCode v2: el servidor queda bajo mcp.servers.".to_string(),
-        "Reinicia la sesión de OpenCode para que lo cargue.".to_string(),
+        "Recargo su puente en el servicio de OpenCode para que use la versión nueva.".to_string(),
     ];
 
     let cfg_path = project.join("opencode.json");
@@ -417,7 +417,40 @@ fn connect_opencode(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<Strin
     let p = project.join("AGENTS.md");
     write_managed_block(&p, &team_block())?;
     files.push(p.display().to_string());
+
+    // El servicio de OpenCode mantiene vivo el puente aunque cierres su terminal: sin esto
+    // seguiría con el binario viejo (sin las herramientas nuevas) hasta reiniciar el servicio.
+    let dir = project.display().to_string();
+    std::thread::spawn(move || reload_opencode_mcp(&dir));
     Ok((files, notes))
+}
+
+/// Desconecta y vuelve a conectar `lienzo-team` en el servicio de OpenCode de esa carpeta.
+fn reload_opencode_mcp(dir: &str) {
+    let Some(cli) = opencode_cli() else { return };
+    let header = format!("x-opencode-directory:{dir}");
+    for op in ["disconnect", "connect"] {
+        let mut cmd = Command::new(&cli);
+        cmd.args(["api", "POST", &format!("/api/experimental/mcp/lienzo-team/{op}"), "-H", &header])
+            .current_dir(dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let Ok(mut child) = cmd.spawn() else { return };
+        let mut waited = 0;
+        while waited < 15_000 {
+            if let Ok(Some(_)) = child.try_wait() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            waited += 200;
+        }
+        let _ = child.kill();
+    }
 }
 
 fn connect_antigravity(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>), String> {

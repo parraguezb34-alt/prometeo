@@ -855,56 +855,6 @@ export function CommandCenter() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chats.current, chats.setSession, project]);
 
-  // Mensajes entre agentes: el hub solo se los entrega a quien llama a una herramienta del equipo,
-  // y un agente parado en su prompt no llama a ninguna. Si pasa un rato y el destinatario sigue
-  // libre sin haber dado señales, se le escribe el aviso en su terminal (una sola vez por mensaje).
-  const nudgedRef = useRef<Set<number>>(new Set());
-  const lastNudgeRef = useRef(0);
-  useEffect(() => {
-    const run = async () => {
-      const cur = latestRef.current;
-      const now = Date.now();
-      if (!cur || now - lastNudgeRef.current < 8000) return;
-      const pending = cur.events
-        .filter(
-          (e) =>
-            e.kind === "message" &&
-            !!e.to &&
-            e.to !== "tú" &&
-            e.agent !== "tú" &&
-            e.agent !== e.to &&
-            now - e.ts_ms > 25_000 &&
-            now - e.ts_ms < 20 * 60_000 &&
-            !nudgedRef.current.has(e.seq),
-        )
-        .sort((a, b) => a.seq - b.seq);
-      for (const e of pending) {
-        const to = e.to as string;
-        // Ya dio señales de vida después del mensaje: lo habrá recibido por sus herramientas.
-        if ((cur.lastByAgent.get(to)?.ts_ms ?? 0) > e.ts_ms) {
-          nudgedRef.current.add(e.seq);
-          continue;
-        }
-        const sid = panelForAgent(cur.panels, to)?.sessionId;
-        if (!sid || cur.states.get(to) !== "idle") continue;
-        nudgedRef.current.add(e.seq);
-        lastNudgeRef.current = now;
-        const text = e.text.replace(/\s+/g, " ").slice(0, 300);
-        try {
-          await termWrite(
-            sid,
-            `✉️ Mensaje de ${agentLabel(e.agent)} para ti: «${text}». Respóndele con team_message (y mira team_context).\r`,
-          );
-        } catch {
-          /* terminal cerrada: el mensaje sigue en el hub */
-        }
-        break;
-      }
-    };
-    const id = window.setInterval(() => void run(), 5000);
-    return () => window.clearInterval(id);
-  }, []);
-
   // Con el modal abierto, se lee el final de la terminal de los agentes que aún no se unen al
   // equipo: casi siempre esperan que confirmes algo (confiar en la carpeta, aprobar el MCP…).
   const startingKey = roster
@@ -1507,7 +1457,8 @@ export function CommandCenter() {
         const n = info.unread === 1 ? "1 mensaje" : `${info.unread} mensajes`;
         void termWrite(
           panel.sessionId,
-          `📬 Tienes ${n} de ${from} en tu buzón: léelos con team_inbox y responde solo si hace falta.`,
+          `📬 Tienes ${n} de ${from} en tu buzón: léelos con team_inbox y responde solo si hace falta.
+`,
         ).catch(() => {});
       }
     }, 5000);
