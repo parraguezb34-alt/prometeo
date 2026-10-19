@@ -26,6 +26,13 @@ Cada token que entra en tu contexto se vuelve a pagar en todos los mensajes sigu
 - Hacia el 70 % de contexto, guarda tu relevo (skill `lienzo-relevo`) y deja que lienzo compacte. Mejor un relevo a tiempo que perder el hilo al 95 %.
 - Al acabar una tarea y antes de empezar otra que no tiene que ver, también es buen momento para el relevo.
 
+## Skills que ayudan
+- `investigate-first`: ante un fallo de causa dudosa, reúne pruebas antes de tocar código.
+- `surgical-patch`: arregla en la capa más estrecha, sin limpiezas ni renombres de paso.
+- `lean-build`: construye lo justo para cumplir la tarea, sin opciones ni extras que nadie pidió.
+- `verify-and-stop`: comprueba lo mínimo que demuestra que está hecho y para.
+- `caveman`: respuestas telegráficas, en el idioma del usuario, cuando pida brevedad o menos tokens.
+
 ## Equipo
 - Reparte lo independiente: dos agentes con contextos pequeños gastan menos que uno con todo.
 - No contestes mensajes que no lo necesitan (agradecimientos, «ok»).

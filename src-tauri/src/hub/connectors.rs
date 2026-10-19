@@ -138,6 +138,12 @@ const SKILLS: &[(&str, &str)] = &[
     ("lienzo-ahorro", include_str!("../../skills/lienzo-ahorro/SKILL.md")),
     ("lienzo-relevo", include_str!("../../skills/lienzo-relevo/SKILL.md")),
     ("lienzo-revision", include_str!("../../skills/lienzo-revision/SKILL.md")),
+    // De la comunidad (JuliusBrussee/caveman, Apache-2.0; ver skills/THIRD_PARTY.md).
+    ("caveman", include_str!("../../skills/caveman/SKILL.md")),
+    ("investigate-first", include_str!("../../skills/investigate-first/SKILL.md")),
+    ("surgical-patch", include_str!("../../skills/surgical-patch/SKILL.md")),
+    ("verify-and-stop", include_str!("../../skills/verify-and-stop/SKILL.md")),
+    ("lean-build", include_str!("../../skills/lean-build/SKILL.md")),
 ];
 
 /// Marca de las skills que gestiona lienzo: sin ella (el usuario la quitó), no se tocan.
