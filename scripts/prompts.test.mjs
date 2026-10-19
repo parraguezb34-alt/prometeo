@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { detectPrompt } from "./lib/prompts.js";
+import { detectPrompt, detectTrust } from "./lib/prompts.js";
 
 let n = 0;
 function test(name, fn) {
@@ -91,6 +91,70 @@ test("(y/n)", () => {
   const p = detectPrompt(["Se borrará la carpeta dist", "¿Continuar? (y/n)"]);
   assert.equal(p.title, "¿Continuar?");
   assert.deepEqual(p.options.map((o) => o.keys), ["y\r", "n\r"]);
+});
+
+const UP = "\x1b[A";
+const P3D = "C:\\Users\\parra\\OneDrive\\Escritorio\\pagian3daa";
+
+test("Confianza de carpeta: Claude Code (No marcado arriba → bajar y Enter)", () => {
+  const screen = [
+    "Accessing workspace:",
+    "",
+    "C:\\Users\\parra\\OneDrive\\Escritorio\\pagian3daa",
+    "",
+    "Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known",
+    "open source project, or work from your team). If not, take a moment to review what's in this folder first.",
+    "",
+    "Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    "Security guide",
+    "",
+    "❯ No, exit",
+    "  Yes, I trust this folder",
+    "",
+    "Enter to confirm · Esc to cancel",
+  ];
+  assert.equal(detectTrust(screen, P3D), DOWN + "\r");
+  assert.equal(detectTrust(screen, P3D + "\\"), DOWN + "\r");
+  // Otra carpeta: no se acepta sola.
+  assert.equal(detectTrust(screen, "C:\\Users\\parra\\OneDrive\\Escritorio"+"\\otra"), null);
+  assert.equal(detectTrust(screen, null), null);
+});
+
+test("Confianza de carpeta: Antigravity (Sí ya marcado → Enter)", () => {
+  const screen = [
+    "Accessing workspace:",
+    "",
+    "C:\\Users\\parra\\OneDrive\\Escritorio\\pagian3daa",
+    "",
+    "Do you trust the contents of this project?",
+    "",
+    "Antigravity CLI requires permission to read, edit, and execute files here.",
+    "",
+    "> Yes, I trust this folder",
+    "  No, exit",
+    "",
+    "↑/↓ Navigate · enter Confirm",
+    "                                   Gemini 3.8 Flash · high",
+  ];
+  assert.equal(detectTrust(screen, P3D), "\r");
+});
+
+test("Confianza de carpeta: menú numerado y ruta partida en dos líneas", () => {
+  const screen = [
+    "Do you trust the files in this folder?",
+    "C:\\Users\\parra\\OneDrive\\Escritorio\\pagi",
+    "an3daa",
+    "  1. No, exit",
+    "❯ 2. Yes, proceed",
+  ];
+  assert.equal(detectTrust(screen, P3D), UP.repeat(0) + "\r");
+  assert.equal(detectTrust(["Do you trust this folder?", P3D, "❯ 1. Yes", "  2. No"], P3D), "\r");
+  assert.equal(detectTrust(["Do you trust this folder?", P3D, "  1. Yes", "❯ 2. No"], P3D), UP + "\r");
+});
+
+test("Confianza: un permiso normal no se toma por la pregunta de confianza", () => {
+  assert.equal(detectTrust(["Do you want to proceed?", P3D, "❯ 1. Yes", "  2. No"], P3D), null);
 });
 
 console.log(`${n} pruebas de preguntas de terminal OK`);

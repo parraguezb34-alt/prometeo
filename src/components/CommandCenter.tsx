@@ -53,7 +53,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { parentDir, projectCreateDir, projectKey, projectName } from "../lib/project";
 import { projectAttachPath, projectInfo, projectRecent, projectSaveAttachment, projectSaveImage } from "../lib/project";
 import { dropOwner } from "../lib/dropzone";
-import { detectPrompt } from "../lib/prompts";
+import { detectPrompt, detectTrust } from "../lib/prompts";
 import type { TermPrompt } from "../lib/prompts";
 import { readScreen } from "../lib/screens";
 import { attachMeta, attachmentLine, countLines, isLongPaste, PASTED_NAME, textToBase64 } from "../lib/attach";
@@ -1638,12 +1638,27 @@ export function CommandCenter() {
   // Preguntas en la pantalla de cada agente (permisos, confirmaciones): se contestan desde el chat.
   const [termPrompts, setTermPrompts] = useState<Record<string, TermPrompt>>({});
   const promptKeyRef = useRef("");
+  // «¿Confías en esta carpeta?» al abrir un agente en el proyecto: la carpeta ya la elegiste tú,
+  // así que se contesta sola (una vez por terminal y pantalla).
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const trustedRef = useRef(new Map<string, number>());
   useEffect(() => {
     const scan = () => {
       const next: Record<string, TermPrompt> = {};
       for (const p of getLayout().panels) {
         if (p.kind !== "terminal" || !p.cmd || !p.sessionId) continue;
-        const found = detectPrompt(readScreen(p.sessionId));
+        const screen = readScreen(p.sessionId);
+        const trust = detectTrust(screen, projectRef.current);
+        if (trust) {
+          const at = trustedRef.current.get(p.sessionId) ?? 0;
+          if (Date.now() - at > 4000) {
+            trustedRef.current.set(p.sessionId, Date.now());
+            void termWrite(p.sessionId, trust).catch(() => {});
+          }
+          continue;
+        }
+        const found = detectPrompt(screen);
         if (found) next[agentKeyFromCmd(p.cmd)] = found;
       }
       const key = Object.entries(next)

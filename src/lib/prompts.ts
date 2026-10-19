@@ -126,6 +126,37 @@ function yesNo(lines: string[]): TermPrompt | null {
   };
 }
 
+const MENU = /^\s*([❯›▸>●])?\s*(?:\d{1,2}[.)]\s+)?(.+?)\s*$/;
+const flat = (s: string) => s.toLowerCase().replace(/\\/g, "/").replace(/\s+/g, "");
+
+/**
+ * «¿Confías en esta carpeta?» que Claude Code y Antigravity preguntan la primera vez que abren
+ * una carpeta. Si la carpeta que nombra es `project` (la que elegiste en lienzo), devuelve las
+ * teclas que eligen «Sí, confío»; si no, null y la pregunta se queda para ti.
+ */
+export function detectTrust(lines: string[] | null, project: string | null): string | null {
+  if (!lines || !project) return null;
+  const rows = lines.map(clean).filter(Boolean);
+  const text = rows.join(" ").toLowerCase();
+  if (!/trust (this folder|the contents|the files)|one you trust|trust this (project|workspace)/.test(text)) return null;
+  // La ruta puede venir partida en varias líneas: se compara sin espacios.
+  const want = flat(project).replace(/\/+$/, "");
+  if (!flat(rows.join("")).includes(want)) return null;
+  // Las opciones: la marcada (❯ / > …) y la que dice que sí.
+  const tail = rows.slice(-10);
+  const opts: { label: string; marked: boolean }[] = [];
+  tail.forEach((r) => {
+    if (!/^\s*([❯›▸>●]\s*)?(\d{1,2}[.)]\s+)?(yes|no)\b/i.test(r)) return;
+    const m = MENU.exec(r)!;
+    opts.push({ label: m[2], marked: !!m[1] });
+  });
+  const cur = opts.findIndex((o) => o.marked);
+  const yes = opts.findIndex((o) => /^yes\b/i.test(o.label) && !/\bno\b|exit/i.test(o.label));
+  if (opts.length < 2 || cur < 0 || yes < 0) return null;
+  const d = yes - cur;
+  return (d > 0 ? DOWN.repeat(d) : UP.repeat(-d)) + "\r";
+}
+
 /** La pregunta que espera respuesta en la pantalla de un agente, si la hay. */
 export function detectPrompt(lines: string[] | null): TermPrompt | null {
   if (!lines || lines.length === 0) return null;
