@@ -587,6 +587,7 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
             }
             "review" => {
                 let verdict = payload["verdict"].as_str().unwrap_or("");
+                hub::set_focus(inner, &agent, id);
                 let msg = hub::review_task(inner, id, &agent, &sid, verdict, payload["notes"].as_str().unwrap_or(""))?;
                 hub::persist(inner);
                 Ok(json!({ "ok": msg }))
@@ -678,6 +679,9 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                             task.fix_rounds = 0;
                         }
                     }
+                }
+                if op != "reopen" {
+                    hub::set_focus(inner, &agent, id);
                 }
                 let task = inner.tasks[pos].clone();
                 let (text, ev_files) = if op == "done" {

@@ -753,6 +753,65 @@ function Team({ state, detect, say, onTeamRules }: Props) {
 
 // ---- Consumo -------------------------------------------------------------------------
 
+const STATUS_LABEL: Record<string, string> = { open: "por hacer", claimed: "en curso", review: "en revisión", done: "hecha" };
+
+/** Cuánto costó cada tarea y a quién: así se ve si delegar compensa. */
+function TaskCosts({ state }: Pick<Props, "state">) {
+  const rows = (state?.tasks ?? [])
+    .filter((t) => t.cost && Object.keys(t.cost).length > 0)
+    .sort((a, b) => b.id - a.id)
+    .slice(0, 12)
+    .map((t) => {
+      const per = Object.keys(t.cost ?? {}).map((n) => ({ name: n, u: usageOf(t.cost ?? {}, n)! }));
+      return { t, per, all: sumUsage(per.map((p) => p.u)) };
+    });
+  return (
+    <Group
+      title="Por tarea"
+      desc="Lo que gastó cada agente mientras hacía o revisaba la tarea. Cada modelo cuesta distinto: los tokens de un modelo gratuito o local no gastan tu plan."
+    >
+      {rows.length === 0 ? (
+        <div className="st-empty-row">Aún no hay tareas con gasto: se apunta desde que un agente reclama, entrega o revisa una.</div>
+      ) : (
+        <div className="st-table-wrap">
+          <table className="st-table">
+            <thead>
+              <tr>
+                <th>Tarea</th>
+                <th>Quién</th>
+                <th>Total</th>
+                <th title="Rondas de corrección en modo director">Rondas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ t, per, all }) => (
+                <tr key={t.id}>
+                  <td title={t.title}>
+                    #{t.id} {t.title.length > 34 ? `${t.title.slice(0, 33)}…` : t.title}
+                    <small> · {STATUS_LABEL[t.status] ?? t.status}</small>
+                  </td>
+                  <td>
+                    {per.map(({ name, u }) => (
+                      <span key={name} className="st-tag" style={{ "--ac": agentColor(name) } as CSSProperties}>
+                        {agentLabel(name)} {fmtTokens(totalTokens(u))}
+                      </span>
+                    ))}
+                  </td>
+                  <td>
+                    {fmtTokens(totalTokens(all))}
+                    <small> · {all.turns} resp.</small>
+                  </td>
+                  <td>{t.fix_rounds ? t.fix_rounds : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Group>
+  );
+}
+
 function Usage({ state, detect, say, onConnect }: Props) {
   const [confirm, setConfirm] = useState(false);
   const map = state?.usage ?? {};
@@ -860,6 +919,8 @@ function Usage({ state, detect, say, onConnect }: Props) {
           </div>
         )}
       </Group>
+
+      <TaskCosts state={state} />
 
       <Group title="Qué hace lienzo para que duren más">
         <Row

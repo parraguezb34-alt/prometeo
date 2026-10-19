@@ -161,6 +161,9 @@ pub struct Task {
     /// Rondas de corrección que lleva en modo director.
     #[serde(default)]
     pub fix_rounds: u32,
+    /// Tokens gastados en esta tarea por cada agente (quien la hace y quien la revisa).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub cost: HashMap<String, Usage>,
 }
 
 impl Task {
@@ -179,6 +182,7 @@ impl Task {
             level: String::new(),
             assign: String::new(),
             fix_rounds: 0,
+            cost: HashMap::new(),
         }
     }
 }
@@ -668,6 +672,8 @@ pub struct HubInner {
     pub fix_limit: u32,
     /// Copia de cada archivo al reservarlo (clave de `review::rel_key`), para el diff de la entrega.
     pub bases: HashMap<String, review::FileBase>,
+    /// Tarea en la que trabaja cada agente (en minúsculas): a ella va el gasto de sus turnos.
+    pub focus: HashMap<String, u64>,
     pub seq: u64,
     pub task_seq: u64,
 }
@@ -1019,6 +1025,32 @@ pub fn report_usage(
     u.cache_read += cache_read;
     u.cache_write += cache_write;
     u.turns += 1;
+
+    // El gasto también cuenta para la tarea en la que está el agente. Cuando la tarea ya
+    // no es suya (cerrada, o devuelta a quien la hace tras revisarla), deja de contar.
+    let key = agent.to_lowercase();
+    let Some(&tid) = inner.focus.get(&key) else { return };
+    let Some(task) = inner.tasks.iter_mut().find(|t| t.id == tid) else {
+        inner.focus.remove(&key);
+        return;
+    };
+    let c = task.cost.entry(agent.to_string()).or_default();
+    c.input += input;
+    c.output += output;
+    c.cache_read += cache_read;
+    c.cache_write += cache_write;
+    c.turns += 1;
+    let still_mine = task.status != "done" && (task.owner.eq_ignore_ascii_case(agent) || task.status == "review");
+    if !still_mine {
+        inner.focus.remove(&key);
+    }
+}
+
+/// A partir de ahora, el gasto de `agent` cuenta para la tarea `id`.
+pub fn set_focus(inner: &mut HubInner, agent: &str, id: u64) {
+    if agent != "tú" {
+        inner.focus.insert(agent.to_lowercase(), id);
+    }
 }
 
 pub fn report_saved(inner: &mut HubInner, agent: &str, tokens: u64) {
@@ -1597,6 +1629,7 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         director: persisted.director,
         fix_limit: persisted.fix_limit,
         bases: HashMap::new(),
+        focus: HashMap::new(),
         seq: persisted.seq,
         task_seq: persisted.task_seq,
         memory: persisted.memory,
@@ -1713,6 +1746,7 @@ mod inbox_tests {
             director: false,
             fix_limit: 0,
             bases: HashMap::new(),
+            focus: HashMap::new(),
             seq: 0,
             task_seq: 0,
         }
@@ -1885,6 +1919,24 @@ mod inbox_tests {
         assert!(inbox[0].text.contains("#1"));
         remind_reviews(&mut h, "opencode");
         assert!(inbox_unread(&h, "opencode").is_empty(), "solo al líder");
+    }
+
+    #[test]
+    fn usage_goes_to_the_task_in_focus_until_it_is_not_theirs() {
+        let mut h = delivered();
+        h.tasks[0].status = "claimed".into();
+        set_focus(&mut h, "opencode", 1);
+        report_usage(&mut h, "opencode", "oc:1", 100, 10, 0, 0);
+        h.tasks[0].status = "review".into();
+        set_focus(&mut h, "claude", 1);
+        report_usage(&mut h, "claude", "cc:1", 5, 50, 1000, 0);
+        review_task(&mut h, 1, "claude", "s", "ok", "").unwrap();
+        report_usage(&mut h, "claude", "cc:2", 1, 1, 1, 1);
+        report_usage(&mut h, "claude", "cc:3", 7, 7, 7, 7);
+        let cost = &h.tasks[0].cost;
+        assert_eq!((cost["opencode"].input, cost["claude"].output, cost["claude"].turns), (100, 51, 2));
+        assert!(!h.focus.contains_key("claude"), "tras cerrarla, su gasto ya no cuenta para la tarea");
+        assert_eq!(h.usage["claude"].turns, 3);
     }
 
     #[test]

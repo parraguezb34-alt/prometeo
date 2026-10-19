@@ -83,6 +83,8 @@ export type TeamTask = {
   assign?: string;
   /** Rondas de corrección en modo director. */
   fix_rounds?: number;
+  /** Tokens gastados en la tarea por cada agente. */
+  cost?: Record<string, AgentUsage>;
 };
 
 /** Ids de los padres de una tarea que aún no están hechos. */
