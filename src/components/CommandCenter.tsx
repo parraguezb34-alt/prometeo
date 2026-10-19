@@ -55,7 +55,7 @@ import { askPhrase, eventImages, isDispatch, isNotice, parseTask, samePath } fro
 import { notify } from "../lib/notify";
 import { dispatchConfig, getSettings, rememberProject, useSettings } from "../lib/settings";
 import type { Chat } from "../lib/chats";
-import { AgentQuickCmds } from "./AgentCard";
+import { AgentQuickCmds, fmtTokens } from "./AgentCard";
 import { ChatView } from "./ChatView";
 import type { LiveAgent } from "./ChatView";
 import { ChatsSidebar } from "./ChatsSidebar";
@@ -1471,6 +1471,63 @@ export function CommandCenter() {
     }, 5000);
     return () => window.clearInterval(id);
   }, []);
+
+  // ---- Modo director: el líder empieza cada misión con el contexto limpio. Cada revisión le
+  // hace releer su conversación entera; lo que hizo el equipo queda en el tablero y la memoria.
+  // Solo Claude Code (con /clear) y solo si está libre y su contexto ya pesa.
+  const cleanKey = `lienzo.leaderClean:${project ?? "-"}`;
+  const cleanRef = useRef<{ key: string; doneUpTo: number; pending: boolean }>({ key: "", doneUpTo: -1, pending: false });
+  const directorOn = state ? !!state.director : null;
+  const prevDirector = useRef<boolean | null>(null);
+  useEffect(() => {
+    // Al activar el modo director (no al abrir lienzo con él ya activo) también se empieza limpio.
+    if (directorOn && prevDirector.current === false) cleanRef.current.pending = true;
+    if (directorOn !== null) prevDirector.current = directorOn;
+  }, [directorOn]);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const cur = latestRef.current;
+      const c = cleanRef.current;
+      if (!cur?.director || !getSettings().team.leaderClean || cur.leader !== "claude") return;
+      if (c.key !== cleanKey) {
+        // Por proyecto: lo ya limpiado no se vuelve a limpiar al reabrir lienzo.
+        let saved = -1;
+        try {
+          saved = Number(localStorage.getItem(cleanKey) ?? "-1");
+        } catch {
+          /* sin almacenamiento: se empieza de cero */
+        }
+        const maxDone = Math.max(0, ...cur.tasks.filter((t) => t.status === "done").map((t) => t.id));
+        Object.assign(c, { key: cleanKey, doneUpTo: saved >= 0 ? saved : maxDone });
+      }
+      const active = cur.tasks.some((t) => ["open", "claimed", "review", "draft"].includes(t.status));
+      const maxDone = Math.max(0, ...cur.tasks.filter((t) => t.status === "done").map((t) => t.id));
+      const missionOver = !active && maxDone > c.doneUpTo;
+      if (!missionOver && !(c.pending && !active)) return;
+      const ctx = Math.max(0, ...cur.agents.filter((a) => a.name === cur.leader).map((a) => a.ctx_tokens ?? 0));
+      if (ctx < 30_000) {
+        c.pending = false;
+        return;
+      }
+      const now = Date.now();
+      if (liveRef.current.some((l) => l.name === cur.leader && l.busy)) return;
+      if (now - (cur.lastByAgent.get(cur.leader)?.ts_ms ?? 0) < 60_000) return;
+      if ((cur.inbox[cur.leader]?.unread ?? 0) > 0) return;
+      const panel = panelForAgent(cur.panels, cur.leader);
+      if (!panel?.sessionId) return;
+      c.pending = false;
+      c.doneUpTo = maxDone;
+      try {
+        localStorage.setItem(cleanKey, String(maxDone));
+      } catch {
+        /* sin almacenamiento: puede repetirse al reabrir */
+      }
+      void termWrite(panel.sessionId, "/clear\r")
+        .then(() => say(`🧹 Contexto del líder limpio (${fmtTokens(ctx)}): la próxima misión empieza ligera.`))
+        .catch(() => {});
+    }, 10_000);
+    return () => window.clearInterval(id);
+  }, [cleanKey, say]);
 
   /** Abre un archivo que sale en el chat: en el preview si es del proyecto. */
   const openPath = (path: string) => {

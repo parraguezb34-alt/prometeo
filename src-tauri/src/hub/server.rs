@@ -145,6 +145,7 @@ fn cmd_join(app: &AppHandle, payload: &Value) -> Result<Value, String> {
 
     hub::with_inner(app, |inner| {
         let now = hub::now_ms();
+        let was_online = hub::is_online(inner, &name);
         hub::drop_dead_sessions(inner, &name, &project, &sid);
         inner.agents.insert(
             sid.clone(),
@@ -172,6 +173,9 @@ fn cmd_join(app: &AppHandle, payload: &Value) -> Result<Value, String> {
         // First real agent to join becomes the default leader until the user picks one.
         if inner.leader.is_none() && name != "agente" {
             inner.leader = Some(name.clone());
+        }
+        if !was_online {
+            hub::remind_reviews(inner, &name);
         }
         hub::persist(inner);
     })
@@ -274,12 +278,22 @@ fn cmd_inbox(app: &AppHandle, query: &std::collections::HashMap<String, String>)
         let list: Vec<Value> = hub::inbox_unread(inner, &agent)
             .into_iter()
             .map(|e| {
+                // Un aviso de revisión lleva los cambios de la entrega (solo para el agente, no
+                // para el chat de la app: por eso no van en el texto del evento).
+                let diff = e
+                    .task_id
+                    .filter(|_| e.agent == "lienzo")
+                    .and_then(|id| inner.tasks.iter().find(|t| t.id == id && t.status == "review"))
+                    .and_then(|t| t.result.as_ref())
+                    .map(|r| r.diff.clone())
+                    .unwrap_or_default();
                 json!({
                     "seq": e.seq,
                     "from": e.agent,
                     "to": e.to,
                     "text": e.text,
                     "ts_ms": e.ts_ms,
+                    "diff": diff,
                 })
             })
             .collect();
@@ -632,6 +646,11 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
 
                 // Modo director: la entrega de un trabajador espera la revisión del líder.
                 let reviewer = if op == "done" { hub::reviewer_for(inner, &agent) } else { None };
+                // Lo que verá el líder: los cambios frente a la copia de cada archivo al reservarlo.
+                let diff = if reviewer.is_some() { hub::delivery_diff(inner, &files_in) } else { String::new() };
+                if op == "done" && reviewer.is_none() {
+                    hub::drop_bases(inner, &files_in);
+                }
                 {
                     let task = &mut inner.tasks[pos];
                     match op.as_str() {
@@ -642,16 +661,15 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                         "done" => {
                             task.status = if reviewer.is_some() { "review" } else { "done" }.into();
                             task.owner = agent.clone();
+                            // `notes` aquí es el alias antiguo de summary: el encargo no se toca.
                             task.result = Some(hub::TaskResult {
                                 summary: summary.clone(),
                                 files: files_in.clone(),
                                 evidence: evidence.clone(),
                                 by: agent.clone(),
                                 ts_ms: hub::now_ms(),
+                                diff,
                             });
-                            if !notes.is_empty() {
-                                task.notes = notes.clone();
-                            }
                         }
                         _ => {
                             task.status = "open".into();
@@ -828,6 +846,7 @@ fn cmd_claim(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 extra
             );
             hub::push_event(inner, &agent, &sid, "claim", &text, granted.clone(), None);
+            hub::snapshot_bases(inner, &granted);
             hub::persist(inner);
         }
         json!({ "granted": granted, "conflicts": conflicts })

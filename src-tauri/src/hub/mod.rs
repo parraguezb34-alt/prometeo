@@ -11,6 +11,7 @@
 pub mod client;
 pub mod connectors;
 pub mod mirror;
+pub mod review;
 pub mod server;
 
 use serde::{Deserialize, Serialize};
@@ -123,6 +124,9 @@ pub struct TaskResult {
     pub by: String,
     #[serde(default)]
     pub ts_ms: u64,
+    /// Cambios de la entrega frente a la copia de cada archivo al reservarlo (modo director).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub diff: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -387,7 +391,7 @@ pub fn resolve_agent(inner: &HubInner, name: &str) -> String {
     resolve_to(inner, name)
 }
 
-fn online(inner: &HubInner, name: &str) -> bool {
+pub fn is_online(inner: &HubInner, name: &str) -> bool {
     let now = now_ms();
     inner
         .agents
@@ -395,14 +399,75 @@ fn online(inner: &HubInner, name: &str) -> bool {
         .any(|a| a.name.eq_ignore_ascii_case(name) && now.saturating_sub(a.last_seen_ms) < AGENT_TTL_MS)
 }
 
-/// Líder que debe revisar la entrega de `agent`, si la hay: en modo director, con el
-/// líder conectado y cuando no entrega él mismo (ni tú). Si no, la tarea se cierra sin más.
+/// Líder que debe revisar la entrega de `agent`, si la hay: en modo director y cuando no
+/// entrega él mismo (ni tú). Si el líder está desconectado, la entrega le espera: al volver
+/// recibe un aviso con todo lo pendiente (y tú puedes aprobarla desde la app).
 pub fn reviewer_for(inner: &HubInner, agent: &str) -> Option<String> {
     if !inner.director || agent == "tú" {
         return None;
     }
     let leader = inner.leader.clone()?;
-    (!leader.eq_ignore_ascii_case(agent) && online(inner, &leader)).then_some(leader)
+    (!leader.eq_ignore_ascii_case(agent)).then_some(leader)
+}
+
+/// El líder acaba de conectarse: si hay entregas esperando su revisión, se lo recuerda en un
+/// solo mensaje (los avisos de antes de reiniciar el hub cuentan como leídos).
+pub fn remind_reviews(inner: &mut HubInner, agent: &str) {
+    if !inner.director || !inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(agent)) {
+        return;
+    }
+    let pending: Vec<String> = inner
+        .tasks
+        .iter()
+        .filter(|t| t.status == "review")
+        .map(|t| format!("#{} «{}»", t.id, clean_text(&t.title, 60)))
+        .collect();
+    if pending.is_empty() || inbox_unread(inner, agent).iter().any(|e| e.agent == "lienzo") {
+        return;
+    }
+    let text = format!(
+        "🔎 Tienes {} entrega(s) esperando tu revisión: {}. Míralas con team_task_list y decide con team_task_review.",
+        pending.len(),
+        pending.join(", ")
+    );
+    push_event(inner, "lienzo", "hub", "message", &text, vec![], Some(agent.to_string()));
+}
+
+fn project_root(inner: &HubInner) -> Option<std::path::PathBuf> {
+    inner.project.as_deref().map(std::path::PathBuf::from).filter(|p| p.is_dir())
+}
+
+/// En modo director, guarda cómo estaban los archivos al reservarlos. Solo la primera vez:
+/// el diff que verá el líder es el de toda la tarea, también tras una ronda de corrección.
+pub fn snapshot_bases(inner: &mut HubInner, files: &[String]) {
+    if !inner.director {
+        return;
+    }
+    let Some(root) = project_root(inner) else { return };
+    for f in files {
+        let key = review::rel_key(&root, f);
+        if inner.bases.contains_key(&key) || inner.bases.len() >= 400 {
+            continue;
+        }
+        let base = review::read_base(&root, f);
+        inner.bases.insert(key, base);
+    }
+}
+
+/// Cambios de una entrega para el aviso al líder (recortados para no inflar su contexto).
+pub fn delivery_diff(inner: &HubInner, files: &[String]) -> String {
+    match project_root(inner) {
+        Some(root) if !files.is_empty() => review::delivery_diff(&root, files, &inner.bases, 6000),
+        _ => String::new(),
+    }
+}
+
+/// La tarea quedó cerrada: sus copias ya no hacen falta.
+pub fn drop_bases(inner: &mut HubInner, files: &[String]) {
+    let Some(root) = project_root(inner) else { return };
+    for f in files {
+        inner.bases.remove(&review::rel_key(&root, f));
+    }
 }
 
 /// Pide al líder que revise una entrega: le llega como mensaje directo, así que lo despierta.
@@ -412,9 +477,10 @@ pub fn ask_review(inner: &mut HubInner, id: u64, leader: &str) {
     let round = if task.fix_rounds > 0 { format!(" (tras la ronda {} de correcciones)", task.fix_rounds) } else { String::new() };
     let files = if r.files.is_empty() { "—".to_string() } else { r.files.join(", ") };
     let evidence = if r.evidence.is_empty() { "sin evidencia".to_string() } else { clean_text(&r.evidence, 300) };
+    let diff_note = if r.diff.is_empty() { "" } else { " Los cambios van debajo: no abras los archivos salvo que te falte algo." };
     let text = format!(
         "🔎 Revisa la entrega de #{id} «{}» de {}{round}: {} · Archivos: {files} · Evidencia: {evidence}. \
-         Decide con team_task_review: verdict ok, fix (con órdenes concretas) o take (la haces tú).",
+         Decide con team_task_review: verdict ok, fix (con órdenes concretas) o take (la haces tú).{diff_note}",
         clean_text(&task.title, 120),
         r.by,
         clean_text(&r.summary, 500),
@@ -453,6 +519,8 @@ pub fn review_task(
             if !notes.is_empty() {
                 task.comments.push(TaskComment { by: by.into(), text: format!("✅ {notes}"), ts_ms: now });
             }
+            let files = task.result.as_ref().map(|r| r.files.clone()).unwrap_or_default();
+            drop_bases(inner, &files);
             push_event_full(inner, by, session_id, "task", &format!("#{id} aprobada por {by}"), vec![], None, Some(id));
             Ok(format!("#{id} aprobada y cerrada."))
         }
@@ -598,6 +666,8 @@ pub struct HubInner {
     pub director: bool,
     /// Rondas de corrección antes de que el líder tenga que asumir la tarea (0 = las de por defecto).
     pub fix_limit: u32,
+    /// Copia de cada archivo al reservarlo (clave de `review::rel_key`), para el diff de la entrega.
+    pub bases: HashMap<String, review::FileBase>,
     pub seq: u64,
     pub task_seq: u64,
 }
@@ -1526,6 +1596,7 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         usage_seen: VecDeque::new(),
         director: persisted.director,
         fix_limit: persisted.fix_limit,
+        bases: HashMap::new(),
         seq: persisted.seq,
         task_seq: persisted.task_seq,
         memory: persisted.memory,
@@ -1641,6 +1712,7 @@ mod inbox_tests {
             usage_seen: VecDeque::new(),
             director: false,
             fix_limit: 0,
+            bases: HashMap::new(),
             seq: 0,
             task_seq: 0,
         }
@@ -1748,6 +1820,7 @@ mod inbox_tests {
             evidence: "npm test ok".into(),
             by: "opencode".into(),
             ts_ms: 0,
+            diff: String::new(),
         });
         h.tasks.push(t);
         h
@@ -1758,9 +1831,10 @@ mod inbox_tests {
         let mut h = hub();
         assert_eq!(reviewer_for(&h, "opencode"), None, "sin modo director no hay revisión");
         h.director = true;
-        assert_eq!(reviewer_for(&h, "opencode"), None, "líder desconectado: no se bloquea la tarea");
-        join(&mut h, "claude");
-        assert_eq!(reviewer_for(&h, "opencode").as_deref(), Some("claude"));
+        assert_eq!(reviewer_for(&h, "opencode").as_deref(), Some("claude"), "aunque esté desconectado, la entrega le espera");
+        h.leader = None;
+        assert_eq!(reviewer_for(&h, "opencode"), None, "sin líder no hay revisión");
+        h.leader = Some("claude".into());
         assert_eq!(reviewer_for(&h, "claude"), None, "el líder no se revisa a sí mismo");
         assert_eq!(reviewer_for(&h, "tú"), None);
     }
@@ -1799,6 +1873,18 @@ mod inbox_tests {
         review_task(&mut h, 1, "tú", "ui", "ok", "").unwrap();
         assert_eq!(h.tasks[0].status, "done");
         assert!(unmet_parents(&h.tasks, &h.tasks[1]).is_empty());
+    }
+
+    #[test]
+    fn leader_back_gets_one_reminder_of_pending_reviews() {
+        let mut h = delivered();
+        remind_reviews(&mut h, "claude");
+        remind_reviews(&mut h, "claude");
+        let inbox = inbox_unread(&h, "claude");
+        assert_eq!(inbox.len(), 1, "un solo recordatorio aunque se conecte dos veces");
+        assert!(inbox[0].text.contains("#1"));
+        remind_reviews(&mut h, "opencode");
+        assert!(inbox_unread(&h, "opencode").is_empty(), "solo al líder");
     }
 
     #[test]

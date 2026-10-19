@@ -35,6 +35,8 @@ export type Settings = {
   team: {
     /** Escribir en la terminal de un agente libre cuando le llega un mensaje de otro. */
     relayInbox: boolean;
+    /** Modo director: limpiar el contexto del líder (Claude) al acabar cada misión. */
+    leaderClean: boolean;
   };
   /** Agentes que no se abren al iniciar ni reciben tareas del despacho. */
   skipAgents: string[];
@@ -52,7 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
     leader: "last",
   },
   notify: { ask: true, done: true, reply: true, lateMin: 3, whenFocused: false },
-  team: { relayInbox: true },
+  team: { relayInbox: true, leaderClean: true },
   skipAgents: [],
   recentProjects: [],
 };

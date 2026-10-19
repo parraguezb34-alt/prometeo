@@ -596,6 +596,7 @@ function Director({ state, say }: Pick<Props, "state" | "say">) {
   const on = !!state?.director;
   const limit = state?.fix_limit ?? 2;
   const leader = state?.leader ?? "";
+  const { team } = useSettings();
   const set = (enabled: boolean, fixLimit?: number) =>
     teamDirector(enabled, fixLimit).catch((e) => say(errMsg(e), true));
   return (
@@ -610,7 +611,7 @@ function Director({ state, say }: Pick<Props, "state" | "say">) {
           !leader
             ? "Elige antes un líder: es quien reparte y revisa."
             : on
-              ? `${agentLabel(leader)} revisa las entregas antes de cerrarlas. Si se desconecta, las tareas se cierran sin revisión.`
+              ? `${agentLabel(leader)} revisa las entregas antes de cerrarlas. Si se desconecta, le esperan hasta que vuelva (o las apruebas tú).`
               : "Las tareas se cierran en cuanto su agente las entrega."
         }
       >
@@ -623,6 +624,17 @@ function Director({ state, say }: Pick<Props, "state" | "say">) {
           disabled={!on}
           options={[1, 2, 3].map((v) => ({ v, l: String(v) }))}
           onChange={(v) => void set(true, v)}
+        />
+      </Row>
+      <Row
+        label="Contexto limpio entre misiones"
+        hint="Al cerrarse todas las tareas, si Claude dirige y su conversación pesa más de 30k tokens, lienzo la limpia (/clear) cuando está libre. Lo hecho queda en el tablero y la memoria; cada revisión cuesta mucho menos."
+      >
+        <Switch
+          label="Contexto limpio entre misiones"
+          on={team.leaderClean}
+          disabled={!on}
+          onChange={(leaderClean) => updateSettings({ team: { leaderClean } })}
         />
       </Row>
     </Group>

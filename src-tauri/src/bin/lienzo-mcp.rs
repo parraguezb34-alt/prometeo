@@ -1015,6 +1015,7 @@ fn render_inbox(v: &Value) -> String {
             ago(m["ts_ms"].as_u64().unwrap_or(0)),
             trunc(m["text"].as_str().unwrap_or(""), 1200)
         ));
+        out.push_str(&diff_block(m));
     }
     out.push_str("Responde con team_message (to = quien escribió, reply_to = su número) solo si aporta algo.");
     out
@@ -1603,7 +1604,7 @@ fn fetch_inbox(client: &HubClient, agent: &str) -> Vec<(u64, String, String, boo
                         (
                             m["seq"].as_u64().unwrap_or(0),
                             m["from"].as_str().unwrap_or("?").to_string(),
-                            m["text"].as_str().unwrap_or("").to_string(),
+                            format!("{}{}", trunc(m["text"].as_str().unwrap_or(""), 1200), diff_block(m)),
                             m["to"].is_string(),
                         )
                     })
@@ -1613,10 +1614,18 @@ fn fetch_inbox(client: &HubClient, agent: &str) -> Vec<(u64, String, String, boo
         .unwrap_or_default()
 }
 
+/// Los cambios de una entrega que acompañan a un aviso de revisión, si los hay.
+fn diff_block(m: &Value) -> String {
+    match m["diff"].as_str().filter(|d| !d.trim().is_empty()) {
+        Some(d) => format!("\n```diff\n{}\n```\n", d.trim_end()),
+        None => String::new(),
+    }
+}
+
 fn inbox_text(list: &[(u64, String, String, bool)]) -> String {
     let mut out = format!("📬 Mensajes de tus compañeros ({}):\n", list.len());
     for (seq, from, text, _) in list {
-        out.push_str(&format!("- #{seq} de {from}: {}\n", trunc(text, 1200)));
+        out.push_str(&format!("- #{seq} de {from}: {text}\n"));
     }
     out.push_str("Para responder: team_message con to = quien escribió y reply_to = su número.");
     out

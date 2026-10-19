@@ -39,7 +39,7 @@ Entrega: team_task_done con summary, files y la salida del comando en evidence.
 - Las decisiones de diseño (nombres públicos, API, estructura de datos) las tomas tú en el encargo; no las delegues.
 
 ## 3. Revisar (cuando llegue 🔎 a tu buzón)
-1. Mira solo los archivos de la entrega: `git diff -- <ruta>` o léelos por tramos.
+1. El aviso trae los cambios (`diff`) de cada archivo: revisa con eso. Abre un archivo solo si el diff está recortado o te falta contexto.
 2. Ejecuta el comando de «Comprueba con», acotando la salida. La evidencia del agente no basta sola.
 3. Contrasta con «Hecho cuando» y nada más: no pidas mejoras que no estaban en el encargo.
 
