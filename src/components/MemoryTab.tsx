@@ -70,7 +70,7 @@ export function MemoryTab({
                       key={f}
                       data-click={can ? "1" : "0"}
                       onClick={can ? () => onPreview(f) : undefined}
-                      title={can ? `Ver ${f} en Preview` : f}
+                      title={can ? `Abrir ${f}` : f}
                     >
                       {f}
                     </span>

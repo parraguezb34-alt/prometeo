@@ -1665,6 +1665,14 @@ pub fn team_details(hub: tauri::State<'_, Hub>) -> Result<serde_json::Value, Str
 #[tauri::command]
 pub fn team_project_set(hub: tauri::State<'_, Hub>, path: Option<String>) -> Result<(), String> {
     let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    // Historial desde el estado de ahora, antes de que nadie toque nada (si aún no lo había).
+    if let Some(p) = path.clone().filter(|p| !p.trim().is_empty()) {
+        std::thread::spawn(move || {
+            if let Err(e) = crate::history::ensure(&p) {
+                eprintln!("[historial] {e}");
+            }
+        });
+    }
     switch_project(&mut inner, path);
     persist(&inner);
     drop(inner);
@@ -1979,6 +1987,14 @@ pub fn init(app: AppHandle) -> Result<(), String> {
 
     let persisted = load_persisted();
     let token = random_token();
+    // Historial del proyecto abierto: listo antes de que el equipo entregue nada.
+    if let Some(p) = persisted.project.clone().filter(|p| !p.trim().is_empty()) {
+        std::thread::spawn(move || {
+            if let Err(e) = crate::history::ensure(&p) {
+                eprintln!("[historial] {e}");
+            }
+        });
+    }
 
     let (server, port) = server::bind()?;
 

@@ -1,3 +1,5 @@
+mod devapp;
+pub mod history;
 pub mod hub;
 mod project;
 mod pty;
@@ -71,7 +73,21 @@ pub fn run() {
             skills::skills_remove,
             skills::skills_read,
             skills::skills_install,
+            history::history_list,
+            history::history_diff,
+            history::history_revert,
+            history::history_save,
+            devapp::app_detect,
+            devapp::app_start,
+            devapp::app_stop,
+            devapp::app_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_, ev| {
+            // Al cerrar lienzo, la app en vivo (npm run dev…) se cierra con él.
+            if let tauri::RunEvent::Exit = ev {
+                devapp::stop();
+            }
+        });
 }

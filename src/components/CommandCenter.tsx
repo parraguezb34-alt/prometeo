@@ -71,13 +71,14 @@ import { ChatView } from "./ChatView";
 import type { LiveAgent } from "./ChatView";
 import { ChatsSidebar } from "./ChatsSidebar";
 import { DestPicker } from "./DestPicker";
-import { DiffTab, taskPaths } from "./DiffTab";
-import { FilesTab } from "./FilesTab";
+import { HistoryTab } from "./HistoryTab";
+import { taskPaths } from "../lib/history";
+import { appStop } from "../lib/devapp";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import { NewChatMenu } from "./NewChatMenu";
 import type { NewChatChoice } from "./NewChatMenu";
-import { PreviewTab } from "./PreviewTab";
+import { AppTab } from "./AppTab";
 import { TasksDrawer } from "./TasksDrawer";
 import { TeamModal, TeamStrip, agentState } from "./TeamModal";
 import type { AgentState } from "./TeamModal";
@@ -89,7 +90,7 @@ import { TerminalPanel } from "./TerminalPanel";
 type Sel = { kind: "team" } | { kind: "agent"; name: string };
 
 /** What the stage shows for the team destination. */
-type CenterView = "feed" | "diff" | "preview" | "term" | "files";
+type CenterView = "feed" | "history" | "app" | "term";
 
 /** Mission trigger mode: plan-first or straight to execution. */
 type Shoot = "plan" | "exec";
@@ -1476,6 +1477,10 @@ export function CommandCenter() {
         if (panel.sessionId) await termKill(panel.sessionId).catch(() => {});
         removePanel(panel.id);
       }
+      // La app en vivo era la del proyecto viejo.
+      await appStop().catch(() => {});
+      setPreviewRel(null);
+      setDiffTask(null);
       await teamProjectSet(target);
       rememberProject(target);
       let reopened = 0;
@@ -1902,7 +1907,7 @@ export function CommandCenter() {
       rel = norm.slice(root.length + 1);
     }
     setPreviewRel(rel.replace(/^\.\//, ""));
-    setView("preview");
+    setView("app");
   };
 
   /** Detiene lo que esté haciendo un agente (Esc en su terminal; OpenCode pide dos). */
@@ -1922,13 +1927,12 @@ export function CommandCenter() {
 
   const VIEWS: { id: CenterView; label: string; icon: IconName; title: string }[] = [
     { id: "feed", label: "Comando", icon: "msg", title: "Chat y actividad del equipo" },
-    { id: "diff", label: "Cambios", icon: "diff", title: "Revisar los cambios en git" },
-    { id: "preview", label: "Preview", icon: "eye", title: "Vista previa de html/svg/md en vivo" },
+    { id: "history", label: "Historial", icon: "history", title: "Qué cambió cada tarea, para verlo y deshacerlo" },
+    { id: "app", label: "App", icon: "app", title: "Tu proyecto arrancado y a la vista" },
     { id: "term", label: "Terminal", icon: "term", title: "Terminal de cada agente a pantalla completa" },
-    { id: "files", label: "Archivos", icon: "folder", title: "Explorar los archivos del proyecto" },
   ];
   const stageTask =
-    view === "diff" && diffTask != null ? tasks.find((t) => t.id === diffTask) : undefined;
+    view === "history" && diffTask != null ? tasks.find((t) => t.id === diffTask) : undefined;
 
   /** Progreso de tareas siempre a la vista; abre el panel lateral. */
   const tasksBtn = (
@@ -2022,7 +2026,7 @@ export function CommandCenter() {
           >
             <Icon name={v.icon} size={14} />
             {v.label}
-            {v.id === "diff" && changeCount ? <span className="cc-count">{changeCount}</span> : null}
+            {v.id === "history" && changeCount ? <span className="cc-count">{changeCount}</span> : null}
           </button>
         ))}
       </div>
@@ -2357,7 +2361,7 @@ export function CommandCenter() {
               project={project}
               onOpenTask={(id) => {
                 setDiffTask(id);
-                setView("diff");
+                setView("history");
               }}
               onOpenPath={openPath}
               onTerminal={openTerm}
@@ -2383,7 +2387,7 @@ export function CommandCenter() {
                       </button>
                       <button className="cc-quick-card" onClick={() => openSettings("general")}>
                         <b>Carpeta del proyecto</b>
-                        <span>Elige dónde trabajan los agentes y de dónde salen los diffs y el preview.</span>
+                        <span>Elige la carpeta donde trabajan los agentes.</span>
                       </button>
                       <button className="cc-quick-card" onClick={() => openSettings("team")}>
                         <b>Normas del equipo</b>
@@ -2402,41 +2406,34 @@ export function CommandCenter() {
             />
           )}
 
-          {view === "diff" && (
-            <DiffTab
+          {view === "history" && (
+            <HistoryTab
               project={project}
-              onChooseProject={() => openSettings("general")}
-              onCount={onDiffCount}
               tasks={tasks}
               events={state?.events ?? []}
-              claims={state?.claims ?? []}
-              taskId={diffTask}
-              onTaskChange={setDiffTask}
+              focusTask={diffTask}
+              onFocusTask={setDiffTask}
+              onCount={onDiffCount}
               onSay={say}
-              onPreview={(rel) => {
+              onTaskNote={(id, text) => void teamTaskComment(id, text).then(refresh).catch(() => {})}
+              onOpenFile={(rel) => {
                 setPreviewRel(rel);
-                setView("preview");
+                setView("app");
               }}
             />
           )}
 
-          {view === "preview" && (
-            <PreviewTab
+          {view === "app" && (
+            <AppTab
               project={project}
               events={state?.events ?? []}
               openRel={previewRel}
               onChooseProject={() => openSettings("general")}
-            />
-          )}
-
-          {view === "files" && (
-            <FilesTab
-              project={project}
-              onChooseProject={() => openSettings("general")}
-              onCharter={() => openSettings("team")}
-              onPreview={(rel) => {
-                setPreviewRel(rel);
-                setView("preview");
+              onSay={say}
+              onAsk={(text) => {
+                // Al compositor, para que lo revises y elijas a quién mandarlo.
+                setDraft(text);
+                setView("feed");
               }}
             />
           )}
@@ -2571,7 +2568,7 @@ export function CommandCenter() {
           blocked={blockedNames}
           lastByAgent={lastByAgent}
           taskFileCount={taskFileCount}
-          activeTaskId={view === "diff" ? diffTask : null}
+          activeTaskId={view === "history" ? diffTask : null}
           hasProject={!!project}
           initialTab={drawerTab}
           memory={state?.memory ?? []}
@@ -2611,7 +2608,7 @@ export function CommandCenter() {
           dispatch={{ enabled: dispatchOn, state: dispatchView, onToggle: toggleDispatch, onRetry: retryDispatch }}
           onPreview={(rel) => {
             setPreviewRel(rel);
-            setView("preview");
+            setView("app");
             setOverlay(null);
           }}
           onClose={() => setOverlay(null)}
@@ -2621,7 +2618,7 @@ export function CommandCenter() {
               return;
             }
             setDiffTask(id);
-            setView("diff");
+            setView("history");
             setSel({ kind: "team" });
             setOverlay(null);
           }}

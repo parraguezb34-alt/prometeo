@@ -86,6 +86,23 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M14 2v6h6M8 13h8M8 17h5" />
     </>
   ),
+  history: (
+    <>
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 3v5h5M12 7v5l3 2" />
+    </>
+  ),
+  play: <path d="M6 4l14 8-14 8z" />,
+  stop: <rect x="6" y="6" width="12" height="12" rx="1.5" />,
+  undo: <path d="M9 14 4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3" />,
+  redo: <path d="m15 14 5-5-5-5M20 9H9a5 5 0 0 0 0 10h3" />,
+  external: <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />,
+  app: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="M2 9h20M6 6.5h.01M9 6.5h.01" />
+    </>
+  ),
 };
 
 export type IconName = keyof typeof PATHS;

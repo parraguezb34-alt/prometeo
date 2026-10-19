@@ -765,6 +765,22 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                     (format!("#{} {} por {}", task.id, verb, agent), vec![])
                 };
                 hub::push_event(inner, &agent, &sid, "task", &text, ev_files, None);
+                // Historial: copia de sus archivos tal como los entrega (para verlos y deshacerlos).
+                if op == "done" {
+                    if let Some(project) = inner.project.clone() {
+                        let title = if task.fix_rounds > 0 {
+                            format!("{} · corrección {}", task.title, task.fix_rounds)
+                        } else {
+                            task.title.clone()
+                        };
+                        let (tid, by, files) = (task.id, agent.clone(), files_in.clone());
+                        std::thread::spawn(move || {
+                            if let Err(e) = crate::history::record(&project, tid, &title, &by, &files) {
+                                eprintln!("[historial] #{tid}: {e}");
+                            }
+                        });
+                    }
+                }
                 if let Some(leader) = &reviewer {
                     hub::ask_review(inner, task.id, leader);
                 }
