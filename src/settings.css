@@ -506,6 +506,15 @@
   flex-wrap: wrap;
   gap: 8px;
 }
+.st-strength {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.st-strength .st-input {
+  flex: 1;
+  min-width: 0;
+}
 .st-agent-act {
   display: flex;
   align-items: center;

@@ -65,7 +65,7 @@ export type MemoryEntry = {
 export type TeamTask = {
   id: number;
   title: string;
-  status: string; // open | claimed | review | done
+  status: string; // draft | open | claimed | review | done
   owner: string;
   notes: string;
   created_ms: number;
@@ -118,6 +118,8 @@ export type TeamState = {
   director?: boolean;
   /** Rondas de corrección antes de que el líder asuma la tarea. */
   fix_limit?: number;
+  /** Qué se le da bien a cada agente (lo escribes tú; el líder lo usa para repartir). */
+  strengths?: Record<string, string>;
   now_ms: number;
 };
 
@@ -233,6 +235,7 @@ export const teamUsageReset = () => invoke<void>("team_usage_reset");
 /** Modo director: el líder reparte, revisa y manda corregir (como mucho `fixLimit` rondas). */
 export const teamDirector = (enabled: boolean, fixLimit?: number) =>
   invoke<void>("team_director", { enabled, fixLimit: fixLimit ?? null });
+export const teamStrengths = (agent: string, text: string) => invoke<void>("team_strengths", { agent, text });
 
 /** Compacta la sesión de OpenCode de un proyecto con la API de su servidor
  * local (sin teclear en la TUI: la vía fiable para el relevo con memoria). */

@@ -492,6 +492,47 @@ pub fn ask_review(inner: &mut HubInner, id: u64, leader: &str) {
     push_event_full(inner, "lienzo", "hub", "message", &text, r.files, Some(leader.to_string()), Some(id));
 }
 
+/// El líder (o tú) completa el encargo de una tarea; un borrador pasa a estar listo para repartir.
+pub fn brief_task(
+    inner: &mut HubInner,
+    id: u64,
+    by: &str,
+    session_id: &str,
+    notes: &str,
+    level: &str,
+    assign: &str,
+) -> Result<String, String> {
+    let is_leader = inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(by));
+    if by != "tú" && !is_leader {
+        return Err("solo el líder (o tú) escribe los encargos".into());
+    }
+    let assign = resolve_to(inner, assign);
+    let level = task_level(level);
+    let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) else {
+        return Err("tarea no encontrada".into());
+    };
+    if !matches!(task.status.as_str(), "draft" | "open") {
+        return Err(format!("la tarea #{id} ya está {}: no se cambia su encargo", task.status));
+    }
+    let notes: String = notes.trim().chars().take(4000).collect();
+    if notes.is_empty() && task.notes.trim().is_empty() {
+        return Err("falta el encargo en `notes`".into());
+    }
+    if !notes.is_empty() {
+        task.notes = notes;
+    }
+    if !level.is_empty() {
+        task.level = level;
+    }
+    if !assign.is_empty() {
+        task.assign = assign;
+    }
+    task.status = "open".into();
+    let title = clean_text(&task.title, 100);
+    push_event_full(inner, by, session_id, "task", &format!("#{id} con encargo: {title}"), vec![], None, Some(id));
+    Ok(format!("#{id} lista para repartir."))
+}
+
 /// Decisión sobre una entrega en revisión. `ok` la cierra, `fix` la devuelve a su dueño con
 /// órdenes (como mucho `fix_limit` rondas) y `take` la pasa a quien revisa.
 pub fn review_task(
@@ -641,6 +682,8 @@ pub struct PersistedState {
     pub director: bool,
     #[serde(default)]
     pub fix_limit: u32,
+    #[serde(default)]
+    pub strengths: HashMap<String, String>,
 }
 
 pub struct HubInner {
@@ -674,6 +717,8 @@ pub struct HubInner {
     pub bases: HashMap<String, review::FileBase>,
     /// Tarea en la que trabaja cada agente (en minúsculas): a ella va el gasto de sus turnos.
     pub focus: HashMap<String, u64>,
+    /// Qué se le da bien a cada agente (lo escribes tú): el líder lo usa para repartir.
+    pub strengths: HashMap<String, String>,
     pub seq: u64,
     pub task_seq: u64,
 }
@@ -758,6 +803,7 @@ pub fn persist(inner: &HubInner) {
         usage_since: inner.usage_since,
         director: inner.director,
         fix_limit: inner.fix_limit,
+        strengths: inner.strengths.clone(),
     };
     if let Ok(raw) = serde_json::to_string(&state) {
         let _ = std::fs::write(state_file(), raw);
@@ -907,6 +953,7 @@ pub fn snapshot(inner: &HubInner, limit: usize) -> serde_json::Value {
         "usage_since": inner.usage_since,
         "director": inner.director,
         "fix_limit": fix_limit(inner),
+        "strengths": inner.strengths,
         "now_ms": now,
     })
 }
@@ -1406,7 +1453,13 @@ pub fn team_add_task(
     let parents = check_parents(&inner.tasks, &parents.unwrap_or_default())?;
     inner.task_seq += 1;
     let id = inner.task_seq;
-    inner.tasks.push(Task::new(id, title.trim().to_string(), String::new(), parents));
+    let mut task = Task::new(id, title.trim().to_string(), String::new(), parents);
+    // En modo director, lo que creas a mano espera a que el líder escriba el encargo.
+    let leader = inner.leader.clone().filter(|_| inner.director);
+    if leader.is_some() {
+        task.status = "draft".into();
+    }
+    inner.tasks.push(task);
     push_event(
         &mut inner,
         "tú",
@@ -1416,6 +1469,13 @@ pub fn team_add_task(
         vec![],
         None,
     );
+    if let Some(leader) = leader {
+        let text = format!(
+            "📝 Nueva tarea #{id} «{}» del usuario: escribe su encargo con team_task_brief (notes con la plantilla, level y, si hace falta, assign). Hasta entonces no se reparte.",
+            clean_text(&title, 120)
+        );
+        push_event_full(&mut inner, "lienzo", "hub", "message", &text, vec![], Some(leader), Some(id));
+    }
     persist(&inner);
     drop(inner);
     notify_ui();
@@ -1593,6 +1653,22 @@ pub fn team_usage_reset(hub: tauri::State<'_, Hub>) -> Result<(), String> {
     Ok(())
 }
 
+/// Qué se le da bien a un agente (vacío = olvidarlo). El líder lo ve al repartir.
+#[tauri::command]
+pub fn team_strengths(hub: tauri::State<'_, Hub>, agent: String, text: String) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    let text = clean_text(&text, 200);
+    if text.is_empty() {
+        inner.strengths.remove(&agent);
+    } else {
+        inner.strengths.insert(agent, text);
+    }
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
@@ -1630,6 +1706,7 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         fix_limit: persisted.fix_limit,
         bases: HashMap::new(),
         focus: HashMap::new(),
+        strengths: persisted.strengths,
         seq: persisted.seq,
         task_seq: persisted.task_seq,
         memory: persisted.memory,
@@ -1747,6 +1824,7 @@ mod inbox_tests {
             fix_limit: 0,
             bases: HashMap::new(),
             focus: HashMap::new(),
+            strengths: HashMap::new(),
             seq: 0,
             task_seq: 0,
         }
@@ -1937,6 +2015,19 @@ mod inbox_tests {
         assert_eq!((cost["opencode"].input, cost["claude"].output, cost["claude"].turns), (100, 51, 2));
         assert!(!h.focus.contains_key("claude"), "tras cerrarla, su gasto ya no cuenta para la tarea");
         assert_eq!(h.usage["claude"].turns, 3);
+    }
+
+    #[test]
+    fn brief_opens_a_draft_only_for_the_leader() {
+        let mut h = hub();
+        let mut t = Task::new(1, "login".into(), String::new(), vec![]);
+        t.status = "draft".into();
+        h.tasks.push(t);
+        assert!(brief_task(&mut h, 1, "opencode", "s", "hazlo", "", "").is_err());
+        assert!(brief_task(&mut h, 1, "claude", "s", "  ", "", "").is_err(), "sin encargo no");
+        brief_task(&mut h, 1, "claude", "s", "Objetivo: …", "Fácil", "OpenCode").unwrap();
+        let t = &h.tasks[0];
+        assert_eq!((t.status.as_str(), t.level.as_str(), t.assign.as_str()), ("open", "simple", "OpenCode"));
     }
 
     #[test]

@@ -7,7 +7,7 @@ import { testNotify } from "../lib/notify";
 import type { ProjectInfo } from "../lib/project";
 import { DEFAULT_SETTINGS, resetSettings, updateSettings, useSettings } from "../lib/settings";
 import type { LeaderMode } from "../lib/settings";
-import { agentColor, agentInitial, agentLabel, ago, errMsg, shortPath, teamDetails, teamDirector, teamUsageReset } from "../lib/team";
+import { agentColor, agentInitial, agentLabel, ago, errMsg, shortPath, teamDetails, teamDirector, teamStrengths, teamUsageReset } from "../lib/team";
 import { cachePct, sumUsage, totalTokens, usageOf } from "../lib/usage";
 import { fmtTokens } from "./AgentCard";
 import type { DetectResult, ModelCatalog, TeamDetails, TeamState } from "../lib/team";
@@ -384,6 +384,32 @@ function General({ state, info, autoStart, shoot, chatsMin, say, onAutoStart, on
 
 // ---- Agentes -------------------------------------------------------------------------
 
+/** Qué se le da bien a un agente: el líder lo tiene en cuenta al repartir en modo director. */
+function StrengthField({ agent, label, saved }: { agent: string; label: string; saved: string }) {
+  const [draft, setDraft] = useState(saved);
+  useEffect(() => setDraft(saved), [saved]);
+  const save = () => {
+    if (draft.trim() !== saved.trim()) void teamStrengths(agent, draft).catch(() => {});
+  };
+  return (
+    <label className="cc-field st-strength">
+      <span className="cc-field-l">Se le da bien</span>
+      <input
+        className="st-input"
+        type="text"
+        value={draft}
+        maxLength={200}
+        placeholder={`Ej.: interfaz y estilos, tests… (para que el líder sepa qué darle a ${label})`}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+      />
+    </label>
+  );
+}
+
 function Agents({ state, detect, catalogs, prefs, opening, onPref, onConnect, onOpenAgent }: Props) {
   const settings = useSettings();
   const [connecting, setConnecting] = useState<string | null>(null);
@@ -509,6 +535,7 @@ function Agents({ state, detect, catalogs, prefs, opening, onPref, onConnect, on
                   )}
                 </div>
               )}
+              {found && <StrengthField agent={d.id} label={d.label} saved={state?.strengths?.[d.id] ?? ""} />}
 
               <div className="st-agent-act">
                 {!online && found && (

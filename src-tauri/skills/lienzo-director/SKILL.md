@@ -15,7 +15,8 @@ Lo que aportas es la calidad de tus encargos y de tus revisiones, no el código 
   - `simple`: cambio mecánico y acotado (un campo, un test, textos, estilos, renombrar).
   - `media`: lógica nueva con especificación clara y archivos conocidos.
   - `dificil`: diseño, depuración de causa incierta, concurrencia, seguridad, migraciones de datos o algo que toca muchas piezas. Divídela hasta que deje de serlo, o hazla tú (`assign` con tu nombre).
-- Usa `assign` solo si un agente concreto encaja mejor; si no, lienzo la da a quien esté libre.
+- Usa `assign` solo si un agente concreto encaja mejor (mira «Fortalezas del equipo» en tu contexto); si no, lienzo la da a quien esté libre.
+- Si te llega 📝 con una tarea que creó el usuario, escribe su encargo con `team_task_brief`: hasta entonces no se reparte.
 
 ## 2. Escribir el encargo (`notes`)
 Quien lo reciba no ha visto lo que tú viste: todo lo que necesite va en el encargo.

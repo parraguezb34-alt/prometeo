@@ -121,7 +121,7 @@ export function TasksDrawer({
     return [
       { key: "review", label: "En revisión", items: list.filter((t) => t.status === "review").sort(newest) },
       { key: "claimed", label: "En curso", items: list.filter((t) => t.status === "claimed").sort(newest) },
-      { key: "open", label: "Por hacer", items: list.filter((t) => t.status === "open").sort(newest) },
+      { key: "open", label: "Por hacer", items: list.filter((t) => t.status === "open" || t.status === "draft").sort(newest) },
       { key: "done", label: "Hechas", items: list.filter((t) => t.status === "done").sort(newest) },
     ];
   }, [list]);
@@ -474,6 +474,11 @@ function TaskRow({
             <span className="td-free">para {agentLabel(t.assign)}</span>
           ) : (
             <span className="td-free">sin dueño</span>
+          )}
+          {t.status === "draft" && (
+            <span className="td-review" title="En modo director, el líder escribe el encargo antes de repartirla">
+              esperando encargo del líder
+            </span>
           )}
           {inReview && (
             <span className="td-review" title="El líder revisa la entrega antes de cerrarla">

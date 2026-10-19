@@ -585,6 +585,19 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 hub::persist(inner);
                 Ok(json!({ "comment": c }))
             }
+            "brief" => {
+                let msg = hub::brief_task(
+                    inner,
+                    id,
+                    &agent,
+                    &sid,
+                    &notes,
+                    payload["level"].as_str().unwrap_or(""),
+                    payload["assign"].as_str().unwrap_or(""),
+                )?;
+                hub::persist(inner);
+                Ok(json!({ "ok": msg }))
+            }
             "review" => {
                 let verdict = payload["verdict"].as_str().unwrap_or("");
                 hub::set_focus(inner, &agent, id);
@@ -608,6 +621,9 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                         }
                         if snapshot.status == "review" {
                             return Err(format!("la tarea #{id} está en revisión del líder; espera su decisión"));
+                        }
+                        if snapshot.status == "draft" {
+                            return Err(format!("la tarea #{id} aún no tiene encargo: espera a que el líder lo escriba"));
                         }
                         if snapshot.status == "claimed" && !snapshot.owner.is_empty() && snapshot.owner != agent {
                             return Err(format!(

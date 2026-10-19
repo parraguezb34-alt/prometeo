@@ -109,6 +109,14 @@ fn context_sections(state: &Value, me: &str) -> Vec<(&'static str, String)> {
                     "Modo director: diriges tú. Divide el trabajo en encargos cerrados con team_task_create (notes, level, assign), \
 revisa cada entrega con team_task_review (máx. {rounds} rondas de fix) y haz tú solo lo difícil. Pauta: skill lienzo-director.\n"
                 ));
+                // Lo que el usuario dice que se le da bien a cada uno: para elegir `assign`.
+                if let Some(map) = state["strengths"].as_object().filter(|m| !m.is_empty()) {
+                    let list: Vec<String> = map
+                        .iter()
+                        .filter_map(|(k, v)| v.as_str().map(|t| format!("{k}: {}", trunc(t, 120))))
+                        .collect();
+                    lead.push_str(&format!("Fortalezas del equipo: {}.\n", list.join(" · ")));
+                }
             } else {
                 lead.push_str(&format!(
                     "Modo director: {leader} reparte y revisa tus entregas. Sigue el encargo al pie de la letra, \
@@ -325,6 +333,9 @@ fn task_flag(t: &Value, tasks: &[Value]) -> String {
     if status == "review" {
         return "en revisión".to_string();
     }
+    if status == "draft" {
+        return "borrador·sin encargo".to_string();
+    }
     if status != "open" {
         return status.to_string();
     }
@@ -525,6 +536,20 @@ fn tools_catalog() -> Value {
                     "assign": { "type": "string", "description": "Agente que debe hacerla (opcional)" }
                 },
                 "required": ["title"]
+            }
+        },
+        {
+            "name": "team_task_brief",
+            "description": "Solo el líder: escribe el encargo de una tarea (p. ej. una que creó el usuario sin detalles). Un borrador queda listo para repartir.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer" },
+                    "notes": { "type": "string", "description": "El encargo completo (plantilla de lienzo-director)" },
+                    "level": { "type": "string", "enum": ["simple", "media", "dificil"] },
+                    "assign": { "type": "string", "description": "Agente que debe hacerla (opcional)" }
+                },
+                "required": ["id", "notes"]
             }
         },
         {
@@ -773,6 +798,20 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                         false,
                     )
                 })
+        }
+        "team_task_brief" => {
+            let id = args["id"].as_u64().unwrap_or(0);
+            client
+                .post(
+                    "/task",
+                    &json!({
+                        "session_id": sid, "op": "brief", "id": id,
+                        "notes": trunc(args["notes"].as_str().unwrap_or(""), 4000),
+                        "level": args["level"].as_str().unwrap_or(""),
+                        "assign": args["assign"].as_str().unwrap_or("")
+                    }),
+                )
+                .map(|v| text_result(v["ok"].as_str().unwrap_or("hecho"), false))
         }
         "team_task_review" => {
             let id = args["id"].as_u64().unwrap_or(0);
