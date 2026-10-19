@@ -1390,7 +1390,11 @@ fn hook_mode(args: &[String]) {
 
     let mut body = json!({ "agent": agent, "kind": kind, "text": text, "files": files });
     // Id de la conversación del CLI: con él lienzo retoma la conversación del chat al reabrirlo.
-    if !session_key.is_empty() {
+    // Al retomar, Claude Code estrena id pero no escribe su transcript hasta el primer mensaje:
+    // hasta que exista, se sigue con el id anterior (si no, reabrirlo falla con «No conversation found»).
+    let transcript = payload["transcript_path"].as_str().unwrap_or("");
+    let written = transcript.is_empty() || std::path::Path::new(transcript).is_file();
+    if !session_key.is_empty() && written {
         body["cli_session"] = json!(session_key);
     }
     if let Some(m) = &model {

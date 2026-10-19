@@ -82,6 +82,30 @@ fn home_dir() -> Option<String> {
         .or_else(|| std::env::var("HOME").ok())
 }
 
+/// `claude … --resume <id>` con una conversación que no está en disco fallaría con «No
+/// conversation found» y dejaría la terminal sin agente (pasa si Claude estrenó id al retomar y
+/// lienzo se reinició antes del primer mensaje). Mejor que empiece una conversación nueva.
+fn drop_missing_claude_resume(line: &str, dir: Option<&str>, home: Option<&str>) -> String {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let Some(i) = words.iter().position(|w| *w == "--resume") else { return line.to_string() };
+    let Some(id) = words.get(i + 1) else { return line.to_string() };
+    if !line.to_lowercase().contains("claude") {
+        return line.to_string();
+    }
+    let (Some(dir), Some(home)) = (dir, home) else { return line.to_string() };
+    // Claude Code guarda cada carpeta en ~/.claude/projects con todo lo que no es alfanumérico como «-».
+    let slug: String = dir.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let file = std::path::Path::new(home)
+        .join(".claude")
+        .join("projects")
+        .join(slug)
+        .join(format!("{id}.jsonl"));
+    if file.is_file() {
+        return line.to_string();
+    }
+    line.replacen(&format!(" --resume {id}"), "", 1)
+}
+
 /// Compose a PowerShell `-Command` line for a launch command like
 /// `"C:\...\agy.exe" --dangerously-skip-permissions` (executable + flags).
 /// Only the executable part gets the call operator/quotes — wrapping the whole
@@ -169,6 +193,21 @@ mod tests {
         );
         assert_eq!(ps_command_line("npm run dev"), "npm run dev");
     }
+
+    #[test]
+    fn claude_resume_of_a_missing_conversation_starts_fresh() {
+        use super::drop_missing_claude_resume as drop;
+        let home = std::env::temp_dir().join(format!("lienzo-home-{}", std::process::id()));
+        let dir = r"C:\Proj\Mi App";
+        let convs = home.join(".claude").join("projects").join("C--Proj-Mi-App");
+        std::fs::create_dir_all(&convs).unwrap();
+        std::fs::write(convs.join("aaa.jsonl"), "{}").unwrap();
+        let h = home.to_str();
+        assert_eq!(drop("claude --resume aaa --x", Some(dir), h), "claude --resume aaa --x");
+        assert_eq!(drop("claude --resume zzz --x", Some(dir), h), "claude --x");
+        assert_eq!(drop("opencode --session zzz", Some(dir), h), "opencode --session zzz");
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }
 
 fn append_scrollback(buffer: &Arc<Mutex<VecDeque<u8>>>, bytes: &[u8]) {
@@ -224,6 +263,12 @@ pub fn term_spawn(
         })
         .map_err(|e| e.to_string())?;
 
+    let dir = cwd
+        .filter(|d| std::path::Path::new(d).is_dir())
+        .or_else(crate::hub::default_terminal_dir)
+        .or_else(home_dir);
+    let command = command.map(|line| drop_missing_claude_resume(&line, dir.as_deref(), home_dir().as_deref()));
+
     let shell = default_shell();
     let mut cmd = CommandBuilder::new(shell.clone());
     if let Some(line) = command.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -258,10 +303,6 @@ pub fn term_spawn(
     for (key, value) in crate::hub::terminal_env_vars() {
         cmd.env(key, value);
     }
-    let dir = cwd
-        .filter(|d| std::path::Path::new(d).is_dir())
-        .or_else(crate::hub::default_terminal_dir)
-        .or_else(home_dir);
     if let Some(dir) = dir {
         cmd.cwd(dir);
     }
