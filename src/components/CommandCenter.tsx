@@ -1465,8 +1465,7 @@ export function CommandCenter() {
         const n = info.unread === 1 ? "1 mensaje" : `${info.unread} mensajes`;
         void termWrite(
           panel.sessionId,
-          `📬 Tienes ${n} de ${from} en tu buzón: léelos con team_inbox y responde solo si hace falta.
-`,
+          `📬 Tienes ${n} de ${from} en tu buzón: léelos con team_inbox y responde solo si hace falta.\r`,
         ).catch(() => {});
       }
     }, 5000);
