@@ -127,63 +127,8 @@ pub fn connect_agent(agent: &str, project: &Path) -> Result<(Vec<String>, Vec<St
         "antigravity" => connect_antigravity(project, &exe),
         _ => Err(format!("agente desconocido: {agent}")),
     }?;
-    files.extend(write_skills(project));
+    files.extend(crate::skills::sync_files(project));
     Ok((files, notes))
-}
-
-/// Skills internas del equipo: cada CLI solo carga su descripción y lee el resto cuando
-/// le hace falta, así que no gastan contexto mientras no se usan.
-const SKILLS: &[(&str, &str)] = &[
-    ("lienzo-equipo", include_str!("../../skills/lienzo-equipo/SKILL.md")),
-    ("lienzo-ahorro", include_str!("../../skills/lienzo-ahorro/SKILL.md")),
-    ("lienzo-relevo", include_str!("../../skills/lienzo-relevo/SKILL.md")),
-    ("lienzo-revision", include_str!("../../skills/lienzo-revision/SKILL.md")),
-    ("lienzo-director", include_str!("../../skills/lienzo-director/SKILL.md")),
-    // De la comunidad (JuliusBrussee/caveman, Apache-2.0; ver skills/THIRD_PARTY.md).
-    ("caveman", include_str!("../../skills/caveman/SKILL.md")),
-];
-
-/// Skills que lienzo instalaba y ya no: medidas en un banco A/B, hacían gastar más
-/// (más turnos y comprobaciones) sin mejorar el resultado. Se quitan si siguen gestionadas.
-const RETIRED_SKILLS: &[&str] = &["investigate-first", "surgical-patch", "verify-and-stop", "lean-build"];
-
-/// Marca de las skills que gestiona lienzo: sin ella (el usuario la quitó), no se tocan.
-const SKILL_MARK: &str = "lienzo:gestionado";
-
-/// Escribe las skills en `.claude/skills` (Claude Code y OpenCode) y `.agents/skills`
-/// (Antigravity). Devuelve las rutas que cambiaron.
-fn write_skills(project: &Path) -> Vec<String> {
-    let mut out = Vec::new();
-    for root in [".claude", ".agents"] {
-        for name in RETIRED_SKILLS {
-            let dir = project.join(root).join("skills").join(name);
-            let managed = std::fs::read_to_string(dir.join("SKILL.md"))
-                .map(|t| t.contains(SKILL_MARK))
-                .unwrap_or(false);
-            if managed && std::fs::remove_dir_all(&dir).is_ok() {
-                out.push(format!("{} (quitada)", dir.display()));
-            }
-        }
-        for (name, body) in SKILLS {
-            let path = project.join(root).join("skills").join(name).join("SKILL.md");
-            let current = std::fs::read_to_string(&path).ok();
-            let body = body.replace("\r\n", "\n");
-            match &current {
-                Some(text) if text.replace("\r\n", "\n") == body => continue,
-                Some(text) if !text.contains(SKILL_MARK) => continue,
-                _ => {}
-            }
-            if let Some(dir) = path.parent() {
-                if std::fs::create_dir_all(dir).is_err() {
-                    continue;
-                }
-            }
-            if std::fs::write(&path, body).is_ok() {
-                out.push(path.display().to_string());
-            }
-        }
-    }
-    out
 }
 
 fn project_of(app: &tauri::AppHandle) -> Option<String> {
@@ -212,7 +157,18 @@ fn write_json_pretty(path: &Path, v: &Value) -> Result<(), String> {
 
 fn team_block() -> String {
     // Este bloque se carga en cada mensaje: va lo imprescindible. El detalle vive en las
-    // skills `lienzo-*`, que solo se leen cuando hacen falta.
+    // skills, que solo se leen cuando hacen falta (salvo las obligatorias).
+    let (always, auto) = crate::skills::protocol_lists();
+    let mut skills = String::new();
+    if !always.is_empty() {
+        skills.push_str(&format!(
+            "**Skills obligatorias** (léelas al empezar y síguelas en todo lo que hagas): {}.\n",
+            always.join(", ")
+        ));
+    }
+    if !auto.is_empty() {
+        skills.push_str(&format!("Guías (skills, léelas cuando toquen): {}. ", auto.join(", ")));
+    }
     format!(
         "{BLOCK_START}\n## Protocolo de equipo (lienzo)\n\n\
 Trabajas con otros agentes de IA en este proyecto, coordinados por lienzo con las herramientas MCP `team_*` (servidor `lienzo-team`).\n\n\
@@ -220,12 +176,30 @@ Trabajas con otros agentes de IA en este proyecto, coordinados por lienzo con la
 - Tareas: `team_task_claim` (trae las entregas previas) y `team_task_done` con `summary`, `files` y `evidence`.\n\
 - 📬 Buzón: cuando una herramienta avise de mensajes, léelos con `team_inbox` y contesta con `team_message` (`to`, `reply_to`). `to: \"líder\"` llega al líder.\n\
 - Avances en 1 línea con `team_update`; notas de una tarea con `team_task_comment`.\n\
-- Usa las rutas exactas de la tarea; si no está claro, pregunta antes de crear archivos.\n\
+- ¿Dudas sobre lo que quiere el usuario? Pregúntale con `team_ask_user` (preguntas con opciones concretas) en vez de suponer. Usa las rutas exactas de la tarea.\n\
+- ¿Te falta una guía para el trabajo (diseño, pruebas…)? Propón una skill con `team_skill_propose`; el usuario decide.\n\
 - Ahorro de tokens: llamadas independientes en un mismo turno (varias lecturas o búsquedas a la vez); busca antes de leer y lee solo el tramo necesario; acota la salida de los comandos; respuesta final breve.\n\n\
-Guías (skills): `lienzo-equipo` (coordinación), `lienzo-ahorro` (gastar menos tokens), `lienzo-relevo` (relevo con memoria), `lienzo-revision` (revisar entregas), `lienzo-director` (dirigir como líder). \
-Si tu CLI no tiene skills, léelas en `.claude/skills/<nombre>/SKILL.md` cuando las necesites.\n\
+{skills}Si tu CLI no tiene skills, léelas en `.claude/skills/<nombre>/SKILL.md`.\n\
 {BLOCK_END}"
     )
+}
+
+/// Reescribe el protocolo del equipo en los archivos del proyecto que ya lo tienen (al cambiar
+/// las skills). Devuelve los que cambiaron.
+pub fn refresh_protocol(project: &Path) -> Vec<String> {
+    let block = team_block();
+    let mut out = Vec::new();
+    for name in ["CLAUDE.md", "AGENTS.md"] {
+        let p = project.join(name);
+        let Ok(cur) = std::fs::read_to_string(&p) else { continue };
+        if !cur.contains(BLOCK_START) {
+            continue;
+        }
+        if write_managed_block(&p, &block).is_ok() && std::fs::read_to_string(&p).ok().as_deref() != Some(cur.as_str()) {
+            out.push(p.display().to_string());
+        }
+    }
+    out
 }
 
 fn write_managed_block(path: &Path, block: &str) -> Result<(), String> {

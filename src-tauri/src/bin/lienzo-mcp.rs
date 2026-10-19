@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 //! lienzo-mcp — puente entre los agentes de IA y el hub de equipo de lienzo.
 //!
 //! Dos modos:
@@ -296,6 +297,65 @@ fn render_context(state: &Value, me: &str) -> String {
     }
     out.push_str(&context_events(state, 0, ""));
     out.push_str(CONTEXT_FOOTER);
+    out
+}
+
+/// Cuánto espera `team_ask_user` a que contestes antes de soltar el turno del agente.
+const ASK_WAIT: std::time::Duration = std::time::Duration::from_secs(75);
+
+/// Pregunta al usuario y espera su respuesta un rato (consultando al hub). Si no llega, el agente
+/// acaba su turno y lienzo le escribirá la respuesta en la terminal cuando la haya.
+fn ask_user(client: &HubClient, sid: &str, args: &Value) -> Result<Value, String> {
+    let r = client.post(
+        "/ask",
+        &json!({ "session_id": sid, "questions": args["questions"], "context": args["context"].as_str().unwrap_or("") }),
+    )?;
+    let id = r["id"].as_u64().ok_or("el hub no devolvió la pregunta")?;
+    let start = std::time::Instant::now();
+    while start.elapsed() < ASK_WAIT {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        if let Ok(s) = client.get(&format!("/ask?id={id}")) {
+            if s["done"].as_bool() == Some(true) {
+                return Ok(text_result(s["text"].as_str().unwrap_or(""), false));
+            }
+        }
+    }
+    let d = client.post("/ask/detach", &json!({ "id": id }))?;
+    if d["done"].as_bool() == Some(true) {
+        return Ok(text_result(d["text"].as_str().unwrap_or(""), false));
+    }
+    Ok(text_result(
+        &format!(
+            "Pregunta q{id} en el chat de lienzo, aún sin respuesta. Acaba tu turno ahora con una línea («Espero tu respuesta en el panel»): no sigas a ciegas. Cuando el usuario conteste, te llegará escrita en tu terminal."
+        ),
+        false,
+    ))
+}
+
+fn render_skills(v: &Value) -> String {
+    let empty = vec![];
+    let list = v["skills"].as_array().unwrap_or(&empty);
+    let mut on = Vec::new();
+    let mut off = Vec::new();
+    for s in list {
+        let name = s["name"].as_str().unwrap_or("");
+        let cat = s["category"].as_str().unwrap_or("");
+        let desc = trunc(s["description"].as_str().unwrap_or(""), 110);
+        if s["enabled"].as_bool().unwrap_or(false) {
+            let mode = if s["mode"].as_str() == Some("always") { "obligatoria" } else { "a demanda" };
+            on.push(format!("- `{name}` ({cat}, {mode}): {desc}"));
+        } else {
+            off.push(format!("- `{name}` ({cat}): {desc}"));
+        }
+    }
+    let mut out = format!("## Skills encendidas ({})\n{}\n", on.len(), on.join("\n"));
+    if !off.is_empty() {
+        out.push_str(&format!(
+            "\n## En la biblioteca, apagadas ({})\n{}\n\nSi alguna ayudaría, propónla con team_skill_propose (source = su nombre).",
+            off.len(),
+            off.join("\n")
+        ));
+    }
     out
 }
 
@@ -685,6 +745,61 @@ fn tools_catalog() -> Value {
             }
         },
         {
+            "name": "team_ask_user",
+            "description": "Pregunta al usuario cuando una decisión dependa de su gusto o de información que no tienes (diseño, alcance, prioridades, tecnología, qué incluir). Le sale en el chat de lienzo un panel con tus opciones para que elija (siempre puede escribir otra). Hasta 4 preguntas a la vez, cada una con 2–4 opciones concretas y distintas; pon primero la que recomiendas y di por qué en su description. En modo plan, pregunta ANTES de proponer el plan si algo no está claro. Espera la respuesta un rato; si no llega, acaba tu turno: te llegará escrita en tu terminal.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "context": { "type": "string", "description": "Una frase: para qué necesitas saberlo (opcional)" },
+                    "questions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 4,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": { "type": "string", "description": "La pregunta, clara y terminada en «?»" },
+                                "header": { "type": "string", "description": "Etiqueta de 1–2 palabras («Estilo», «Alcance»)" },
+                                "options": {
+                                    "type": "array",
+                                    "minItems": 2,
+                                    "maxItems": 4,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": { "type": "string", "description": "La opción en 1–5 palabras" },
+                                            "description": { "type": "string", "description": "Qué implica elegirla" }
+                                        },
+                                        "required": ["label"]
+                                    }
+                                },
+                                "multiSelect": { "type": "boolean", "description": "true si puede elegir varias" }
+                            },
+                            "required": ["question", "options"]
+                        }
+                    }
+                },
+                "required": ["questions"]
+            }
+        },
+        {
+            "name": "team_skill_list",
+            "description": "Lista las skills (guías) de la biblioteca de lienzo: cuáles están encendidas, en qué modo y de qué categoría.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "team_skill_propose",
+            "description": "Propón al usuario instalar o encender una skill que ayudaría al trabajo (p. ej. una guía de diseño para una web). Le sale en el chat una tarjeta para instalarla; tú no instalas nada. `source`: el nombre de una skill de team_skill_list, o un enlace de GitHub (repositorio o carpeta de la skill) o a un SKILL.md.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source": { "type": "string" },
+                    "reason": { "type": "string", "description": "Por qué la necesita el equipo, en una frase" }
+                },
+                "required": ["source", "reason"]
+            }
+        },
+        {
             "name": "team_handover_save",
             "description": "Guarda tu relevo con memoria pegado a tu tarea: qué hiciste, decisiones tomadas, qué falta y archivos tocados. Úsalo cuando el contexto esté lleno o al terminar tu turno; la app compactará tu contexto después sin perder el hilo.",
             "inputSchema": {
@@ -739,6 +854,27 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                         false,
                     )
                 })
+        }
+        "team_ask_user" => ask_user(client, &sid, &args),
+        "team_skill_list" => client.get("/skills").map(|v| text_result(&render_skills(&v), false)),
+        "team_skill_propose" => {
+            let source = trunc(args["source"].as_str().unwrap_or("").trim(), 400);
+            let reason = trunc(args["reason"].as_str().unwrap_or("").trim(), 400);
+            if source.is_empty() {
+                Err("falta `source`: el nombre de una skill o un enlace".into())
+            } else {
+                client
+                    .post(
+                        "/event",
+                        &json!({ "session_id": sid, "kind": "skill", "text": reason, "files": [source], "to": "tú" }),
+                    )
+                    .map(|_| {
+                        text_result(
+                            "Propuesta enviada: al usuario le sale una tarjeta para instalarla. No esperes: sigue con lo tuyo; si la instala, aparecerá en team_skill_list.",
+                            false,
+                        )
+                    })
+            }
         }
         "team_message" => {
             let reply_to = args["reply_to"].as_u64().filter(|n| *n > 0);

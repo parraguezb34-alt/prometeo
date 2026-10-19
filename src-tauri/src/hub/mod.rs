@@ -644,6 +644,192 @@ pub struct Usage {
     pub compactions: u64,
 }
 
+// ---------------------------------------------------------------------------
+// Preguntas de un agente al usuario (team_ask_user): un panel con opciones en el chat
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct QOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct QItem {
+    pub question: String,
+    /// Etiqueta corta («Estilo», «Alcance»).
+    #[serde(default)]
+    pub header: String,
+    pub options: Vec<QOption>,
+    /// Se puede marcar más de una opción.
+    #[serde(default)]
+    pub multi: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct QAnswer {
+    pub question: String,
+    #[serde(default)]
+    pub choices: Vec<String>,
+    /// Lo que escribiste en «Otra respuesta».
+    #[serde(default)]
+    pub other: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Question {
+    pub id: u64,
+    pub agent: String,
+    pub ts_ms: u64,
+    #[serde(default)]
+    pub context: String,
+    pub items: Vec<QItem>,
+    #[serde(default)]
+    pub answers: Option<Vec<QAnswer>>,
+    #[serde(default)]
+    pub answered_ms: u64,
+    /// La herramienta del agente dejó de esperar: la respuesta se le escribe en su terminal.
+    #[serde(default)]
+    pub detached: bool,
+    /// Preferiste no contestar.
+    #[serde(default)]
+    pub dismissed: bool,
+}
+
+pub const MAX_QUESTIONS: usize = 40;
+
+const DISMISSED_NOTE: &str = "decide tú con criterio y explica qué elegiste en tu resumen.";
+
+/// Valida y limpia lo que manda un agente: 1–4 preguntas con 2–6 opciones cada una.
+pub fn clean_questions(raw: &serde_json::Value) -> Result<Vec<QItem>, String> {
+    let list = raw.as_array().ok_or("`questions` debe ser una lista")?;
+    if list.is_empty() || list.len() > 4 {
+        return Err("haz entre 1 y 4 preguntas a la vez".into());
+    }
+    let mut out = Vec::new();
+    for q in list {
+        let question = clean_text(q["question"].as_str().unwrap_or(""), 300);
+        if question.is_empty() {
+            return Err("cada pregunta necesita su texto en `question`".into());
+        }
+        let options: Vec<QOption> = q["options"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|o| {
+                        let (label, description) = match o.as_str() {
+                            Some(s) => (s.to_string(), String::new()),
+                            None => (
+                                o["label"].as_str().unwrap_or("").to_string(),
+                                o["description"].as_str().unwrap_or("").to_string(),
+                            ),
+                        };
+                        let label = clean_text(&label, 80);
+                        (!label.is_empty()).then(|| QOption { label, description: clean_text(&description, 200) })
+                    })
+                    .take(6)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if options.len() < 2 {
+            return Err(format!("«{question}»: da al menos 2 opciones concretas (el usuario siempre puede escribir otra)"));
+        }
+        out.push(QItem {
+            question,
+            header: clean_text(q["header"].as_str().unwrap_or(""), 24),
+            options,
+            multi: q["multiSelect"].as_bool().or(q["multi"].as_bool()).unwrap_or(false),
+        });
+    }
+    Ok(out)
+}
+
+/// Un agente pregunta: queda pendiente en el chat hasta que contestes.
+pub fn ask_user(inner: &mut HubInner, agent: &str, session_id: &str, context: &str, items: Vec<QItem>) -> u64 {
+    inner.question_seq += 1;
+    let id = inner.question_seq;
+    let first = items.first().map(|q| q.question.clone()).unwrap_or_default();
+    let more = if items.len() > 1 { format!(" (+{})", items.len() - 1) } else { String::new() };
+    inner.questions.push(Question {
+        id,
+        agent: agent.to_string(),
+        ts_ms: now_ms(),
+        context: clean_text(context, 600),
+        items,
+        answers: None,
+        answered_ms: 0,
+        detached: false,
+        dismissed: false,
+    });
+    while inner.questions.len() > MAX_QUESTIONS {
+        // Fuera la más vieja ya resuelta; si todas siguen abiertas, la más vieja.
+        let pos = inner.questions.iter().position(|q| q.answers.is_some() || q.dismissed).unwrap_or(0);
+        inner.questions.remove(pos);
+    }
+    push_event(inner, agent, session_id, "question", &format!("❓ q{id} · {first}{more}"), vec![], Some("tú".into()));
+    id
+}
+
+/// Las respuestas en texto, para el agente.
+pub fn format_answers(q: &Question) -> String {
+    if q.dismissed {
+        return format!("💬 El usuario prefirió no contestar tu pregunta q{}: {DISMISSED_NOTE}", q.id);
+    }
+    let Some(answers) = &q.answers else { return String::new() };
+    let mut out = format!("💬 Respuestas del usuario a tu pregunta q{}:", q.id);
+    for (i, a) in answers.iter().enumerate() {
+        let label = q
+            .items
+            .iter()
+            .find(|it| it.question == a.question)
+            .map(|it| it.question.clone())
+            .unwrap_or_else(|| a.question.clone());
+        let mut picked = a.choices.join(", ");
+        if !a.other.trim().is_empty() {
+            if !picked.is_empty() {
+                picked.push_str("; ");
+            }
+            picked.push_str(&format!("otra: {}", a.other.trim()));
+        }
+        if picked.is_empty() {
+            picked = "(sin respuesta)".into();
+        }
+        out.push_str(&format!("\n{}. {label} → {picked}", i + 1));
+    }
+    out
+}
+
+/// Contestas (o descartas con `answers: None`). Devuelve el agente y, si su herramienta ya no
+/// espera, el texto que hay que escribirle en la terminal.
+pub fn answer_question(inner: &mut HubInner, id: u64, answers: Option<Vec<QAnswer>>) -> Result<(String, Option<String>), String> {
+    let q = inner.questions.iter_mut().find(|q| q.id == id).ok_or("esa pregunta ya no existe")?;
+    if q.answers.is_some() || q.dismissed {
+        return Err("esa pregunta ya está contestada".into());
+    }
+    match answers {
+        Some(a) => q.answers = Some(a),
+        None => q.dismissed = true,
+    }
+    q.answered_ms = now_ms();
+    let text = format_answers(q);
+    let agent = q.agent.clone();
+    let late = q.detached.then(|| text.clone());
+    push_event(inner, "tú", "ui", "answer", &text, vec![], Some(agent.clone()));
+    Ok((agent, late))
+}
+
+/// La herramienta del agente se cansa de esperar: si ya hay respuesta se la lleva; si no, la
+/// pregunta queda «suelta» y la respuesta irá a su terminal.
+pub fn detach_question(inner: &mut HubInner, id: u64) -> Option<String> {
+    let q = inner.questions.iter_mut().find(|q| q.id == id)?;
+    if q.answers.is_some() || q.dismissed {
+        return Some(format_answers(q));
+    }
+    q.detached = true;
+    None
+}
+
 /// A prompt the user sent to the whole team (delivered to hooks on demand).
 #[derive(Clone)]
 pub struct Broadcast {
@@ -684,6 +870,10 @@ pub struct PersistedState {
     pub fix_limit: u32,
     #[serde(default)]
     pub strengths: HashMap<String, String>,
+    #[serde(default)]
+    pub questions: Vec<Question>,
+    #[serde(default)]
+    pub question_seq: u64,
 }
 
 pub struct HubInner {
@@ -719,6 +909,9 @@ pub struct HubInner {
     pub focus: HashMap<String, u64>,
     /// Qué se le da bien a cada agente (lo escribes tú): el líder lo usa para repartir.
     pub strengths: HashMap<String, String>,
+    /// Preguntas de los agentes al usuario (team_ask_user).
+    pub questions: Vec<Question>,
+    pub question_seq: u64,
     pub seq: u64,
     pub task_seq: u64,
 }
@@ -735,7 +928,7 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn data_dir() -> std::path::PathBuf {
+pub fn data_dir() -> std::path::PathBuf {
     let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
     let dir = std::path::PathBuf::from(base).join("lienzo");
     let _ = std::fs::create_dir_all(&dir);
@@ -804,6 +997,8 @@ pub fn persist(inner: &HubInner) {
         director: inner.director,
         fix_limit: inner.fix_limit,
         strengths: inner.strengths.clone(),
+        questions: inner.questions.clone(),
+        question_seq: inner.question_seq,
     };
     if let Ok(raw) = serde_json::to_string(&state) {
         let _ = std::fs::write(state_file(), raw);
@@ -954,6 +1149,7 @@ pub fn snapshot(inner: &HubInner, limit: usize) -> serde_json::Value {
         "director": inner.director,
         "fix_limit": fix_limit(inner),
         "strengths": inner.strengths,
+        "questions": inner.questions.iter().rev().take(20).collect::<Vec<_>>(),
         "now_ms": now,
     })
 }
@@ -1641,6 +1837,18 @@ pub fn team_dm(hub: tauri::State<'_, Hub>, agent: String, text: String) -> Resul
     Ok(())
 }
 
+/// Contestas la pregunta de un agente (`answers` vacío = la descartas). Devuelve a quién y, si
+/// su herramienta ya no esperaba, el texto que la app le escribe en la terminal.
+#[tauri::command]
+pub fn team_answer(hub: tauri::State<'_, Hub>, id: u64, answers: Option<Vec<QAnswer>>) -> Result<serde_json::Value, String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    let (agent, late) = answer_question(&mut inner, id, answers)?;
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(serde_json::json!({ "agent": agent, "late": late }))
+}
+
 /// Empieza a contar el consumo de tokens desde cero.
 #[tauri::command]
 pub fn team_usage_reset(hub: tauri::State<'_, Hub>) -> Result<(), String> {
@@ -1707,6 +1915,8 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         bases: HashMap::new(),
         focus: HashMap::new(),
         strengths: persisted.strengths,
+        questions: persisted.questions,
+        question_seq: persisted.question_seq,
         seq: persisted.seq,
         task_seq: persisted.task_seq,
         memory: persisted.memory,
@@ -1825,6 +2035,8 @@ mod inbox_tests {
             bases: HashMap::new(),
             focus: HashMap::new(),
             strengths: HashMap::new(),
+            questions: Vec::new(),
+            question_seq: 0,
             seq: 0,
             task_seq: 0,
         }
@@ -2035,5 +2247,45 @@ mod inbox_tests {
         assert_eq!(task_level("Difícil"), "dificil");
         assert_eq!(task_level("fácil"), "simple");
         assert_eq!(task_level("??"), "");
+    }
+
+    #[test]
+    fn preguntas_al_usuario() {
+        let mut h = hub();
+        // Validación: opciones mínimas y número de preguntas.
+        assert!(clean_questions(&serde_json::json!([])).is_err());
+        assert!(clean_questions(&serde_json::json!([{ "question": "¿Color?", "options": ["Azul"] }])).is_err());
+        let items = clean_questions(&serde_json::json!([
+            { "question": "¿Qué estilo?", "header": "Estilo", "options": [
+                { "label": "Minimalista", "description": "Mucho blanco" }, "Colorido" ] },
+            { "question": "¿Qué incluye?", "options": ["Login", "Pagos", "Blog"], "multiSelect": true }
+        ]))
+        .unwrap();
+        assert_eq!(items[0].options[1].label, "Colorido");
+        assert!(items[1].multi);
+
+        // Contestada mientras la herramienta espera: no hay que escribir en la terminal.
+        let id = ask_user(&mut h, "claude", "s1", "Antes de diseñar", items.clone());
+        assert!(h.events.back().unwrap().text.starts_with(&format!("❓ q{id} · ¿Qué estilo? (+1)")));
+        let (agent, late) = answer_question(
+            &mut h,
+            id,
+            Some(vec![
+                QAnswer { question: "¿Qué estilo?".into(), choices: vec!["Minimalista".into()], other: String::new() },
+                QAnswer { question: "¿Qué incluye?".into(), choices: vec!["Login".into(), "Blog".into()], other: "SEO".into() },
+            ]),
+        )
+        .unwrap();
+        assert_eq!((agent.as_str(), late), ("claude", None));
+        let text = detach_question(&mut h, id).unwrap();
+        assert!(text.contains("1. ¿Qué estilo? → Minimalista"));
+        assert!(text.contains("2. ¿Qué incluye? → Login, Blog; otra: SEO"));
+        assert!(answer_question(&mut h, id, None).is_err());
+
+        // La herramienta dejó de esperar: la respuesta va a la terminal.
+        let id2 = ask_user(&mut h, "opencode", "s2", "", items);
+        assert_eq!(detach_question(&mut h, id2), None);
+        let (_, late) = answer_question(&mut h, id2, None).unwrap();
+        assert!(late.unwrap().contains("prefirió no contestar"));
     }
 }

@@ -1989,3 +1989,370 @@ ol.md-list li::marker {
   flex: 1;
   min-width: 0;
 }
+
+/* ---- un agente te pregunta (team_ask_user) ------------------------------------------------ */
+
+.qa {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px 16px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.qa[data-done="1"] {
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-color: var(--line-soft);
+  box-shadow: none;
+}
+.qa-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13.5px;
+  color: var(--text);
+}
+.qa-head b {
+  font-weight: 650;
+}
+.qa[data-done="1"] .qa-head {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.qa[data-done="1"] .qa-head b {
+  font-weight: 600;
+}
+.qa-ic {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--accent-ink);
+  background: var(--accent);
+  animation: cv-breathe 2s ease-out infinite;
+  --ac: var(--accent);
+}
+.qa-ic[data-done="1"] {
+  width: 20px;
+  height: 20px;
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  animation: none;
+}
+.qa-ctx {
+  margin: -6px 0 0 33px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.qa-q {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.qa-q legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0;
+  margin-bottom: 9px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text);
+}
+.qa-q legend small {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--faint);
+}
+.qa-tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.qa-opts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+.qa-opt {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  animation: cv-in 0.3s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    transform 0.15s;
+}
+.qa-opt:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+.qa-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.qa-opt[data-on="1"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+.qa-mark {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--line-strong);
+  color: var(--accent-ink);
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.qa-mark[data-multi="1"] {
+  border-radius: 5px;
+}
+.qa-opt[data-on="1"] .qa-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.qa-opt[data-on="1"] .qa-mark .ic {
+  animation: cv-pop 0.25s ease-out;
+}
+.qa-opt-t {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.qa-opt-t b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.qa-opt-t small {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.qa-other {
+  display: flex;
+  min-width: 0;
+}
+.qa-other-btn {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--line-strong);
+  font-size: 12.5px;
+  color: var(--muted);
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.qa-other-btn:hover,
+.qa-other-btn:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.qa-other input {
+  all: unset;
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  font-size: 13px;
+  color: var(--text);
+  user-select: text;
+}
+.qa-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 2px;
+}
+.qa-hint {
+  font-size: 12px;
+  color: var(--faint);
+}
+.qa-send {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--accent-ink);
+  background: var(--accent);
+  transition:
+    opacity 0.15s,
+    transform 0.15s;
+}
+.qa-send .ic {
+  transform: rotate(90deg);
+}
+.qa-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.qa-send:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.qa-send:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.qa-sum {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 29px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.qa-sum li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.qa-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.qa-chips i {
+  font-style: normal;
+  padding: 1px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  background: var(--raised-2);
+}
+.qa-chips em {
+  color: var(--faint);
+}
+
+/* ---- un agente propone una skill ---------------------------------------------------------- */
+
+.sk-prop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--accent);
+}
+.sk-prop[data-on="1"] {
+  border-left-color: var(--ok);
+}
+.sk-prop-ic {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.sk-prop[data-on="1"] .sk-prop-ic {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.sk-prop-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.sk-prop-main b {
+  font-weight: 600;
+  color: var(--text);
+}
+.sk-prop-main code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+.sk-prop-main p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.sk-prop-src {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sk-prop-btns {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cv-btn[data-tone="accent"] {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+.cv-btn[data-tone="accent"]:hover {
+  background: color-mix(in srgb, var(--accent) 85%, #fff);
+}
+@media (prefers-reduced-motion: reduce) {
+  .qa-opt,
+  .qa-ic {
+    animation: none;
+  }
+}

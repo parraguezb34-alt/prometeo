@@ -5,7 +5,13 @@ import type { CSSProperties, ReactNode } from "react";
 import { displayName, kindOf, splitAttachments } from "../lib/attach";
 import { stampLabel } from "../lib/chats";
 import { agentColor, agentInitial, agentLabel, shortPath } from "../lib/team";
-import type { TeamEvent } from "../lib/team";
+import type { QAnswer, TeamEvent, TeamQuestion } from "../lib/team";
+import type { Skill } from "../lib/skills";
+import { QuestionCard, SkillCard } from "./AskCards";
+
+const NO_QUESTIONS: TeamQuestion[] = [];
+const NO_SKILLS: Skill[] = [];
+const noop = async () => {};
 import { askPhrase, buildTimeline, clock, eventImages, isDispatch, samePath, span } from "../lib/timeline";
 import type { Part, Row, TaskInfo, Turn } from "../lib/timeline";
 import { parseNotice, splitOrders } from "../lib/notices";
@@ -46,6 +52,12 @@ type Props = {
   onOpenTask: (id: number) => void;
   onTerminal: (agent: string) => void;
   onInterrupt: (agent: string) => void;
+  /** Preguntas de los agentes (team_ask_user) y cómo contestarlas. */
+  questions?: TeamQuestion[];
+  onAnswer?: (id: number, answers: QAnswer[] | null) => Promise<void>;
+  /** Biblioteca de skills (para las propuestas de los agentes) y cómo instalar una. */
+  skills?: Skill[];
+  onSkill?: (source: string, agent: string) => Promise<void>;
   /** Para la página de pruebas: de dónde salen las imágenes (por defecto, del disco vía Tauri). */
   loadImage?: (path: string, project: string | null) => Promise<string>;
 };
@@ -286,6 +298,10 @@ export function ChatView({
   onOpenTask,
   onTerminal,
   onInterrupt,
+  questions = NO_QUESTIONS,
+  onAnswer = noop,
+  skills = NO_SKILLS,
+  onSkill = noop,
   loadImage,
 }: Props) {
   const load = loadImage ?? diskImage;
@@ -608,6 +624,24 @@ export function ChatView({
             </button>
           )}
         </div>
+      );
+    }
+    if (part.k === "note" && e.kind === "question") {
+      const id = Number(/^❓ q(\d+)/.exec(e.text)?.[1] ?? 0);
+      const q = questions.find((x) => x.id === id);
+      if (q) return <QuestionCard key={part.key} q={q} onAnswer={onAnswer} />;
+    }
+    if (part.k === "note" && e.kind === "skill" && e.files[0]) {
+      return (
+        <SkillCard
+          key={part.key}
+          seq={e.seq}
+          agent={agent}
+          source={e.files[0]}
+          reason={e.text}
+          skills={skills}
+          onSkill={onSkill}
+        />
       );
     }
     if (part.k === "note") {

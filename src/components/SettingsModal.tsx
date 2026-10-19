@@ -12,15 +12,17 @@ import { cachePct, sumUsage, totalTokens, usageOf } from "../lib/usage";
 import { fmtTokens } from "./AgentCard";
 import type { DetectResult, ModelCatalog, TeamDetails, TeamState } from "../lib/team";
 import { Icon } from "./Icon";
+import { SkillsPanel } from "./SkillsPanel";
 import type { IconName } from "./Icon";
 import { EFFORT_LABEL } from "./TeamModal";
 
-export type SettingsSection = "general" | "agents" | "team" | "usage" | "dispatch" | "notify" | "hub";
+export type SettingsSection = "general" | "agents" | "team" | "skills" | "usage" | "dispatch" | "notify" | "hub";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: IconName; hint: string }[] = [
   { id: "general", label: "General", icon: "settings", hint: "Proyecto y arranque" },
   { id: "agents", label: "Agentes", icon: "users", hint: "Conexión y modelos" },
   { id: "team", label: "Equipo", icon: "shield", hint: "Líder, normas y mensajes" },
+  { id: "skills", label: "Skills", icon: "book", hint: "Guías de los agentes" },
   { id: "usage", label: "Consumo", icon: "pulse", hint: "Tokens y ahorro" },
   { id: "dispatch", label: "Despacho", icon: "zap", hint: "Reparto de tareas" },
   { id: "notify", label: "Avisos", icon: "bell", hint: "Notificaciones" },
@@ -122,6 +124,7 @@ export function SettingsModal(props: Props) {
             {section === "general" && <General {...props} />}
             {section === "agents" && <Agents {...props} />}
             {section === "team" && <Team {...props} />}
+            {section === "skills" && <SkillsPanel say={props.say} />}
             {section === "usage" && <Usage {...props} />}
             {section === "dispatch" && <Dispatch {...props} />}
             {section === "notify" && <Notify {...props} />}

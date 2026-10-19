@@ -11,7 +11,8 @@ import type { LiveAgent } from "../components/ChatView";
 import { DestPicker } from "../components/DestPicker";
 import type { Dest } from "../components/DestPicker";
 import { Icon } from "../components/Icon";
-import type { TeamEvent } from "../lib/team";
+import type { TeamEvent, TeamQuestion } from "../lib/team";
+import type { Skill } from "../lib/skills";
 
 /**
  * Banco de pruebas del chat (solo en desarrollo: http://localhost:1420/chat-lab.html).
@@ -146,6 +147,11 @@ const FIXTURE: TeamEvent[] = [
     "📝 Nueva tarea #19 «Formato de moneda en facturas» del usuario: escribe su encargo con team_task_brief (notes con la plantilla, level y, si hace falta, assign). Hasta entonces no se reparte.",
     { to: "claude" },
   ),
+  ev(16.9, "claude", "question", "❓ q1 · ¿Qué estilo visual quieres para la web? (+1)", { to: "tú" }),
+  ev(16.95, "antigravity", "skill", "Para la web nueva nos vendría bien una guía de diseño de interfaces.", {
+    files: ["https://github.com/anthropics/skills/tree/main/skills/frontend-design"],
+    to: "tú",
+  }),
   ev(17, "claude", "task", "#18 la asume claude (era de antigravity)"),
   ev(17.1, "claude", "tool", "Bash node utilidades/fecha.test.js"),
   ev(
@@ -178,6 +184,42 @@ function Lab() {
   const add = (e: Partial<TeamEvent> & { agent: string; kind: string; text: string }) =>
     setEvents((cur) => [...cur, { seq: seq++, ts_ms: Date.now(), session_id: "", files: [], ...e }]);
   const [lastAction, setLastAction] = useState<Record<string, string>>({});
+  const [questions, setQuestions] = useState<TeamQuestion[]>([
+    {
+      id: 1,
+      agent: "claude",
+      ts_ms: T0 + 16.9 * 60_000,
+      context: "Antes de repartir el trabajo de la web de facturas, quiero confirmar dos cosas.",
+      items: [
+        {
+          question: "¿Qué estilo visual quieres para la web?",
+          header: "Estilo",
+          multi: false,
+          options: [
+            { label: "Sobrio y profesional", description: "Recomendado: tonos neutros, mucho aire, ideal para facturas." },
+            { label: "Moderno y colorido", description: "Degradados y acentos vivos; más llamativo." },
+            { label: "Como la app actual", description: "Reutiliza los colores y fuentes de lienzo." },
+          ],
+        },
+        {
+          question: "¿Qué debe incluir la primera versión?",
+          header: "Alcance",
+          multi: true,
+          options: [
+            { label: "Lista de facturas", description: "" },
+            { label: "Crear y editar", description: "" },
+            { label: "Exportar a PDF", description: "" },
+            { label: "Pagos online", description: "Necesita cuenta de Stripe" },
+          ],
+        },
+      ],
+      answers: null,
+      answered_ms: 0,
+      detached: false,
+      dismissed: false,
+    },
+  ]);
+  const [skillLib, setSkillLib] = useState<Skill[]>([]);
   const live: LiveAgent[] = useMemo(
     () =>
       Object.entries(busy).map(([name, since]) => ({
@@ -328,6 +370,30 @@ function Lab() {
           onTerminal={(a) => console.log("terminal", a)}
           onInterrupt={(a) => toggle(a)}
           loadImage={fakeImage}
+          questions={questions}
+          onAnswer={async (id, answers) => {
+            await new Promise((r) => setTimeout(r, 400));
+            setQuestions((qs) =>
+              qs.map((q) => (q.id === id ? { ...q, answers, dismissed: answers === null, answered_ms: Date.now() } : q)),
+            );
+          }}
+          skills={skillLib}
+          onSkill={async (source) => {
+            await new Promise((r) => setTimeout(r, 900));
+            setSkillLib([
+              {
+                name: "frontend-design",
+                description: "Interfaces con identidad propia",
+                category: "diseno",
+                mode: "auto",
+                enabled: true,
+                builtin: false,
+                locked: false,
+                source,
+                installed_ms: Date.now(),
+              },
+            ]);
+          }}
         />
       </section>
       <div className="cc-comp">

@@ -111,6 +111,10 @@ fn handle(mut request: tiny_http::Request, app: &AppHandle) {
         ("GET", "/inbox") => cmd_inbox(app, &query),
         ("POST", "/inbox/ack") => cmd_inbox_ack(app, &payload),
         ("POST", "/usage") => cmd_usage(app, &payload),
+        ("POST", "/ask") => cmd_ask(app, &payload),
+        ("GET", "/ask") => cmd_ask_status(app, &query),
+        ("POST", "/ask/detach") => cmd_ask_detach(app, &payload),
+        ("GET", "/skills") => Ok(json!({ "skills": crate::skills::catalog() })),
         _ => Err(format!("ruta desconocida: {} {}", method, path)),
     };
 
@@ -265,6 +269,46 @@ fn cmd_event(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     .ok_or("hub no inicializado")?;
     hub::notify_ui();
     Ok(out)
+}
+
+/// Un agente pregunta al usuario (team_ask_user): sale un panel con opciones en el chat.
+fn cmd_ask(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let sid = payload["session_id"].as_str().unwrap_or("").to_string();
+    let items = hub::clean_questions(&payload["questions"])?;
+    let context = payload["context"].as_str().unwrap_or("").to_string();
+    let id = hub::with_inner(app, |inner| {
+        let (agent, sid) = hub::agent_label(inner, &sid, payload["agent"].as_str());
+        let id = hub::ask_user(inner, &agent, &sid, &context, items);
+        hub::persist(inner);
+        id
+    })
+    .ok_or("hub no inicializado")?;
+    hub::notify_ui();
+    Ok(json!({ "id": id }))
+}
+
+/// ¿Ya contestó? (la herramienta del agente lo consulta mientras espera)
+fn cmd_ask_status(app: &AppHandle, query: &std::collections::HashMap<String, String>) -> Result<Value, String> {
+    let id: u64 = query.get("id").and_then(|s| s.parse().ok()).ok_or("falta id")?;
+    hub::with_inner(app, |inner| {
+        let q = inner.questions.iter().find(|q| q.id == id)?;
+        let done = q.answers.is_some() || q.dismissed;
+        Some(json!({ "done": done, "text": if done { hub::format_answers(q) } else { String::new() } }))
+    })
+    .flatten()
+    .ok_or_else(|| "esa pregunta ya no existe".to_string())
+}
+
+/// La herramienta deja de esperar: se lleva la respuesta si ya está; si no, irá a la terminal.
+fn cmd_ask_detach(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let id = payload["id"].as_u64().ok_or("falta id")?;
+    let text = hub::with_inner(app, |inner| {
+        let t = hub::detach_question(inner, id);
+        hub::persist(inner);
+        t
+    })
+    .ok_or("hub no inicializado")?;
+    Ok(json!({ "done": text.is_some(), "text": text.unwrap_or_default() }))
 }
 
 /// Buzón de un agente: sus mensajes sin leer. Con `ack=1` quedan leídos.

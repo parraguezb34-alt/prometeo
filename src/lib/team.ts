@@ -120,7 +120,24 @@ export type TeamState = {
   fix_limit?: number;
   /** Qué se le da bien a cada agente (lo escribes tú; el líder lo usa para repartir). */
   strengths?: Record<string, string>;
+  /** Preguntas de los agentes al usuario (las últimas, de la más nueva a la más vieja). */
+  questions?: TeamQuestion[];
   now_ms: number;
+};
+
+export type QOption = { label: string; description: string };
+export type QItem = { question: string; header: string; options: QOption[]; multi: boolean };
+export type QAnswer = { question: string; choices: string[]; other: string };
+export type TeamQuestion = {
+  id: number;
+  agent: string;
+  ts_ms: number;
+  context: string;
+  items: QItem[];
+  answers: QAnswer[] | null;
+  answered_ms: number;
+  detached: boolean;
+  dismissed: boolean;
 };
 
 export type InboxInfo = { unread: number; direct?: number; last_seq: number; from: string[] };
@@ -230,6 +247,10 @@ export const teamTaskOp = (id: number, op: string) =>
  * its terminal by the caller). */
 export const teamDm = (agent: string, text: string) =>
   invoke<void>("team_dm", { agent, text });
+/** Contesta la pregunta de un agente (`null` = descartarla). `late`: el texto que hay que
+ * escribirle en la terminal porque su herramienta ya no esperaba. */
+export const teamAnswer = (id: number, answers: QAnswer[] | null) =>
+  invoke<{ agent: string; late: string | null }>("team_answer", { id, answers });
 /** Empieza a contar el consumo de tokens desde cero. */
 export const teamUsageReset = () => invoke<void>("team_usage_reset");
 /** Modo director: el líder reparte, revisa y manda corregir (como mucho `fixLimit` rondas). */
@@ -341,7 +362,10 @@ export function buildPlanPrompt(text: string, leader: string): string {
     "todavía. Descompón el trabajo en tareas claras con team_task_create (una por parte, con título " +
     "accionable) y publica tu plan con team_update: qué tarea, qué agente debería llevarla y en qué " +
     "orden. Si la petición nombra una carpeta o archivos, escribe en cada tarea la ruta completa " +
-    "(absoluta) para que todos trabajen en el mismo sitio. Espera la aprobación del usuario para empezar."
+    "(absoluta) para que todos trabajen en el mismo sitio. ANTES de proponer nada, si la petición deja " +
+    "decisiones abiertas (alcance, estilo, tecnología, prioridades, qué incluir), pregúntaselas al " +
+    "usuario con team_ask_user: varias preguntas con opciones concretas, para no trabajar a ciegas. " +
+    "Espera la aprobación del usuario para empezar."
   );
 }
 

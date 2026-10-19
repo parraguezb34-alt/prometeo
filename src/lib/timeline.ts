@@ -146,6 +146,8 @@ export function buildTimeline(events: TeamEvent[]): Row[] {
     }
     const key = `${e.seq}`;
 
+    // Tus respuestas a una pregunta se ven en su propia tarjeta.
+    if (e.kind === "answer") continue;
     if (e.agent === "tú") {
       turn = null;
       // Los despachos los escribe lienzo en tu nombre: son un aviso, no un mensaje tuyo.

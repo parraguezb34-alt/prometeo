@@ -53,4 +53,15 @@ Tu entrega no se cierra sola: el líder la revisa y la aprueba o te la devuelve.
 ## Si te bloqueas
 Escribe al líder (`to: "líder"`) con qué te falta, en una frase, y sigue con otra parte mientras tanto.
 
+## Preguntar al usuario (`team_ask_user`)
+Cuando una decisión depende de su gusto o de algo que no sabes (estilo, alcance, tecnología, prioridades), no supongas: pregúntale. Le sale un panel en el chat para elegir.
+- Junta las dudas en una sola llamada: hasta 4 preguntas, cada una con 2–4 opciones concretas y distintas. Puede escribir otra respuesta, así que no hace falta la opción «Otra».
+- Pon primero la opción que recomiendas y di en su `description` por qué y qué implica.
+- `header` corto («Estilo», «Alcance») y `multiSelect: true` si puede elegir varias.
+- En modo plan, pregunta antes de proponer el plan. No preguntes lo que puedes averiguar leyendo el proyecto.
+- Si no contesta a tiempo, acaba tu turno: la respuesta te llegará escrita en tu terminal.
+
+## Skills
+Si al equipo le vendría bien una guía que no tiene (diseño, pruebas, un framework), mira `team_skill_list` y propón una con `team_skill_propose` (nombre de la biblioteca o enlace de GitHub). La instala el usuario.
+
 <!-- lienzo:gestionado — lienzo actualiza este archivo al conectar. Quita esta línea para conservar tus cambios. -->

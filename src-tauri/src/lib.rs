@@ -1,6 +1,7 @@
 pub mod hub;
 mod project;
 mod pty;
+pub mod skills;
 
 // Los tests también necesitan el manifiesto de Windows que tauri-build solo
 // enlaza en los binarios (ver build.rs); sin él no llegan a arrancar.
@@ -37,6 +38,7 @@ pub fn run() {
             hub::team_memory_resolve,
             hub::team_memory_forget,
             hub::team_dm,
+            hub::team_answer,
             hub::team_leader,
             hub::team_usage_reset,
             hub::team_director,
@@ -62,6 +64,11 @@ pub fn run() {
             project::project_save_image,
             project::project_save_attachment,
             project::project_attach_path,
+            skills::skills_list,
+            skills::skills_set,
+            skills::skills_remove,
+            skills::skills_read,
+            skills::skills_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

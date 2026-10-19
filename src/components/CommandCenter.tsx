@@ -21,6 +21,7 @@ import {
   teamConnect,
   teamDetails,
   teamDetect,
+  teamAnswer,
   teamDm,
   teamLeader,
   teamMemoryAdd,
@@ -34,7 +35,9 @@ import {
   teamState,
   teamTaskOp,
 } from "../lib/team";
-import type { DetectResult, InboxInfo, ModelCatalog, TeamAgent, TeamEvent, TeamState, TeamTask } from "../lib/team";
+import type { DetectResult, InboxInfo, ModelCatalog, QAnswer, TeamAgent, TeamEvent, TeamState, TeamTask } from "../lib/team";
+import { findSkill, skillsInstall, skillsList, skillsSet } from "../lib/skills";
+import type { Skill } from "../lib/skills";
 import {
   EMPTY_DISPATCH,
   dispatchPrompt,
@@ -47,6 +50,7 @@ import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, save
 import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
 import { projectAttachPath, projectInfo, projectRecent, projectSaveAttachment, projectSaveImage } from "../lib/project";
+import { dropOwner } from "../lib/dropzone";
 import { attachMeta, attachmentLine, countLines, isLongPaste, PASTED_NAME, textToBase64 } from "../lib/attach";
 import type { Attachment } from "../lib/attach";
 import type { ProjectInfo } from "../lib/project";
@@ -361,6 +365,52 @@ export function CommandCenter() {
     const last = lastByAgent.get(a.name);
     return last?.kind === "waiting" && !isNotice(last);
   });
+  /** Preguntas de los agentes (team_ask_user) que aún esperan tu respuesta. */
+  const openQuestions = (state?.questions ?? []).filter((q) => !q.answers && !q.dismissed);
+
+  // ---- skills: la biblioteca, para las propuestas de los agentes en el chat ----------------
+  const [skillLib, setSkillLib] = useState<Skill[]>([]);
+  const skillEvents = (state?.events ?? []).filter((e) => e.kind === "skill").length;
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    skillsList()
+      .then((l) => setSkillLib(l.skills))
+      .catch(() => {});
+  }, [skillEvents, overlay]);
+
+  /** Instala (o enciende) la skill que propuso un agente desde su tarjeta del chat. */
+  const skillFromChat = async (source: string, agent: string) => {
+    try {
+      const have = findSkill(skillLib, source);
+      if (have) {
+        setSkillLib((await skillsSet(have.name, { enabled: true })).skills);
+        say(`Skill «${have.name}» encendida: la verán todos los agentes.`);
+        return;
+      }
+      const r = await skillsInstall(source);
+      setSkillLib(r.library.skills);
+      const added = r.library.skills.filter((k) => r.installed.includes(k.name));
+      if (added.length === 1) say(`Skill «${added[0].name}» instalada y encendida (la propuso ${agentLabel(agent)}).`);
+      else say(`${added.length} skills añadidas, apagadas: elige cuáles encender en Ajustes → Skills.`);
+    } catch (e) {
+      say(`No pude instalarla: ${errMsg(e)}`, true);
+    }
+  };
+
+  /** Contestas una pregunta. Si el agente ya no esperaba, se la escribe en su terminal. */
+  const answerQuestion = async (id: number, answers: QAnswer[] | null) => {
+    try {
+      const r = await teamAnswer(id, answers);
+      if (r.late) {
+        const p = panelForAgent(getLayout().panels, r.agent);
+        if (p?.sessionId) await termWrite(p.sessionId, `${r.late.replace(/\s*\n\s*/g, " · ")}\r`);
+        else say(`Respuesta guardada: ${agentLabel(r.agent)} no tiene la terminal abierta.`, true);
+      }
+      refresh();
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
 
   // Task each agent is currently holding (claimed).
   const claimedBy = useMemo(() => {
@@ -1247,6 +1297,12 @@ export function CommandCenter() {
       else if (t === "drop") {
         setDragOver(false);
         const paths = ev.payload.paths;
+        // Otra pantalla (Ajustes → Skills) se queda con lo que sueltes.
+        const owner = dropOwner();
+        if (owner) {
+          owner(paths);
+          return;
+        }
         if (paths.length > MAX_ATTS) say(`Como mucho ${MAX_ATTS} adjuntos por mensaje.`, true);
         for (const src of paths.slice(0, MAX_ATTS)) {
           const image = isImagePath(src);
@@ -1491,6 +1547,10 @@ export function CommandCenter() {
       const who = agentLabel(e.agent);
       if (e.kind === "waiting" && !isNotice(e)) {
         if (want.ask) notify(`${who} necesita tu respuesta`, `Pide ${askPhrase(e.text)}.`);
+      } else if (e.kind === "question") {
+        if (want.ask) notify(`${who} te pregunta`, e.text.replace(/^❓ q\d+ · /, ""));
+      } else if (e.kind === "skill") {
+        if (want.ask) notify(`${who} propone una skill`, e.text.slice(0, 160));
       } else if (e.kind === "task") {
         const t = parseTask(e);
         if (want.done && t?.op === "hecha") notify(`${who} terminó la tarea #${t.id}`, t.detail || "Tarea hecha.");
@@ -1979,16 +2039,28 @@ export function CommandCenter() {
         </div>
 
         <TeamStrip agents={roster} states={states} onOpen={() => setOverlay("team")} />
-        {blocked.length > 0 && (
+        {blocked.length + openQuestions.length > 0 && (
           <button
             className="cc-alert"
             onClick={() => {
-              setDrawerTab("tasks");
-              setOverlay("tasks");
+              // Las preguntas se contestan en el chat; los permisos, en su terminal (tareas).
+              if (openQuestions.length > 0) {
+                setOverlay(null);
+                setView("feed");
+              } else {
+                setDrawerTab("tasks");
+                setOverlay("tasks");
+              }
             }}
           >
-            <Icon name="warn" size={14} />
-            {blocked.length === 1 ? "1 espera tu respuesta" : `${blocked.length} esperan tu respuesta`}
+            <Icon name={openQuestions.length > 0 ? "msg" : "warn"} size={14} />
+            {openQuestions.length > 0 && blocked.length === 0
+              ? openQuestions.length === 1
+                ? "Una pregunta para ti"
+                : `${openQuestions.length} preguntas para ti`
+              : blocked.length + openQuestions.length === 1
+                ? "1 espera tu respuesta"
+                : `${blocked.length + openQuestions.length} esperan tu respuesta`}
           </button>
         )}
 
@@ -2061,6 +2133,10 @@ export function CommandCenter() {
               onOpenPath={openPath}
               onTerminal={openTerm}
               onInterrupt={(n) => void interrupt(n)}
+              questions={state?.questions}
+              onAnswer={answerQuestion}
+              skills={skillLib}
+              onSkill={skillFromChat}
               empty={
                 agentView ? (
                   <div className="cc-empty">
