@@ -8,6 +8,8 @@ import { agentColor, agentInitial, agentLabel, shortPath } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
 import { askPhrase, buildTimeline, clock, eventImages, isDispatch, samePath, span } from "../lib/timeline";
 import type { Part, Row, TaskInfo, Turn } from "../lib/timeline";
+import { parseNotice, splitOrders } from "../lib/notices";
+import type { Notice } from "../lib/notices";
 import { doingOf, statusEs, stepOf, workSummary } from "../lib/steps";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
@@ -501,11 +503,12 @@ export function ChatView({
     const files = part.e.files;
     const longText = t.detail.length > 220;
     const expanded = open.has(part.key);
+    const review = t.op === "entregada";
     return (
-      <div className="cv-done" key={part.key} data-new={isNew(part.key)}>
+      <div className="cv-done" key={part.key} data-new={isNew(part.key)} data-state={review ? "review" : "done"}>
         <div className="cv-done-head">
           <span className="cv-done-ic">
-            <Icon name="check" size={12} />
+            <Icon name={review ? "eye" : "check"} size={12} />
           </span>
           <b>
             #{t.id}
@@ -619,7 +622,9 @@ export function ChatView({
         </div>
       );
     }
-    // Texto del agente.
+    // Texto del agente (o, si es una corrección del líder, su tarjeta).
+    const fix = e.agent !== "tú" ? parseNotice(e.text) : null;
+    if (fix?.kind === "fix") return renderFix(part.key, e, fix);
     const to =
       e.kind === "broadcast" ? "a todo el equipo" : e.to && e.to !== "tú" ? `a ${agentLabel(e.to)}` : null;
     return (
@@ -812,6 +817,114 @@ export function ChatView({
     );
   };
 
+  // ---- avisos del modo director --------------------------------------------------------
+
+  /** Lienzo avisa a un agente: una línea con lo esencial; lo demás, al desplegar. */
+  const renderNotice = (r: Extract<Row, { k: "notice" }>): ReactNode => {
+    const { n, e } = r;
+    const to = agentLabel(e.to || leader);
+    const isOpen = open.has(r.key);
+    let icon: IconName = "bell";
+    let title: ReactNode = null;
+    let sub = "";
+    let body: ReactNode = null;
+    if (n.kind === "review") {
+      icon = "eye";
+      title = (
+        <>
+          Pidió a <b>{to}</b> revisar <b>#{n.task}</b> · {n.title}
+        </>
+      );
+      sub = `Entrega de ${agentLabel(n.by)}${n.round ? ` · tras ${n.round} ${n.round === 1 ? "ronda" : "rondas"} de corrección` : ""}`;
+      // El resumen ya sale en la tarjeta de la entrega: aquí, lo que usa el líder para decidir.
+      body = (
+        <>
+          {n.evidence && (
+            <div className="cv-notice-ev">
+              <span>Evidencia</span>
+              <code>{n.evidence}</code>
+            </div>
+          )}
+          <div className="cv-done-foot">
+            {n.files.slice(0, 4).map((f) => (
+              <button className="md-path" key={f} onClick={() => openPath(f)} title={f}>
+                {shortPath(f)}
+              </button>
+            ))}
+            <span className="cv-grow" />
+            <button className="cv-link" onClick={() => onOpenTask(n.task)}>
+              <Icon name="diff" size={12} />
+              Ver cambios
+            </button>
+          </div>
+        </>
+      );
+    } else if (n.kind === "remind") {
+      title = (
+        <>
+          Recordó a <b>{to}</b> {n.count === 1 ? "una entrega" : `${n.count} entregas`} por revisar
+        </>
+      );
+      sub = n.tasks;
+    } else if (n.kind === "brief") {
+      icon = "pencil";
+      title = (
+        <>
+          Pidió a <b>{to}</b> el encargo de <b>#{n.task}</b> · {n.title}
+        </>
+      );
+      sub = "Hasta que lo escriba, la tarea no se reparte";
+    }
+    return (
+      <div className="cv-notice" key={r.key} data-kind={n.kind} data-open={isOpen ? "1" : "0"} data-new={isNew(r.key)}>
+        <button
+          className="cv-notice-head"
+          onClick={() => body && toggle(r.key)}
+          aria-expanded={body ? isOpen : undefined}
+          data-static={body ? undefined : "1"}
+          title={body ? (isOpen ? "Ocultar la entrega" : "Ver la entrega") : undefined}
+        >
+          <span className="cv-notice-ic">
+            <Icon name={icon} size={13} />
+          </span>
+          <span className="cv-notice-t">
+            <span>
+              <span className="cv-notice-who">Lienzo</span> {title}
+            </span>
+            {sub && <small>{sub}</small>}
+          </span>
+          <span className="cv-meta">{stamp(e.ts_ms)}</span>
+          {body && (
+            <span className="cv-work-chev">
+              <Icon name="chev" size={13} />
+            </span>
+          )}
+        </button>
+        {isOpen && body && <div className="cv-notice-body">{body}</div>}
+      </div>
+    );
+  };
+
+  /** El líder devuelve una entrega: sus órdenes como lista, sin las instrucciones para el agente. */
+  const renderFix = (key: string, e: TeamEvent, n: Extract<Notice, { kind: "fix" }>) => (
+    <div className="cv-fix" key={key} data-new={isNew(key)}>
+      <div className="cv-fix-head">
+        <span className="cv-fix-ic">
+          <Icon name="refresh" size={12} />
+        </span>
+        <span className="cv-fix-t">
+          Devolvió <b>#{n.task}</b> a <b>{agentLabel(e.to ?? "")}</b> para corregir
+        </span>
+        <span className="cv-fix-tag" data-last={n.last ? "1" : "0"}>
+          {n.last ? "Última ronda" : `Ronda ${n.round} de ${n.limit}`}
+        </span>
+      </div>
+      <div className="cv-fix-body">
+        <Markdown text={splitOrders(n.notes)} onPath={openPath} />
+      </div>
+    </div>
+  );
+
   // ---- filas ---------------------------------------------------------------------------
 
   const renderRow = (r: Row): ReactNode => {
@@ -856,6 +969,7 @@ export function ChatView({
         </div>
       );
     }
+    if (r.k === "notice") return renderNotice(r);
     if (r.k === "sys") {
       const e = r.e;
       const imgs = e.kind === "image" ? e.files : [];

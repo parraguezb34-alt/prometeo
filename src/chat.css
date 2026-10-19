@@ -791,6 +791,191 @@ ol.md-list li::marker {
   font-size: 11.5px;
 }
 
+/* entregada y esperando la revisión del líder: ámbar en vez de verde */
+.cv-done[data-state="review"] {
+  background: color-mix(in srgb, var(--warn) 4%, var(--surface));
+  border-color: color-mix(in srgb, var(--warn) 24%, var(--line-soft));
+}
+.cv-done[data-state="review"] .cv-done-ic {
+  color: #2a1d00;
+  background: var(--warn);
+}
+.cv-done[data-state="review"] .cv-done-tag {
+  color: var(--warn);
+}
+.cv-done[data-state="review"][data-new="1"]::after {
+  background-image: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in srgb, var(--warn) 14%, transparent) 50%,
+    transparent 70%
+  );
+}
+
+/* corrección que manda el líder */
+.cv-fix {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--warn);
+}
+.cv-fix-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.cv-fix-head b {
+  color: var(--text);
+  font-weight: 650;
+}
+.cv-fix-ic {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.cv-fix-t {
+  min-width: 0;
+}
+.cv-fix-tag {
+  margin-left: auto;
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.cv-fix-tag[data-last="1"] {
+  color: var(--warn);
+}
+.cv-fix-body .md {
+  font-size: 13.5px;
+  line-height: 1.6;
+  gap: 6px;
+}
+
+/* aviso de lienzo a un agente: una línea, desplegable */
+.cv-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cv-notice-head {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 8px 2px 0;
+  border-radius: 10px;
+  transition: background 0.15s;
+}
+.cv-notice-head[data-static="1"] {
+  cursor: default;
+}
+.cv-notice-head:not([data-static="1"]):hover {
+  background: var(--surface);
+}
+.cv-notice-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.cv-notice-ic {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+}
+.cv-notice[data-kind="review"] .cv-notice-ic {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.cv-notice-t {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.cv-notice-t > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cv-notice-t b {
+  color: var(--text-soft);
+  font-weight: 650;
+}
+.cv-notice-who {
+  font-weight: 700;
+  color: var(--text-soft);
+}
+.cv-notice-t small {
+  font-size: 11.5px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cv-notice[data-open="1"] .cv-work-chev {
+  transform: rotate(180deg);
+}
+.cv-notice-body {
+  margin-left: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  animation: cv-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.cv-notice-body .md {
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.cv-notice-ev {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.cv-notice-ev span {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.cv-notice-ev code {
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-soft);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 /* reparto: varias tareas creadas */
 .cv-plan {
   display: flex;

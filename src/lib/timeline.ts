@@ -1,4 +1,6 @@
 import { dayGroup } from "./chats";
+import { parseNotice } from "./notices";
+import type { Notice } from "./notices";
 import type { TeamEvent } from "./team";
 
 /**
@@ -28,7 +30,9 @@ export type Row =
   | { k: "day"; key: string; label: string }
   | { k: "user"; key: string; e: TeamEvent }
   | Turn
-  | { k: "sys"; key: string; e: TeamEvent };
+  | { k: "sys"; key: string; e: TeamEvent }
+  /** Aviso de lienzo a un agente (revisa esta entrega, escribe este encargo…). */
+  | { k: "notice"; key: string; e: TeamEvent; n: Notice };
 
 /** Acciones de bajo nivel: van plegadas en «Trabajó · N acciones». */
 export const WORK_KINDS = new Set(["tool", "claim", "release"]);
@@ -148,6 +152,15 @@ export function buildTimeline(events: TeamEvent[]): Row[] {
       const mine = TEXT_KINDS.has(e.kind) && !isDispatch(e);
       rows.push(mine ? { k: "user", key, e } : { k: "sys", key, e });
       continue;
+    }
+    // Avisos de lienzo a un agente: una línea propia, no un turno de «Lienzo».
+    if (e.agent === "lienzo") {
+      const n = parseNotice(e.text);
+      if (n) {
+        turn = null;
+        rows.push({ k: "notice", key, e, n });
+        continue;
+      }
     }
     // Imagen nueva en el proyecto que ningún agente reclamó.
     if (!e.agent) {
