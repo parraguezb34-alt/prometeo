@@ -9,7 +9,8 @@ import type { TeamEvent } from "./team";
  */
 
 /** Qué le pasó a una tarea en un aviso del hub («#15 tomada por …», «#15 hecha por …: resumen»). */
-export type TaskOp = "creada" | "tomada" | "liberada" | "hecha" | "borrada";
+/** «entregada» = hecha y a la espera de la revisión del líder (modo director). */
+export type TaskOp = "creada" | "tomada" | "liberada" | "hecha" | "entregada" | "aprobada" | "borrada";
 export type TaskInfo = { id: number; op: TaskOp; detail: string };
 
 export type Part =
@@ -43,7 +44,7 @@ const IMAGE_IN_TEXT =
   /[A-Za-z]:[\\/](?:[^\\/:*?"<>|\r\n]+[\\/])*[^\\/:*?"<>|\s]+\.(?:png|jpe?g|gif|webp|bmp)\b|(?:\.{0,2}[\\/])?(?:[\w@.-]+[\\/])*[\w@.-]+\.(?:png|jpe?g|gif|webp|bmp)\b/gi;
 
 const TASK_RE =
-  /^#(\d+)\s+(creada|tomada|claimed|liberada|open|hecha|borrada)\b(?:\s+por\s+[^\s:]+)?:?\s*([\s\S]*)$/i;
+  /^#(\d+)\s+(creada|tomada|claimed|liberada|open|hecha|entregada|aprobada|borrada)\b(?:\s+por\s+[^\s:]+)?:?\s*([\s\S]*)$/i;
 
 /** Aviso automático del despachador de lienzo («📌 Despacho: #15 «…»»). */
 export function isDispatch(e: TeamEvent): boolean {

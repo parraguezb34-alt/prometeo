@@ -513,7 +513,8 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
         .chars()
         .take(200)
         .collect();
-    let notes: String = payload["notes"].as_str().unwrap_or("").chars().take(500).collect();
+    // Las notas son el encargo completo (objetivo, archivos, criterio de hecho…).
+    let notes: String = payload["notes"].as_str().unwrap_or("").chars().take(4000).collect();
     let parents_in: Vec<u64> = payload["parents"]
         .as_array()
         .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
@@ -548,37 +549,19 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 }
                 let parents = hub::check_parents(&inner.tasks, &parents_in)?;
                 inner.task_seq += 1;
-                let task = hub::Task {
-                    id: inner.task_seq,
-                    title: title.clone(),
-                    status: "open".into(),
-                    owner: String::new(),
-                    notes,
-                    created_ms: hub::now_ms(),
-                    handover: None,
-                    parents,
-                    result: None,
-                    comments: vec![],
-                };
+                let mut task = hub::Task::new(inner.task_seq, title.clone(), notes, parents);
+                task.level = hub::task_level(payload["level"].as_str().unwrap_or(""));
+                task.assign = hub::resolve_agent(inner, payload["assign"].as_str().unwrap_or(""));
                 inner.tasks.push(task.clone());
-                hub::push_event(
-                    inner,
-                    &agent,
-                    &sid,
-                    "task",
-                    &if task.parents.is_empty() {
-                        format!("#{} creada: {}", task.id, title)
-                    } else {
-                        format!(
-                            "#{} creada: {} (depende de {})",
-                            task.id,
-                            title,
-                            task.parents.iter().map(|p| format!("#{p}")).collect::<Vec<_>>().join(", ")
-                        )
-                    },
-                    vec![],
-                    None,
-                );
+                let mut text = format!("#{} creada: {}", task.id, title);
+                if !task.parents.is_empty() {
+                    let ids = task.parents.iter().map(|p| format!("#{p}")).collect::<Vec<_>>().join(", ");
+                    text.push_str(&format!(" (depende de {ids})"));
+                }
+                if !task.assign.is_empty() {
+                    text.push_str(&format!(" → {}", task.assign));
+                }
+                hub::push_event(inner, &agent, &sid, "task", &text, vec![], None);
                 hub::persist(inner);
                 Ok(json!({ "task": task }))
             }
@@ -587,6 +570,12 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 let c = hub::add_task_comment(inner, id, &agent, &sid, text)?;
                 hub::persist(inner);
                 Ok(json!({ "comment": c }))
+            }
+            "review" => {
+                let verdict = payload["verdict"].as_str().unwrap_or("");
+                let msg = hub::review_task(inner, id, &agent, &sid, verdict, payload["notes"].as_str().unwrap_or(""))?;
+                hub::persist(inner);
+                Ok(json!({ "ok": msg }))
             }
             "claim" | "done" | "reopen" => {
                 let Some(pos) = inner.tasks.iter().position(|t| t.id == id) else {
@@ -602,6 +591,9 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                         if snapshot.status == "done" {
                             return Err(format!("la tarea #{id} ya está hecha"));
                         }
+                        if snapshot.status == "review" {
+                            return Err(format!("la tarea #{id} está en revisión del líder; espera su decisión"));
+                        }
                         if snapshot.status == "claimed" && !snapshot.owner.is_empty() && snapshot.owner != agent {
                             return Err(format!(
                                 "la tarea #{id} ya está en manos de {}; elige otra o coordínate con esa persona",
@@ -616,6 +608,9 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                         }
                     }
                     "done" => {
+                        if snapshot.status == "review" {
+                            return Err(format!("la tarea #{id} ya está entregada y en revisión; espera las órdenes del líder"));
+                        }
                         if snapshot.status == "claimed" && !snapshot.owner.is_empty() && snapshot.owner != agent {
                             return Err(format!("la tarea #{id} es de {}; no la cierres tú", snapshot.owner));
                         }
@@ -635,6 +630,8 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                     _ => {}
                 }
 
+                // Modo director: la entrega de un trabajador espera la revisión del líder.
+                let reviewer = if op == "done" { hub::reviewer_for(inner, &agent) } else { None };
                 {
                     let task = &mut inner.tasks[pos];
                     match op.as_str() {
@@ -643,7 +640,7 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                             task.owner = agent.clone();
                         }
                         "done" => {
-                            task.status = "done".into();
+                            task.status = if reviewer.is_some() { "review" } else { "done" }.into();
                             task.owner = agent.clone();
                             task.result = Some(hub::TaskResult {
                                 summary: summary.clone(),
@@ -660,14 +657,16 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                             task.status = "open".into();
                             task.owner = String::new();
                             task.result = None;
+                            task.fix_rounds = 0;
                         }
                     }
                 }
                 let task = inner.tasks[pos].clone();
                 let (text, ev_files) = if op == "done" {
+                    let verb = if reviewer.is_some() { "entregada" } else { "hecha" };
                     (
                         format!(
-                            "#{} hecha por {}: {}",
+                            "#{} {verb} por {}: {}",
                             task.id,
                             agent,
                             summary.chars().take(160).collect::<String>()
@@ -683,6 +682,9 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                     (format!("#{} {} por {}", task.id, verb, agent), vec![])
                 };
                 hub::push_event(inner, &agent, &sid, "task", &text, ev_files, None);
+                if let Some(leader) = &reviewer {
+                    hub::ask_review(inner, task.id, leader);
+                }
                 hub::persist(inner);
 
                 // Al reclamar, el agente recibe las entregas de las tareas de las que depende.
@@ -706,7 +708,12 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 } else {
                     vec![]
                 };
-                Ok(json!({ "task": task, "parents_results": parents_results, "comments": task.comments }))
+                Ok(json!({
+                    "task": task,
+                    "parents_results": parents_results,
+                    "comments": task.comments,
+                    "reviewer": reviewer,
+                }))
             }
             "list" => Ok(json!({ "tasks": inner.tasks })),
             _ => Err("operación de tarea desconocida".into()),

@@ -15,6 +15,10 @@ export type DTask = {
   status: string;
   owner: string;
   parents: number[];
+  /** simple | media | dificil ("" = sin indicar). */
+  level?: string;
+  /** Agente al que va dirigida ("" = a quien esté libre). */
+  assign?: string;
 };
 
 export type DAgent = {
@@ -111,6 +115,26 @@ export function retryTask(state: DispatchState, taskId: number): DispatchState {
   return { ...state, taskFails, triedBy, pending };
 }
 
+/**
+ * ¿Puede `agent` recibir esta tarea? Si va dirigida a alguien, solo ese. En modo director
+ * las difíciles son del líder y el resto de los demás (salvo que no haya nadie más).
+ */
+export function eligible(
+  task: DTask,
+  agent: string,
+  ctx: { leader: string; director: boolean; hasWorkers: boolean },
+  cfg = DISPATCH_CONFIG,
+): boolean {
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  if (task.assign) return same(task.assign, agent);
+  const isLeader = !!ctx.leader && same(agent, ctx.leader);
+  if (ctx.director && ctx.leader) {
+    if (task.level === "dificil") return isLeader;
+    return !isLeader || !ctx.hasWorkers;
+  }
+  return !(cfg.leaderMode === "never" && isLeader);
+}
+
 /** El envío a la terminal falló: cuenta como aviso sin respuesta. */
 export function sendFailed(
   state: DispatchState,
@@ -137,10 +161,11 @@ export function sendFailed(
  */
 export function tick(
   prev: DispatchState,
-  input: { now: number; tasks: DTask[]; agents: DAgent[]; leader: string },
+  input: { now: number; tasks: DTask[]; agents: DAgent[]; leader: string; director?: boolean },
   cfg: DispatchConfig = DISPATCH_CONFIG,
 ): DispatchResult {
   const { now, tasks, agents, leader } = input;
+  const director = !!input.director;
   const notes: string[] = [];
   const state: DispatchState = {
     ...prev,
@@ -205,7 +230,6 @@ export function tick(
       a.online &&
       a.hasTerminal &&
       !a.blocked &&
-      !(cfg.leaderMode === "never" && a.name === leader) &&
       !busy.has(a.name) &&
       now >= (state.agentPausedUntil[a.name] ?? 0) &&
       now - (state.lastSentToAgent[a.name] ?? 0) >= cfg.agentCooldownMs &&
@@ -215,10 +239,12 @@ export function tick(
 
   // 5) Primera tarea para la que haya agente: los trabajadores antes que el líder
   //    (que coordina), y entre ellos el que lleva más tiempo sin recibir nada.
+  const hasWorkers = agents.some((a) => a.online && a.hasTerminal && a.name !== leader);
+  const ctx = { leader, director, hasWorkers };
   for (const task of ready) {
     const tried = state.triedBy[task.id] ?? [];
     const options = free
-      .filter((a) => !tried.includes(a.name))
+      .filter((a) => !tried.includes(a.name) && eligible(task, a.name, ctx, cfg))
       .sort((a, b) => {
         const lead = cfg.leaderMode === "last" ? Number(a.name === leader) - Number(b.name === leader) : 0;
         if (lead !== 0) return lead;
@@ -236,11 +262,13 @@ export function tick(
 
 /** El aviso que se escribe en la terminal del agente (una sola línea). */
 export function dispatchPrompt(task: DTask): string {
-  const notes = task.notes.trim() ? ` Notas: ${task.notes.trim().replace(/\s+/g, " ")}.` : "";
+  // Un encargo largo no se teclea en la terminal: llega entero al reclamar la tarea.
+  const brief = task.notes.trim().replace(/\s+/g, " ");
+  const notes = !brief ? "" : brief.length <= 240 ? ` Notas: ${brief}.` : " Trae un encargo detallado: síguelo al pie de la letra.";
   const title = task.title.trim().replace(/\s+/g, " ");
   return (
     `📌 Despacho de lienzo: toma la tarea #${task.id} «${title}».${notes} ` +
-    `1) Reclámala con team_task_claim (id ${task.id}); recibirás las entregas de las tareas previas. ` +
+    `1) Reclámala con team_task_claim (id ${task.id}); recibirás el encargo y las entregas de las tareas previas. ` +
     `2) Mira team_context y reserva con team_claim_files lo que vayas a editar. ` +
     `3) Al terminar, ciérrala con team_task_done: summary (qué hiciste), files y evidence (cómo lo comprobaste). ` +
     `Usa exactamente las rutas que indique la tarea; si no está claro dónde crear algo, pregunta con team_message antes de crear archivos.`

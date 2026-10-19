@@ -130,7 +130,7 @@ pub struct Task {
     pub id: u64,
     pub title: String,
     #[serde(default)]
-    pub status: String, // open | claimed | done
+    pub status: String, // open | claimed | review | done
     #[serde(default)]
     pub owner: String,
     #[serde(default)]
@@ -148,6 +148,35 @@ pub struct Task {
     /// Tablón de la tarea: notas de los agentes y tuyas.
     #[serde(default)]
     pub comments: Vec<TaskComment>,
+    /// Dificultad que le puso quien la creó: simple | media | dificil (vacío = sin indicar).
+    #[serde(default)]
+    pub level: String,
+    /// Agente al que va dirigida (vacío = a quien esté libre).
+    #[serde(default)]
+    pub assign: String,
+    /// Rondas de corrección que lleva en modo director.
+    #[serde(default)]
+    pub fix_rounds: u32,
+}
+
+impl Task {
+    pub fn new(id: u64, title: String, notes: String, parents: Vec<u64>) -> Task {
+        Task {
+            id,
+            title,
+            status: "open".into(),
+            owner: String::new(),
+            notes,
+            created_ms: now_ms(),
+            handover: None,
+            parents,
+            result: None,
+            comments: vec![],
+            level: String::new(),
+            assign: String::new(),
+            fix_rounds: 0,
+        }
+    }
 }
 
 /// Padres de `task` que aún no están hechos (un padre que ya no existe cuenta como cumplido).
@@ -332,6 +361,144 @@ pub fn check_parents(tasks: &[Task], parents: &[u64]) -> Result<Vec<u64>, String
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// Modo director: el líder reparte, revisa las entregas y manda corregir
+// ---------------------------------------------------------------------------
+
+pub const DEFAULT_FIX_LIMIT: u32 = 2;
+
+pub fn fix_limit(inner: &HubInner) -> u32 {
+    if inner.fix_limit == 0 { DEFAULT_FIX_LIMIT } else { inner.fix_limit }
+}
+
+/// Normaliza la dificultad de una tarea; lo que no se reconoce queda sin indicar.
+pub fn task_level(level: &str) -> String {
+    match level.trim().to_lowercase().as_str() {
+        "simple" | "facil" | "fácil" | "baja" => "simple",
+        "media" | "medio" | "normal" => "media",
+        "dificil" | "difícil" | "alta" | "compleja" => "dificil",
+        _ => "",
+    }
+    .to_string()
+}
+
+/// Nombre de un agente, aceptando el alias del líder.
+pub fn resolve_agent(inner: &HubInner, name: &str) -> String {
+    resolve_to(inner, name)
+}
+
+fn online(inner: &HubInner, name: &str) -> bool {
+    let now = now_ms();
+    inner
+        .agents
+        .values()
+        .any(|a| a.name.eq_ignore_ascii_case(name) && now.saturating_sub(a.last_seen_ms) < AGENT_TTL_MS)
+}
+
+/// Líder que debe revisar la entrega de `agent`, si la hay: en modo director, con el
+/// líder conectado y cuando no entrega él mismo (ni tú). Si no, la tarea se cierra sin más.
+pub fn reviewer_for(inner: &HubInner, agent: &str) -> Option<String> {
+    if !inner.director || agent == "tú" {
+        return None;
+    }
+    let leader = inner.leader.clone()?;
+    (!leader.eq_ignore_ascii_case(agent) && online(inner, &leader)).then_some(leader)
+}
+
+/// Pide al líder que revise una entrega: le llega como mensaje directo, así que lo despierta.
+pub fn ask_review(inner: &mut HubInner, id: u64, leader: &str) {
+    let Some(task) = inner.tasks.iter().find(|t| t.id == id) else { return };
+    let Some(r) = task.result.clone() else { return };
+    let round = if task.fix_rounds > 0 { format!(" (tras la ronda {} de correcciones)", task.fix_rounds) } else { String::new() };
+    let files = if r.files.is_empty() { "—".to_string() } else { r.files.join(", ") };
+    let evidence = if r.evidence.is_empty() { "sin evidencia".to_string() } else { clean_text(&r.evidence, 300) };
+    let text = format!(
+        "🔎 Revisa la entrega de #{id} «{}» de {}{round}: {} · Archivos: {files} · Evidencia: {evidence}. \
+         Decide con team_task_review: verdict ok, fix (con órdenes concretas) o take (la haces tú).",
+        clean_text(&task.title, 120),
+        r.by,
+        clean_text(&r.summary, 500),
+    );
+    push_event_full(inner, "lienzo", "hub", "message", &text, r.files, Some(leader.to_string()), Some(id));
+}
+
+/// Decisión sobre una entrega en revisión. `ok` la cierra, `fix` la devuelve a su dueño con
+/// órdenes (como mucho `fix_limit` rondas) y `take` la pasa a quien revisa.
+pub fn review_task(
+    inner: &mut HubInner,
+    id: u64,
+    by: &str,
+    session_id: &str,
+    verdict: &str,
+    notes: &str,
+) -> Result<String, String> {
+    let is_leader = inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(by));
+    if by != "tú" && !is_leader {
+        return Err("solo el líder (o tú) decide sobre las entregas".into());
+    }
+    let limit = fix_limit(inner);
+    let notes = notes.trim().chars().take(2000).collect::<String>();
+    let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) else {
+        return Err("tarea no encontrada".into());
+    };
+    if task.status != "review" {
+        return Err(format!("la tarea #{id} no está en revisión (estado: {})", task.status));
+    }
+    let owner = task.owner.clone();
+    let title = clean_text(&task.title, 100);
+    let now = now_ms();
+    match verdict.trim().to_lowercase().as_str() {
+        "ok" | "aprobar" | "aprobada" => {
+            task.status = "done".into();
+            if !notes.is_empty() {
+                task.comments.push(TaskComment { by: by.into(), text: format!("✅ {notes}"), ts_ms: now });
+            }
+            push_event_full(inner, by, session_id, "task", &format!("#{id} aprobada por {by}"), vec![], None, Some(id));
+            Ok(format!("#{id} aprobada y cerrada."))
+        }
+        "fix" | "corregir" => {
+            if notes.is_empty() {
+                return Err("di qué corregir en `notes`: órdenes concretas (archivo, qué cambiar, cómo comprobarlo)".into());
+            }
+            if task.fix_rounds >= limit {
+                return Err(format!(
+                    "#{id} ya lleva {} rondas de corrección: asúmela (verdict take) o apruébala (ok)",
+                    task.fix_rounds
+                ));
+            }
+            task.fix_rounds += 1;
+            let round = task.fix_rounds;
+            task.status = "claimed".into();
+            task.comments.push(TaskComment { by: by.into(), text: format!("🔧 Ronda {round}/{limit}: {notes}"), ts_ms: now });
+            let last = if round >= limit { " Es la última ronda: si no queda bien, la asumirá el líder." } else { "" };
+            let text = format!(
+                "🔧 Corrige #{id} «{title}» (ronda {round} de {limit}): {notes}{last} \
+                 Al terminar, ciérrala otra vez con team_task_done (summary, files, evidence)."
+            );
+            push_event_full(inner, by, session_id, "message", &text, vec![], Some(owner.clone()), Some(id));
+            Ok(format!("#{id} devuelta a {owner} para corregir (ronda {round} de {limit})."))
+        }
+        "take" | "asumir" => {
+            task.status = "claimed".into();
+            task.owner = by.into();
+            let why = if notes.is_empty() { String::new() } else { format!(": {notes}") };
+            task.comments.push(TaskComment { by: by.into(), text: format!("🧭 La asume {by}{why}"), ts_ms: now });
+            push_event_full(
+                inner,
+                by,
+                session_id,
+                "task",
+                &format!("#{id} la asume {by} (era de {owner})"),
+                vec![],
+                None,
+                Some(id),
+            );
+            Ok(format!("#{id} es tuya ahora: termínala y ciérrala con team_task_done."))
+        }
+        other => Err(format!("veredicto «{other}» desconocido: usa ok, fix o take")),
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Claim {
     pub path: String,
@@ -398,6 +565,10 @@ pub struct PersistedState {
     pub usage: HashMap<String, Usage>,
     #[serde(default)]
     pub usage_since: u64,
+    #[serde(default)]
+    pub director: bool,
+    #[serde(default)]
+    pub fix_limit: u32,
 }
 
 pub struct HubInner {
@@ -423,6 +594,10 @@ pub struct HubInner {
     pub usage_since: u64,
     /// Mensajes de la telemetría ya sumados (para no contar dos veces un mismo turno).
     pub usage_seen: VecDeque<String>,
+    /// Modo director: las entregas de los demás pasan por la revisión del líder.
+    pub director: bool,
+    /// Rondas de corrección antes de que el líder tenga que asumir la tarea (0 = las de por defecto).
+    pub fix_limit: u32,
     pub seq: u64,
     pub task_seq: u64,
 }
@@ -505,6 +680,8 @@ pub fn persist(inner: &HubInner) {
         memory_seq: inner.memory_seq,
         usage: inner.usage.clone(),
         usage_since: inner.usage_since,
+        director: inner.director,
+        fix_limit: inner.fix_limit,
     };
     if let Ok(raw) = serde_json::to_string(&state) {
         let _ = std::fs::write(state_file(), raw);
@@ -652,6 +829,8 @@ pub fn snapshot(inner: &HubInner, limit: usize) -> serde_json::Value {
         "inbox": inbox_summary(inner),
         "usage": inner.usage,
         "usage_since": inner.usage_since,
+        "director": inner.director,
+        "fix_limit": fix_limit(inner),
         "now_ms": now,
     })
 }
@@ -1125,18 +1304,7 @@ pub fn team_add_task(
     let parents = check_parents(&inner.tasks, &parents.unwrap_or_default())?;
     inner.task_seq += 1;
     let id = inner.task_seq;
-    inner.tasks.push(Task {
-        id,
-        title: title.trim().to_string(),
-        status: "open".into(),
-        owner: String::new(),
-        notes: String::new(),
-        created_ms: now_ms(),
-        handover: None,
-        parents,
-        result: None,
-        comments: vec![],
-    });
+    inner.tasks.push(Task::new(id, title.trim().to_string(), String::new(), parents));
     push_event(
         &mut inner,
         "tú",
@@ -1200,8 +1368,12 @@ pub fn team_memory_forget(hub: tauri::State<'_, Hub>, id: u64) -> Result<(), Str
 #[tauri::command]
 pub fn team_task_op(hub: tauri::State<'_, Hub>, id: u64, op: String) -> Result<(), String> {
     let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
-    if op == "delete" {
-        delete_task(&mut inner, id)?;
+    if op == "delete" || op == "approve" {
+        if op == "delete" {
+            delete_task(&mut inner, id)?;
+        } else {
+            review_task(&mut inner, id, "tú", "ui", "ok", "")?;
+        }
         persist(&inner);
         drop(inner);
         notify_ui();
@@ -1228,6 +1400,7 @@ pub fn team_task_op(hub: tauri::State<'_, Hub>, id: u64, op: String) -> Result<(
                 task.status = "open".into();
                 task.owner = String::new();
                 task.result = None; // la entrega anterior ya no vale
+                task.fix_rounds = 0;
             }
             _ => return Err("operación desconocida".into()),
         }
@@ -1259,6 +1432,30 @@ pub fn team_leader(hub: tauri::State<'_, Hub>, leader: Option<String>) -> Result
             Some(t)
         }
     });
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
+/// Modo director: el líder reparte y revisa; `fix_limit` = rondas de corrección antes de asumirla.
+#[tauri::command]
+pub fn team_director(hub: tauri::State<'_, Hub>, enabled: bool, fix_limit: Option<u32>) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    inner.director = enabled;
+    if let Some(n) = fix_limit {
+        inner.fix_limit = n.clamp(1, 5);
+    }
+    let text = if enabled {
+        format!(
+            "modo director activado: {} reparte y revisa las entregas (máx. {} rondas de corrección)",
+            inner.leader.clone().unwrap_or_else(|| "el líder".into()),
+            self::fix_limit(&inner)
+        )
+    } else {
+        "modo director desactivado: las tareas se cierran sin revisión".to_string()
+    };
+    push_event(&mut inner, "tú", "ui", "update", &text, vec![], None);
     persist(&inner);
     drop(inner);
     notify_ui();
@@ -1327,6 +1524,8 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         usage: persisted.usage,
         usage_since: if persisted.usage_since > 0 { persisted.usage_since } else { now_ms() },
         usage_seen: VecDeque::new(),
+        director: persisted.director,
+        fix_limit: persisted.fix_limit,
         seq: persisted.seq,
         task_seq: persisted.task_seq,
         memory: persisted.memory,
@@ -1384,18 +1583,9 @@ mod task_tests {
     use super::*;
 
     fn task(id: u64, status: &str, parents: &[u64]) -> Task {
-        Task {
-            id,
-            title: format!("t{id}"),
-            status: status.into(),
-            owner: String::new(),
-            notes: String::new(),
-            created_ms: 0,
-            handover: None,
-            parents: parents.to_vec(),
-            result: None,
-            comments: vec![],
-        }
+        let mut t = Task::new(id, format!("t{id}"), String::new(), parents.to_vec());
+        t.status = status.into();
+        t
     }
 
     #[test]
@@ -1449,6 +1639,8 @@ mod inbox_tests {
             usage: HashMap::new(),
             usage_since: 0,
             usage_seen: VecDeque::new(),
+            director: false,
+            fix_limit: 0,
             seq: 0,
             task_seq: 0,
         }
@@ -1522,5 +1714,97 @@ mod inbox_tests {
         report_ctx(&mut h, "s1", "claude", None, Some(25_000), None);
         let u = &h.usage["claude"];
         assert_eq!((u.freed, u.compactions), (130_000, 1));
+    }
+
+    fn join(h: &mut HubInner, name: &str) {
+        h.agents.insert(
+            name.into(),
+            AgentInfo {
+                session_id: name.into(),
+                name: name.into(),
+                project: String::new(),
+                pid: 0,
+                last_seen_ms: now_ms(),
+                model: None,
+                ctx_tokens: None,
+                ctx_window: None,
+                ctx_ms: None,
+                cli_session: None,
+            },
+        );
+    }
+
+    /// Hub en modo director con una tarea #1 de opencode entregada y en revisión.
+    fn delivered() -> HubInner {
+        let mut h = hub();
+        h.director = true;
+        join(&mut h, "claude");
+        let mut t = Task::new(1, "login".into(), String::new(), vec![]);
+        t.status = "review".into();
+        t.owner = "opencode".into();
+        t.result = Some(TaskResult {
+            summary: "hecho".into(),
+            files: vec!["src/a.ts".into()],
+            evidence: "npm test ok".into(),
+            by: "opencode".into(),
+            ts_ms: 0,
+        });
+        h.tasks.push(t);
+        h
+    }
+
+    #[test]
+    fn director_reviews_only_workers_with_leader_online() {
+        let mut h = hub();
+        assert_eq!(reviewer_for(&h, "opencode"), None, "sin modo director no hay revisión");
+        h.director = true;
+        assert_eq!(reviewer_for(&h, "opencode"), None, "líder desconectado: no se bloquea la tarea");
+        join(&mut h, "claude");
+        assert_eq!(reviewer_for(&h, "opencode").as_deref(), Some("claude"));
+        assert_eq!(reviewer_for(&h, "claude"), None, "el líder no se revisa a sí mismo");
+        assert_eq!(reviewer_for(&h, "tú"), None);
+    }
+
+    #[test]
+    fn review_request_reaches_leader_inbox() {
+        let mut h = delivered();
+        ask_review(&mut h, 1, "claude");
+        let inbox = inbox_unread(&h, "claude");
+        assert_eq!(inbox.len(), 1);
+        assert!(inbox[0].text.contains("#1") && inbox[0].text.contains("npm test ok"));
+    }
+
+    #[test]
+    fn fix_goes_back_to_owner_until_limit() {
+        let mut h = delivered();
+        assert!(review_task(&mut h, 1, "opencode", "s", "ok", "").is_err(), "un trabajador no se aprueba");
+        assert!(review_task(&mut h, 1, "claude", "s", "fix", "  ").is_err(), "fix pide órdenes");
+        review_task(&mut h, 1, "claude", "s", "fix", "falta el test de error").unwrap();
+        assert_eq!((h.tasks[0].status.as_str(), h.tasks[0].fix_rounds), ("claimed", 1));
+        let orders = inbox_unread(&h, "opencode");
+        assert!(orders.iter().any(|e| e.text.contains("falta el test de error")));
+        h.tasks[0].status = "review".into();
+        review_task(&mut h, 1, "claude", "s", "fix", "otra vez").unwrap();
+        h.tasks[0].status = "review".into();
+        assert!(review_task(&mut h, 1, "claude", "s", "fix", "y otra").is_err(), "tope de rondas");
+        review_task(&mut h, 1, "claude", "s", "take", "").unwrap();
+        assert_eq!((h.tasks[0].status.as_str(), h.tasks[0].owner.as_str()), ("claimed", "claude"));
+    }
+
+    #[test]
+    fn ok_closes_and_unblocks_children() {
+        let mut h = delivered();
+        h.tasks.push(Task::new(2, "hija".into(), String::new(), vec![1]));
+        assert_eq!(unmet_parents(&h.tasks, &h.tasks[1]), vec![1], "en revisión aún bloquea");
+        review_task(&mut h, 1, "tú", "ui", "ok", "").unwrap();
+        assert_eq!(h.tasks[0].status, "done");
+        assert!(unmet_parents(&h.tasks, &h.tasks[1]).is_empty());
+    }
+
+    #[test]
+    fn levels_are_normalized() {
+        assert_eq!(task_level("Difícil"), "dificil");
+        assert_eq!(task_level("fácil"), "simple");
+        assert_eq!(task_level("??"), "");
     }
 }

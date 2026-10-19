@@ -40,8 +40,15 @@ Cierra con `team_task_done`:
 Después libera tus reservas con `team_release_files`.
 
 ## Roles
-- **Líder**: parte la misión en tareas pequeñas e independientes, reparte, revisa entregas (skill `lienzo-revision`) y cura la memoria. Programa poco.
+- **Líder**: parte la misión en tareas pequeñas e independientes, reparte, revisa entregas (skill `lienzo-revision`) y cura la memoria. Programa poco. En modo director, sigue la skill `lienzo-director`.
 - **Resto**: ejecuta su parte, avisa pronto si se bloquea y no compite por el mando.
+
+## Si hay director (modo director)
+Tu entrega no se cierra sola: el líder la revisa y la aprueba o te la devuelve.
+- El encargo completo te llega al reclamar la tarea. Cúmplelo al pie de la letra: rutas, nombres y formatos exactos, y nada fuera de lo pedido.
+- Antes de entregar, ejecuta el comando de «Comprueba con» y pega su salida (acotada) en `evidence`. No entregues sin haberlo ejecutado.
+- Si algo del encargo es ambiguo o imposible, pregunta al líder (`to: "líder"`) antes de improvisar.
+- Si te llega 🔧 con correcciones, aplica cada punto, vuelve a comprobar y cierra otra vez con `team_task_done`.
 
 ## Si te bloqueas
 Escribe al líder (`to: "líder"`) con qué te falta, en una frase, y sigue con otra parte mientras tanto.

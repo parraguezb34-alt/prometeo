@@ -660,6 +660,7 @@ export function CommandCenter() {
     tasks: TeamTask[];
     agents: TeamAgent[];
     leader: string;
+    director: boolean;
     blocked: string[];
     panels: Panel[];
     lastByAgent: Map<string, TeamEvent>;
@@ -698,9 +699,12 @@ export function CommandCenter() {
             status: t.status,
             owner: t.owner,
             parents: t.parents ?? [],
+            level: t.level ?? "",
+            assign: t.assign ?? "",
           })),
           agents: [...byName.values()],
           leader: cur.leader,
+          director: cur.director,
         }, dispatchConfig(cfg));
         let next = res.state;
         for (const note of res.notes) say(note, true);
@@ -1323,6 +1327,7 @@ export function CommandCenter() {
     tasks: dispatchTasks,
     agents,
     leader,
+    director: !!state?.director,
     // Un agente sin sesión iniciada no puede tomar tareas: el despachador lo trata como ocupado.
     blocked: [...blockedNames, ...authIssues],
     events: state?.events ?? [],
@@ -1405,6 +1410,7 @@ export function CommandCenter() {
       } else if (e.kind === "task") {
         const t = parseTask(e);
         if (want.done && t?.op === "hecha") notify(`${who} terminó la tarea #${t.id}`, t.detail || "Tarea hecha.");
+        if (want.done && t?.op === "aprobada") notify(`${who} aprobó la tarea #${t.id}`, "Revisada y cerrada.");
       } else if (e.kind === "reply" || (e.kind === "message" && e.to === "tú")) {
         if (want.reply) notify(`${who} respondió`, e.text.replace(/\s+/g, " ").slice(0, 160));
       }

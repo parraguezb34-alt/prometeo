@@ -358,8 +358,19 @@
 .td-parked {
   color: var(--warn);
 }
-.td-disp {
+.td-disp,
+.td-review {
   color: var(--accent);
+}
+.td-level {
+  padding: 0 6px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  font-size: 10.5px;
+}
+.td-level[data-l="dificil"] {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
 }
 .td-when {
   margin-left: auto;

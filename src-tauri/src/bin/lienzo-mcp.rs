@@ -102,6 +102,20 @@ fn context_sections(state: &Value, me: &str) -> Vec<(&'static str, String)> {
     let mut lead = String::new();
     if let Some(leader) = state["leader"].as_str().filter(|s| !s.is_empty()) {
         lead.push_str(&format!("Líder del equipo: {} (coordina y reparte).\n", leader));
+        if state["director"].as_bool().unwrap_or(false) {
+            let rounds = state["fix_limit"].as_u64().unwrap_or(2);
+            if leader.eq_ignore_ascii_case(me) {
+                lead.push_str(&format!(
+                    "Modo director: diriges tú. Divide el trabajo en encargos cerrados con team_task_create (notes, level, assign), \
+revisa cada entrega con team_task_review (máx. {rounds} rondas de fix) y haz tú solo lo difícil. Pauta: skill lienzo-director.\n"
+                ));
+            } else {
+                lead.push_str(&format!(
+                    "Modo director: {leader} reparte y revisa tus entregas. Sigue el encargo al pie de la letra, \
+entrega con evidencia real y corrige lo que te pida.\n"
+                ));
+            }
+        }
     }
     if let Some(charter) = state["charter"].as_str().filter(|s| !s.is_empty()) {
         lead.push_str(&format!("Normas del equipo:\n{}\n", trunc(charter, 520)));
@@ -308,6 +322,9 @@ fn render_feed(feed: &Value) -> String {
 /// Estado legible de una tarea: «open·lista», «open·bloqueada por #1,#2», «claimed», «done».
 fn task_flag(t: &Value, tasks: &[Value]) -> String {
     let status = t["status"].as_str().unwrap_or("open");
+    if status == "review" {
+        return "en revisión".to_string();
+    }
     if status != "open" {
         return status.to_string();
     }
@@ -381,8 +398,15 @@ fn render_tasks(state: &Value, all: bool) -> String {
     let mut lines: Vec<String> = vec![];
     for t in tasks.iter().filter(|t| !skip.contains(&t["id"].as_u64().unwrap_or(0))) {
         let owner = t["owner"].as_str().unwrap_or("");
+        let mut tags = String::new();
+        if let Some(level) = t["level"].as_str().filter(|l| !l.is_empty()) {
+            tags.push_str(&format!(" {level}"));
+        }
+        if let Some(to) = t["assign"].as_str().filter(|a| !a.is_empty() && owner.is_empty()) {
+            tags.push_str(&format!(" →{to}"));
+        }
         lines.push(format!(
-            "#{} [{}]{} {}",
+            "#{} [{}{tags}]{} {}",
             t["id"].as_u64().unwrap_or(0),
             task_flag(t, tasks),
             if owner.is_empty() {
@@ -392,7 +416,7 @@ fn render_tasks(state: &Value, all: bool) -> String {
             },
             trunc(t["title"].as_str().unwrap_or(""), 120)
         ));
-        if t["status"].as_str().unwrap_or("") == "done" && !t["result"].is_null() {
+        if matches!(t["status"].as_str().unwrap_or(""), "done" | "review") && !t["result"].is_null() {
             lines.push(format!("   ↳ entrega: {}", trunc(t["result"]["summary"].as_str().unwrap_or(""), 160)));
         }
     }
@@ -495,10 +519,25 @@ fn tools_catalog() -> Value {
                 "type": "object",
                 "properties": {
                     "title": { "type": "string" },
-                    "notes": { "type": "string" },
-                    "parents": { "type": "array", "items": { "type": "integer" }, "description": "Ids de las tareas que deben estar hechas antes de esta (opcional)" }
+                    "notes": { "type": "string", "description": "El encargo: objetivo, archivos, criterio de hecho y cómo comprobarlo (hasta 4000 caracteres)" },
+                    "parents": { "type": "array", "items": { "type": "integer" }, "description": "Ids de las tareas que deben estar hechas antes de esta (opcional)" },
+                    "level": { "type": "string", "enum": ["simple", "media", "dificil"], "description": "Dificultad: las difíciles van al líder" },
+                    "assign": { "type": "string", "description": "Agente que debe hacerla (opcional)" }
                 },
                 "required": ["title"]
+            }
+        },
+        {
+            "name": "team_task_review",
+            "description": "Solo el líder, en modo director: decide sobre una entrega en revisión. ok = aprobada; fix = vuelve a su dueño con tus órdenes en `notes`; take = la terminas tú.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer" },
+                    "verdict": { "type": "string", "enum": ["ok", "fix", "take"] },
+                    "notes": { "type": "string", "description": "Con fix: órdenes concretas y numeradas (archivo, qué cambiar, cómo comprobarlo)" }
+                },
+                "required": ["id", "verdict"]
             }
         },
         {
@@ -707,7 +746,7 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
         }
         "team_task_create" => {
             let title = trunc(args["title"].as_str().unwrap_or(""), 200);
-            let notes = trunc(args["notes"].as_str().unwrap_or(""), 500);
+            let notes = trunc(args["notes"].as_str().unwrap_or(""), 4000);
             let parents: Vec<u64> = args["parents"]
                 .as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
@@ -715,20 +754,38 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
             client
                 .post(
                     "/task",
-                    &json!({ "session_id": sid, "op": "create", "title": title, "notes": notes, "parents": parents }),
+                    &json!({
+                        "session_id": sid, "op": "create", "title": title, "notes": notes, "parents": parents,
+                        "level": args["level"].as_str().unwrap_or(""), "assign": args["assign"].as_str().unwrap_or("")
+                    }),
                 )
                 .map(|v| {
                     let blocked = v["task"]["parents"].as_array().map(|p| !p.is_empty()).unwrap_or(false);
+                    let assign = v["task"]["assign"].as_str().filter(|a| !a.is_empty());
                     text_result(
                         &format!(
-                            "tarea #{} creada: {}{}",
+                            "tarea #{} creada: {}{}{}",
                             v["task"]["id"].as_u64().unwrap_or(0),
                             v["task"]["title"].as_str().unwrap_or(""),
+                            assign.map(|a| format!(" → {a}")).unwrap_or_default(),
                             if blocked { " (bloqueada hasta que terminen sus padres)" } else { "" }
                         ),
                         false,
                     )
                 })
+        }
+        "team_task_review" => {
+            let id = args["id"].as_u64().unwrap_or(0);
+            let notes = trunc(args["notes"].as_str().unwrap_or(""), 2000);
+            client
+                .post(
+                    "/task",
+                    &json!({
+                        "session_id": sid, "op": "review", "id": id,
+                        "verdict": args["verdict"].as_str().unwrap_or(""), "notes": notes
+                    }),
+                )
+                .map(|v| text_result(v["ok"].as_str().unwrap_or("hecho"), false))
         }
         "team_task_list" => client
             .get("/state?limit=1")
@@ -749,11 +806,21 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                     }),
                 )
                 .map(|v| {
-                    let mut msg = format!(
-                        "tarea #{} ahora está: {}",
-                        v["task"]["id"].as_u64().unwrap_or(0),
-                        v["task"]["status"].as_str().unwrap_or("")
-                    );
+                    let mut msg = match v["reviewer"].as_str() {
+                        Some(leader) => format!(
+                            "tarea #{} entregada: {leader} la revisará. Si pide cambios te llegarán al buzón; mientras, no la cierres de nuevo.",
+                            v["task"]["id"].as_u64().unwrap_or(0)
+                        ),
+                        None => format!(
+                            "tarea #{} ahora está: {}",
+                            v["task"]["id"].as_u64().unwrap_or(0),
+                            v["task"]["status"].as_str().unwrap_or("")
+                        ),
+                    };
+                    // El encargo completo llega al reclamar (el aviso de despacho solo lleva el título).
+                    if let Some(brief) = v["task"]["notes"].as_str().filter(|n| !n.trim().is_empty() && name == "team_task_claim") {
+                        msg.push_str(&format!("\n\nEncargo:\n{}", brief.trim()));
+                    }
                     if let Some(list) = v["parents_results"].as_array().filter(|l| !l.is_empty()) {
                         msg.push_str("\n\nEntregas de las tareas de las que depende (léelas antes de empezar):");
                         for r in list {

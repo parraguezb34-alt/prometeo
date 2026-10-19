@@ -153,4 +153,38 @@ test("un aviso cuya tarea pasa a otro chat se descarta sin contar fallo", () => 
   assert.equal(r2.state.agentFails.x ?? 0, 0);
 });
 
+test("una tarea dirigida solo va a su agente", () => {
+  const task = { ...t(1), assign: "OpenCode" };
+  const r = tick(EMPTY_DISPATCH, { now: NOW, tasks: [task], agents: [a("antigravity"), a("opencode")], leader: "" });
+  assert.equal(r.send.agent, "opencode");
+  const nadie = tick(EMPTY_DISPATCH, { now: NOW, tasks: [task], agents: [a("antigravity")], leader: "" });
+  assert.equal(nadie.send, null);
+});
+
+test("modo director: lo difícil al líder, lo demás a los trabajadores", () => {
+  const agents = [a("claude"), a("opencode")];
+  const dificil = tick(EMPTY_DISPATCH, { now: NOW, tasks: [{ ...t(1), level: "dificil" }], agents, leader: "claude", director: true });
+  assert.equal(dificil.send.agent, "claude");
+  const simple = tick(EMPTY_DISPATCH, { now: NOW, tasks: [{ ...t(1), level: "simple" }], agents: [a("claude")], leader: "claude", director: true });
+  assert.equal(simple.send.agent, "claude", "sin trabajadores, el líder la hace");
+  const ocupado = tick(EMPTY_DISPATCH, {
+    now: NOW,
+    tasks: [t(1, "claimed", "opencode"), { ...t(2), level: "media" }],
+    agents,
+    leader: "claude",
+    director: true,
+  });
+  assert.equal(ocupado.send, null, "con trabajadores ocupados, el líder no se la queda");
+});
+
+test("una entrega en revisión no se reparte y bloquea a sus hijas", () => {
+  const r = tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1, "review", "opencode"), t(2, "open", "", [1])], agents: [a("x")], leader: "" });
+  assert.equal(r.send, null);
+});
+
+test("un encargo largo no se teclea entero en la terminal", () => {
+  const p = dispatchPrompt({ ...t(3), notes: "x".repeat(2000) });
+  assert.ok(p.length < 900 && p.includes("encargo"));
+});
+
 console.log(`\n${n} pruebas pasadas`);

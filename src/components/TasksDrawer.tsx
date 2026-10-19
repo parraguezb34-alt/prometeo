@@ -18,6 +18,7 @@ type Scope = "chat" | "project";
 
 /** «5. Integración final» → «Integración final»: el número ya lo pone #id. */
 const cleanTitle = (t: string) => t.replace(/^\s*\d+\s*[.)-]\s+/, "");
+const LEVEL_LABEL: Record<string, string> = { simple: "simple", media: "media", dificil: "difícil" };
 /** «hace 5 min» si es reciente; si no, la hora (hoy) o el día. */
 const since = (ts: number) => (Date.now() - ts < 3600_000 ? `hace ${span(Date.now() - ts)}` : stampLabel(ts));
 
@@ -118,6 +119,7 @@ export function TasksDrawer({
   const groups = useMemo(() => {
     const newest = (a: TeamTask, b: TeamTask) => b.id - a.id;
     return [
+      { key: "review", label: "En revisión", items: list.filter((t) => t.status === "review").sort(newest) },
       { key: "claimed", label: "En curso", items: list.filter((t) => t.status === "claimed").sort(newest) },
       { key: "open", label: "Por hacer", items: list.filter((t) => t.status === "open").sort(newest) },
       { key: "done", label: "Hechas", items: list.filter((t) => t.status === "done").sort(newest) },
@@ -441,6 +443,9 @@ function TaskRow({
   const parked = t.status === "open" && isParked(dispatch.state, t.id, cfg);
   const comments = t.comments ?? [];
   const isDone = t.status === "done";
+  const inReview = t.status === "review";
+  // En revisión, cerrarla desde aquí es aprobarla (como haría el líder).
+  const closeOp = isDone ? "reopen" : inReview ? "approve" : "done";
   const nFiles = Math.max(files, t.result?.files.length ?? 0);
 
   return (
@@ -448,9 +453,11 @@ function TaskRow({
       <button
         className="td-check"
         data-s={t.status}
-        onClick={() => onTaskOp(t.id, isDone ? "reopen" : "done")}
-        title={isDone ? "Reabrir" : "Marcar hecha"}
-        aria-label={isDone ? `Reabrir la tarea #${t.id}` : `Marcar hecha la tarea #${t.id}`}
+        onClick={() => onTaskOp(t.id, closeOp)}
+        title={isDone ? "Reabrir" : inReview ? "Aprobar la entrega" : "Marcar hecha"}
+        aria-label={
+          isDone ? `Reabrir la tarea #${t.id}` : inReview ? `Aprobar la tarea #${t.id}` : `Marcar hecha la tarea #${t.id}`
+        }
       >
         {isDone && <Icon name="check" size={11} />}
       </button>
@@ -463,9 +470,20 @@ function TaskRow({
               <Av agent={t.owner} />
               {agentLabel(t.owner)}
             </span>
+          ) : t.assign ? (
+            <span className="td-free">para {agentLabel(t.assign)}</span>
           ) : (
             <span className="td-free">sin dueño</span>
           )}
+          {inReview && (
+            <span className="td-review" title="El líder revisa la entrega antes de cerrarla">
+              en revisión{t.fix_rounds ? ` · ronda ${t.fix_rounds}` : ""}
+            </span>
+          )}
+          {!inReview && !isDone && (t.fix_rounds ?? 0) > 0 && (
+            <span className="td-review">corrigiendo · ronda {t.fix_rounds}</span>
+          )}
+          {t.level && <span className="td-level" data-l={t.level}>{LEVEL_LABEL[t.level] ?? t.level}</span>}
           {waiting.length > 0 && (
             <span className="td-wait" title="No se puede tomar hasta que terminen sus tareas padre">
               <Icon name="lock" size={11} />
@@ -556,9 +574,9 @@ function TaskRow({
               <Icon name="diff" size={13} />
               Ver cambios
             </button>
-            <button className="td-btn" onClick={() => onTaskOp(t.id, isDone ? "reopen" : "done")}>
+            <button className="td-btn" onClick={() => onTaskOp(t.id, closeOp)}>
               <Icon name={isDone ? "refresh" : "check"} size={13} />
-              {isDone ? "Reabrir" : "Marcar hecha"}
+              {isDone ? "Reabrir" : inReview ? "Aprobar" : "Marcar hecha"}
             </button>
             <button
               className="td-btn danger"
@@ -603,6 +621,8 @@ const TASK_VERB: Record<string, [string, IconName]> = {
   tomada: ["Tomó", "pulse"],
   liberada: ["Soltó", "refresh"],
   hecha: ["Terminó", "check"],
+  entregada: ["Entregó", "check"],
+  aprobada: ["Aprobó", "check"],
   borrada: ["Borró", "trash"],
 };
 
@@ -624,7 +644,7 @@ function lineOf(e: TeamEvent, tasks: TeamTask[]): Line | null {
       verb: `${verb} #${t.id}`,
       detail: title ? cleanTitle(title) : t.detail,
       task: t.id,
-      tone: t.op === "hecha" ? "ok" : undefined,
+      tone: t.op === "hecha" || t.op === "aprobada" ? "ok" : undefined,
     };
   }
   if (e.kind === "waiting") {

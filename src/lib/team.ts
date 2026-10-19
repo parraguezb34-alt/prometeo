@@ -65,7 +65,7 @@ export type MemoryEntry = {
 export type TeamTask = {
   id: number;
   title: string;
-  status: string; // open | claimed | done
+  status: string; // open | claimed | review | done
   owner: string;
   notes: string;
   created_ms: number;
@@ -77,6 +77,12 @@ export type TeamTask = {
   result?: TeamTaskResult | null;
   /** Tablón de la tarea. */
   comments?: TeamTaskComment[];
+  /** Dificultad: simple | media | dificil ("" = sin indicar). */
+  level?: string;
+  /** Agente al que va dirigida ("" = a quien esté libre). */
+  assign?: string;
+  /** Rondas de corrección en modo director. */
+  fix_rounds?: number;
 };
 
 /** Ids de los padres de una tarea que aún no están hechos. */
@@ -106,6 +112,10 @@ export type TeamState = {
   /** Tokens gastados por agente desde `usage_since`. */
   usage?: Record<string, AgentUsage>;
   usage_since?: number;
+  /** Modo director: el líder reparte y revisa las entregas de los demás. */
+  director?: boolean;
+  /** Rondas de corrección antes de que el líder asuma la tarea. */
+  fix_limit?: number;
   now_ms: number;
 };
 
@@ -218,6 +228,9 @@ export const teamDm = (agent: string, text: string) =>
   invoke<void>("team_dm", { agent, text });
 /** Empieza a contar el consumo de tokens desde cero. */
 export const teamUsageReset = () => invoke<void>("team_usage_reset");
+/** Modo director: el líder reparte, revisa y manda corregir (como mucho `fixLimit` rondas). */
+export const teamDirector = (enabled: boolean, fixLimit?: number) =>
+  invoke<void>("team_director", { enabled, fixLimit: fixLimit ?? null });
 
 /** Compacta la sesión de OpenCode de un proyecto con la API de su servidor
  * local (sin teclear en la TUI: la vía fiable para el relevo con memoria). */

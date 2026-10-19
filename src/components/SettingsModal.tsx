@@ -7,7 +7,7 @@ import { testNotify } from "../lib/notify";
 import type { ProjectInfo } from "../lib/project";
 import { DEFAULT_SETTINGS, resetSettings, updateSettings, useSettings } from "../lib/settings";
 import type { LeaderMode } from "../lib/settings";
-import { agentColor, agentInitial, agentLabel, ago, errMsg, shortPath, teamDetails, teamUsageReset } from "../lib/team";
+import { agentColor, agentInitial, agentLabel, ago, errMsg, shortPath, teamDetails, teamDirector, teamUsageReset } from "../lib/team";
 import { cachePct, sumUsage, totalTokens, usageOf } from "../lib/usage";
 import { fmtTokens } from "./AgentCard";
 import type { DetectResult, ModelCatalog, TeamDetails, TeamState } from "../lib/team";
@@ -591,6 +591,44 @@ function Messages({ state }: Pick<Props, "state" | "say">) {
   );
 }
 
+/** Modo director: el líder reparte encargos a los demás, revisa y manda corregir. */
+function Director({ state, say }: Pick<Props, "state" | "say">) {
+  const on = !!state?.director;
+  const limit = state?.fix_limit ?? 2;
+  const leader = state?.leader ?? "";
+  const set = (enabled: boolean, fixLimit?: number) =>
+    teamDirector(enabled, fixLimit).catch((e) => say(errMsg(e), true));
+  return (
+    <Group
+      title="Modo director"
+      desc="El líder divide el trabajo en encargos detallados para los demás agentes, revisa cada entrega y manda corregir. Lo difícil lo hace él."
+      aside={on ? <span className="st-pill" data-tone="ok">Activo</span> : undefined}
+    >
+      <Row
+        label="Dirige el líder"
+        hint={
+          !leader
+            ? "Elige antes un líder: es quien reparte y revisa."
+            : on
+              ? `${agentLabel(leader)} revisa las entregas antes de cerrarlas. Si se desconecta, las tareas se cierran sin revisión.`
+              : "Las tareas se cierran en cuanto su agente las entrega."
+        }
+      >
+        <Switch label="Modo director" on={on} disabled={!leader} onChange={(v) => void set(v)} />
+      </Row>
+      <Row label="Rondas de corrección" hint="Si tras estas rondas sigue mal, el líder la termina él en vez de insistir.">
+        <Seg
+          label="Rondas de corrección"
+          value={limit}
+          disabled={!on}
+          options={[1, 2, 3].map((v) => ({ v, l: String(v) }))}
+          onChange={(v) => void set(true, v)}
+        />
+      </Row>
+    </Group>
+  );
+}
+
 function Team({ state, detect, say, onTeamRules }: Props) {
   const saved = state?.charter ?? "";
   const leader = state?.leader ?? "";
@@ -641,6 +679,8 @@ function Team({ state, detect, say, onTeamRules }: Props) {
           />
         </Row>
       </Group>
+
+      <Director {...{ state, say }} />
 
       <Messages {...{ state, say }} />
 

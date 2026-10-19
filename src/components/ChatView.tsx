@@ -485,7 +485,7 @@ export function ChatView({
             #{t.id}
             {taskName(t) ? ` · ${taskName(t)}` : ""}
           </b>
-          <span className="cv-done-tag">Hecha</span>
+          <span className="cv-done-tag">{t.op === "entregada" ? "En revisión" : "Hecha"}</span>
         </div>
         {t.detail && (
           <div className="cv-done-body" data-clamp={longText && !expanded ? "1" : "0"}>
@@ -540,12 +540,12 @@ export function ChatView({
     const e = part.e;
     if (part.k === "task") {
       const t = part.task;
-      if (t.op === "hecha") return renderTaskDone(part);
-      const verb = { tomada: "Tomó", liberada: "Liberó", borrada: "Borró", creada: "Creó" }[t.op];
+      if (t.op === "hecha" || t.op === "entregada") return renderTaskDone(part);
+      const verb = { tomada: "Tomó", liberada: "Liberó", borrada: "Borró", creada: "Creó", aprobada: "Aprobó" }[t.op];
       const name = taskName(t);
       return (
         <div className="cv-line" key={part.key} data-new={isNew(part.key)}>
-          <Icon name={t.op === "tomada" ? "pulse" : "list"} size={13} />
+          <Icon name={t.op === "tomada" ? "pulse" : t.op === "aprobada" ? "check" : "list"} size={13} />
           <span>
             {verb} <b>#{t.id}</b>
             {name ? ` · ${name}` : ""}

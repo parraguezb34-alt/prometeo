@@ -39,6 +39,7 @@ pub fn run() {
             hub::team_dm,
             hub::team_leader,
             hub::team_usage_reset,
+            hub::team_director,
             hub::team_broadcast,
             hub::team_broadcast_ack,
             hub::team_charter,

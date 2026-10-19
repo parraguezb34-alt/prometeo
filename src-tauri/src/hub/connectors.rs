@@ -138,6 +138,7 @@ const SKILLS: &[(&str, &str)] = &[
     ("lienzo-ahorro", include_str!("../../skills/lienzo-ahorro/SKILL.md")),
     ("lienzo-relevo", include_str!("../../skills/lienzo-relevo/SKILL.md")),
     ("lienzo-revision", include_str!("../../skills/lienzo-revision/SKILL.md")),
+    ("lienzo-director", include_str!("../../skills/lienzo-director/SKILL.md")),
     // De la comunidad (JuliusBrussee/caveman, Apache-2.0; ver skills/THIRD_PARTY.md).
     ("caveman", include_str!("../../skills/caveman/SKILL.md")),
 ];
@@ -221,7 +222,7 @@ Trabajas con otros agentes de IA en este proyecto, coordinados por lienzo con la
 - Avances en 1 línea con `team_update`; notas de una tarea con `team_task_comment`.\n\
 - Usa las rutas exactas de la tarea; si no está claro, pregunta antes de crear archivos.\n\
 - Ahorro de tokens: llamadas independientes en un mismo turno (varias lecturas o búsquedas a la vez); busca antes de leer y lee solo el tramo necesario; acota la salida de los comandos; respuesta final breve.\n\n\
-Guías (skills): `lienzo-equipo` (coordinación), `lienzo-ahorro` (gastar menos tokens), `lienzo-relevo` (relevo con memoria), `lienzo-revision` (revisar entregas). \
+Guías (skills): `lienzo-equipo` (coordinación), `lienzo-ahorro` (gastar menos tokens), `lienzo-relevo` (relevo con memoria), `lienzo-revision` (revisar entregas), `lienzo-director` (dirigir como líder). \
 Si tu CLI no tiene skills, léelas en `.claude/skills/<nombre>/SKILL.md` cuando las necesites.\n\
 {BLOCK_END}"
     )
