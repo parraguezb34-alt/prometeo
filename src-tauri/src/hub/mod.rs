@@ -725,6 +725,8 @@ fn inbox_summary(inner: &HubInner) -> serde_json::Value {
             name.to_string(),
             serde_json::json!({
                 "unread": unread.len(),
+                // Solo los dirigidos a él justifican despertarlo (un turno entero de contexto).
+                "direct": unread.iter().filter(|e| e.to.is_some()).count(),
                 "last_seq": unread.last().map(|e| e.seq).unwrap_or(0),
                 "from": unread.iter().map(|e| e.agent.clone()).collect::<std::collections::BTreeSet<_>>(),
             }),

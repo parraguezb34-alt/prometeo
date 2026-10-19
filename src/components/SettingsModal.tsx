@@ -826,8 +826,8 @@ function Usage({ state, detect, say, onConnect }: Props) {
           label="Skills del equipo"
           hint={
             <>
-              Las de lienzo (equipo, ahorro, relevo, revisión) y de la comunidad: investigate-first, surgical-patch,
-              lean-build, verify-and-stop y caveman (respuestas breves si se piden). Van en <code>.claude/skills</code> y{" "}
+              Las de lienzo (equipo, ahorro, relevo, revisión) y caveman, de la comunidad, para respuestas breves cuando
+              se piden. Van en <code>.claude/skills</code> y{" "}
               <code>.agents/skills</code> del proyecto. {skillsMissing ?? "Se instalan o actualizan al conectar."}
             </>
           }

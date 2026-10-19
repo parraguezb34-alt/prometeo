@@ -481,13 +481,21 @@ fn cmd_feed(app: &AppHandle, query: &std::collections::HashMap<String, String>) 
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(50)
         .min(200);
+    let quiet = query.get("quiet").map(|v| v == "1").unwrap_or(false);
     let out = hub::with_inner(app, |inner| {
-        let events: Vec<&hub::Event> = inner
+        let noise = |e: &&hub::Event| {
+            quiet && matches!(e.kind.as_str(), "join" | "leave" | "session" | "stop" | "prompt" | "tool")
+        };
+        let mut events: Vec<&hub::Event> = inner
             .events
             .iter()
-            .filter(|e| e.seq > since)
-            .take(limit)
+            .filter(|e| e.seq > since && !noise(e))
             .collect();
+        // Sin `since_seq` interesa lo último, no lo más antiguo que quede guardado.
+        if since == 0 && events.len() > limit {
+            events.drain(..events.len() - limit);
+        }
+        events.truncate(limit);
         json!({ "events": events, "seq": inner.seq })
     })
     .ok_or("hub no inicializado")?;

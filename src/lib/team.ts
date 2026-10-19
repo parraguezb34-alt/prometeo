@@ -109,7 +109,7 @@ export type TeamState = {
   now_ms: number;
 };
 
-export type InboxInfo = { unread: number; last_seq: number; from: string[] };
+export type InboxInfo = { unread: number; direct?: number; last_seq: number; from: string[] };
 
 export type AgentUsage = {
   input: number;

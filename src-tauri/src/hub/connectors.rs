@@ -140,11 +140,11 @@ const SKILLS: &[(&str, &str)] = &[
     ("lienzo-revision", include_str!("../../skills/lienzo-revision/SKILL.md")),
     // De la comunidad (JuliusBrussee/caveman, Apache-2.0; ver skills/THIRD_PARTY.md).
     ("caveman", include_str!("../../skills/caveman/SKILL.md")),
-    ("investigate-first", include_str!("../../skills/investigate-first/SKILL.md")),
-    ("surgical-patch", include_str!("../../skills/surgical-patch/SKILL.md")),
-    ("verify-and-stop", include_str!("../../skills/verify-and-stop/SKILL.md")),
-    ("lean-build", include_str!("../../skills/lean-build/SKILL.md")),
 ];
+
+/// Skills que lienzo instalaba y ya no: medidas en un banco A/B, hacían gastar más
+/// (más turnos y comprobaciones) sin mejorar el resultado. Se quitan si siguen gestionadas.
+const RETIRED_SKILLS: &[&str] = &["investigate-first", "surgical-patch", "verify-and-stop", "lean-build"];
 
 /// Marca de las skills que gestiona lienzo: sin ella (el usuario la quitó), no se tocan.
 const SKILL_MARK: &str = "lienzo:gestionado";
@@ -154,6 +154,15 @@ const SKILL_MARK: &str = "lienzo:gestionado";
 fn write_skills(project: &Path) -> Vec<String> {
     let mut out = Vec::new();
     for root in [".claude", ".agents"] {
+        for name in RETIRED_SKILLS {
+            let dir = project.join(root).join("skills").join(name);
+            let managed = std::fs::read_to_string(dir.join("SKILL.md"))
+                .map(|t| t.contains(SKILL_MARK))
+                .unwrap_or(false);
+            if managed && std::fs::remove_dir_all(&dir).is_ok() {
+                out.push(format!("{} (quitada)", dir.display()));
+            }
+        }
         for (name, body) in SKILLS {
             let path = project.join(root).join("skills").join(name).join("SKILL.md");
             let current = std::fs::read_to_string(&path).ok();
@@ -210,7 +219,8 @@ Trabajas con otros agentes de IA en este proyecto, coordinados por lienzo con la
 - Tareas: `team_task_claim` (trae las entregas previas) y `team_task_done` con `summary`, `files` y `evidence`.\n\
 - 📬 Buzón: cuando una herramienta avise de mensajes, léelos con `team_inbox` y contesta con `team_message` (`to`, `reply_to`). `to: \"líder\"` llega al líder.\n\
 - Avances en 1 línea con `team_update`; notas de una tarea con `team_task_comment`.\n\
-- Usa las rutas exactas de la tarea; si no está claro, pregunta antes de crear archivos.\n\n\
+- Usa las rutas exactas de la tarea; si no está claro, pregunta antes de crear archivos.\n\
+- Ahorro de tokens: llamadas independientes en un mismo turno (varias lecturas o búsquedas a la vez); busca antes de leer y lee solo el tramo necesario; acota la salida de los comandos; respuesta final breve.\n\n\
 Guías (skills): `lienzo-equipo` (coordinación), `lienzo-ahorro` (gastar menos tokens), `lienzo-relevo` (relevo con memoria), `lienzo-revision` (revisar entregas). \
 Si tu CLI no tiene skills, léelas en `.claude/skills/<nombre>/SKILL.md` cuando las necesites.\n\
 {BLOCK_END}"

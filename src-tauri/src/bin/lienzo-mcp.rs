@@ -297,7 +297,7 @@ fn render_feed(feed: &Value) -> String {
                 ago(e["ts_ms"].as_u64().unwrap_or(0)),
                 e["seq"].as_u64().unwrap_or(0),
                 e["agent"].as_str().unwrap_or("?"),
-                trunc(e["text"].as_str().unwrap_or(""), 160),
+                trunc(&e["text"].as_str().unwrap_or("").replace('\n', " "), 160),
                 extra
             )
         })
@@ -364,14 +364,22 @@ fn render_memory(v: &Value) -> String {
     out
 }
 
-fn render_tasks(state: &Value) -> String {
+/// Tablero de tareas. Las hechas crecen sin fin: salvo `all`, solo las 5 últimas.
+fn render_tasks(state: &Value, all: bool) -> String {
     let empty = vec![];
     let tasks = state["tasks"].as_array().unwrap_or(&empty);
     if tasks.is_empty() {
         return "No hay tareas compartidas todavía. Crea una con team_task_create.".to_string();
     }
+    let done: Vec<&Value> = tasks.iter().filter(|t| t["status"].as_str() == Some("done")).collect();
+    let hidden = if all { 0 } else { done.len().saturating_sub(5) };
+    let skip: std::collections::HashSet<u64> = done
+        .iter()
+        .take(hidden)
+        .filter_map(|t| t["id"].as_u64())
+        .collect();
     let mut lines: Vec<String> = vec![];
-    for t in tasks {
+    for t in tasks.iter().filter(|t| !skip.contains(&t["id"].as_u64().unwrap_or(0))) {
         let owner = t["owner"].as_str().unwrap_or("");
         lines.push(format!(
             "#{} [{}]{} {}",
@@ -387,6 +395,9 @@ fn render_tasks(state: &Value) -> String {
         if t["status"].as_str().unwrap_or("") == "done" && !t["result"].is_null() {
             lines.push(format!("   ↳ entrega: {}", trunc(t["result"]["summary"].as_str().unwrap_or(""), 160)));
         }
+    }
+    if hidden > 0 {
+        lines.push(format!("(+{hidden} tareas hechas más antiguas; team_task_list con all=true para verlas)"));
     }
     lines.join("\n")
 }
@@ -449,12 +460,13 @@ fn tools_catalog() -> Value {
         },
         {
             "name": "team_feed",
-            "description": "Lee la actividad reciente de todos los agentes del equipo.",
+            "description": "Lee la actividad reciente del equipo (avances, mensajes, tareas), sin el ruido de conexiones y comandos.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "since_seq": { "type": "integer", "description": "Solo eventos posteriores a este número" },
-                    "limit": { "type": "integer", "description": "Máximo de eventos (por defecto 40)" }
+                    "limit": { "type": "integer", "description": "Máximo de eventos (por defecto 15)" },
+                    "all": { "type": "boolean", "description": "Incluir también conexiones y acciones de herramientas" }
                 }
             }
         },
@@ -491,8 +503,13 @@ fn tools_catalog() -> Value {
         },
         {
             "name": "team_task_list",
-            "description": "Lista el tablero de tareas compartidas.",
-            "inputSchema": { "type": "object", "properties": {} }
+            "description": "Lista el tablero de tareas: las abiertas y en curso, y las últimas hechas con su entrega.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "all": { "type": "boolean", "description": "Incluir todas las tareas hechas, no solo las últimas 5" }
+                }
+            }
         },
         {
             "name": "team_task_claim",
@@ -638,9 +655,10 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
             .map(|v| text_result(&render_context(&v, &std::env::var("LIENZO_AGENT").unwrap_or_default()), false)),
         "team_feed" => {
             let since = args["since_seq"].as_u64().unwrap_or(0);
-            let limit = args["limit"].as_u64().unwrap_or(40).min(200);
+            let limit = args["limit"].as_u64().unwrap_or(15).min(100);
+            let quiet = if args["all"].as_bool().unwrap_or(false) { 0 } else { 1 };
             client
-                .get(&format!("/feed?since_seq={}&limit={}", since, limit))
+                .get(&format!("/feed?since_seq={}&limit={}&quiet={}", since, limit, quiet))
                 .map(|v| text_result(&render_feed(&v), false))
         }
         "team_update" => {
@@ -714,7 +732,7 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
         }
         "team_task_list" => client
             .get("/state?limit=1")
-            .map(|v| text_result(&render_tasks(&v), false)),
+            .map(|v| text_result(&render_tasks(&v, args["all"].as_bool().unwrap_or(false)), false)),
         "team_task_claim" | "team_task_done" => {
             let id = args["id"].as_u64().unwrap_or(0);
             let op = if name == "team_task_claim" { "claim" } else { "done" };
@@ -961,7 +979,7 @@ fn read_resource(client: &HubClient, params: &Value) -> Result<Value, (i64, Stri
     let text = match uri.as_str() {
         "team://context" => render_context(&state, &std::env::var("LIENZO_AGENT").unwrap_or_default()),
         "team://feed" => render_feed(&json!({ "events": state["events"] })),
-        "team://tasks" => render_tasks(&state),
+        "team://tasks" => render_tasks(&state, false),
         _ => return Err((-32602, format!("recurso desconocido: {uri}"))),
     };
     Ok(json!({ "contents": [ { "uri": uri, "mimeType": "text/markdown", "text": text } ] }))
@@ -1343,7 +1361,9 @@ fn hook_mode(args: &[String]) {
     // contestándose en bucle.
     if event == "stop" {
         let streak = cache["inbox_blocks"].as_u64().unwrap_or(0);
-        if !inbox.is_empty() && streak < 3 {
+        // Solo un mensaje dirigido a él merece otro turno; los de «todo el equipo» esperan a su
+        // próximo mensaje o herramienta (cada turno extra relee todo su contexto).
+        if inbox.iter().any(|m| m.3) && streak < 3 {
             ack_inbox(&client, &agent, &inbox);
             cache["inbox_blocks"] = json!(streak + 1);
             if let Some(p) = &cache_path {
@@ -1502,7 +1522,7 @@ fn context_for_prompt(state: &Value, me: &str, cache: &mut Value, full: bool) ->
 }
 
 /// Mensajes sin leer del buzón del agente: (seq, de, texto).
-fn fetch_inbox(client: &HubClient, agent: &str) -> Vec<(u64, String, String)> {
+fn fetch_inbox(client: &HubClient, agent: &str) -> Vec<(u64, String, String, bool)> {
     if agent.is_empty() {
         return vec![];
     }
@@ -1517,6 +1537,7 @@ fn fetch_inbox(client: &HubClient, agent: &str) -> Vec<(u64, String, String)> {
                             m["seq"].as_u64().unwrap_or(0),
                             m["from"].as_str().unwrap_or("?").to_string(),
                             m["text"].as_str().unwrap_or("").to_string(),
+                            m["to"].is_string(),
                         )
                     })
                     .collect()
@@ -1525,16 +1546,16 @@ fn fetch_inbox(client: &HubClient, agent: &str) -> Vec<(u64, String, String)> {
         .unwrap_or_default()
 }
 
-fn inbox_text(list: &[(u64, String, String)]) -> String {
+fn inbox_text(list: &[(u64, String, String, bool)]) -> String {
     let mut out = format!("📬 Mensajes de tus compañeros ({}):\n", list.len());
-    for (seq, from, text) in list {
+    for (seq, from, text, _) in list {
         out.push_str(&format!("- #{seq} de {from}: {}\n", trunc(text, 1200)));
     }
     out.push_str("Para responder: team_message con to = quien escribió y reply_to = su número.");
     out
 }
 
-fn ack_inbox(client: &HubClient, agent: &str, list: &[(u64, String, String)]) {
+fn ack_inbox(client: &HubClient, agent: &str, list: &[(u64, String, String, bool)]) {
     if let Some(max) = list.iter().map(|m| m.0).max() {
         let _ = client.post("/inbox/ack", &json!({ "agent": agent, "seq": max }));
     }

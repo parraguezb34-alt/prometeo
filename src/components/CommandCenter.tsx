@@ -1441,6 +1441,8 @@ export function CommandCenter() {
       if (!cur || !getSettings().team.relayInbox) return;
       const now = Date.now();
       for (const [agent, info] of Object.entries(cur.inbox)) {
+        // Los mensajes a todo el equipo no despiertan a nadie: cada aviso le cuesta un turno entero.
+        if (!info.direct) continue;
         if ((relayed.current[agent] ?? 0) >= info.last_seq) continue;
         if (now - (relayAt.current[agent] ?? 0) < 60_000) continue;
         // Un momento de margen: quizá lo lee él solo con la siguiente herramienta.
