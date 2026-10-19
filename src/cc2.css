@@ -1469,13 +1469,12 @@ button.cc-lead {
   --tx: 0;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .cc-scrim,
-  .cc-modal,
-  .cc-menu,
-  .cc-tdrawer {
-    animation: none;
-  }
+/* Animaciones reducidas (Ajustes → General → Animaciones) */
+:root[data-motion="off"] .cc-scrim,
+:root[data-motion="off"] .cc-modal,
+:root[data-motion="off"] .cc-menu,
+:root[data-motion="off"] .cc-tdrawer {
+  animation: none;
 }
 
 /* pantallas estrechas: el equipo pasa a una columna */

@@ -261,6 +261,30 @@ function CopyBtn({ text, say }: { text: string; say: Props["say"] }) {
 
 // ---- General -------------------------------------------------------------------------
 
+/** Animaciones del chat (puntos, mensajes que se escriben, anillo del agente…). */
+function MotionGroup() {
+  const motion = useSettings().ui.motion;
+  return (
+    <Group title="Animaciones">
+      <Row
+        label="Movimiento en el chat"
+        hint="«Como Windows» las apaga si tienes desactivados los efectos de animación del sistema."
+      >
+        <Seg
+          label="Animaciones"
+          value={motion}
+          options={[
+            { v: "on", l: "Siempre" },
+            { v: "system", l: "Como Windows" },
+            { v: "off", l: "Reducidas" },
+          ]}
+          onChange={(v) => updateSettings({ ui: { motion: v } })}
+        />
+      </Row>
+    </Group>
+  );
+}
+
 function General({ state, info, autoStart, shoot, chatsMin, say, onAutoStart, onShoot, onChatsMin, onProject }: Props) {
   const settings = useSettings();
   const saved = state?.project ?? "";
@@ -369,6 +393,8 @@ function General({ state, info, autoStart, shoot, chatsMin, say, onAutoStart, on
           />
         </Row>
       </Group>
+
+      <MotionGroup />
 
       <Group title="Atajos">
         <Row label="Abrir los ajustes">

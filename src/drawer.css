@@ -658,11 +658,10 @@
   color: var(--text);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .td-body,
-  .td-list,
-  .td-more,
-  .td-check[data-s="done"] {
-    animation: none;
-  }
+/* Animaciones reducidas (Ajustes → General → Animaciones) */
+:root[data-motion="off"] .td-body,
+:root[data-motion="off"] .td-list,
+:root[data-motion="off"] .td-more,
+:root[data-motion="off"] .td-check[data-s="done"] {
+  animation: none;
 }

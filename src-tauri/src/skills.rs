@@ -784,12 +784,12 @@ fn listing() -> Value {
 }
 
 #[tauri::command]
-pub fn skills_list() -> Value {
+pub async fn skills_list() -> Value {
     listing()
 }
 
 #[tauri::command]
-pub fn skills_set(
+pub async fn skills_set(
     name: String,
     enabled: Option<bool>,
     mode: Option<String>,
@@ -801,14 +801,14 @@ pub fn skills_set(
 }
 
 #[tauri::command]
-pub fn skills_remove(name: String) -> Result<Value, String> {
+pub async fn skills_remove(name: String) -> Result<Value, String> {
     remove(&name)?;
     apply(crate::hub::default_terminal_dir());
     Ok(listing())
 }
 
 #[tauri::command]
-pub fn skills_read(name: String) -> Result<String, String> {
+pub async fn skills_read(name: String) -> Result<String, String> {
     read(&name)
 }
 

@@ -13,6 +13,7 @@ import {
   termWrite,
 } from "../lib/pty";
 import type { PtyDataEvent, PtyExitEvent } from "../lib/pty";
+import { registerScreen } from "../lib/screens";
 import { respawnCmd, setPanelSession } from "../store";
 import type { Panel } from "../store";
 
@@ -77,6 +78,7 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
     });
 
     const unlisteners: UnlistenFn[] = [];
+    let unregisterScreen = () => {};
     const addUn = async (p: Promise<UnlistenFn>) => {
       const un = await p;
       if (disposedRef.current) un();
@@ -139,6 +141,8 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
         setPanelSession(panel.id, sid);
       }
       if (disposedRef.current) return;
+      // Su pantalla queda a la vista del chat (para contestar sus permisos con botones).
+      unregisterScreen = registerScreen(sid, term);
       // Sync the PTY with the real panel size before the agent paints its TUI
       // (OpenCode / Claude render cleanly from the first frame this way).
       try {
@@ -185,6 +189,7 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
       ro.disconnect();
       dataSub.dispose();
       unlisteners.forEach((u) => u());
+      unregisterScreen();
       term.dispose();
       termRef.current = null;
     };

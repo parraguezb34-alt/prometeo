@@ -51,6 +51,9 @@ import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
 import { projectAttachPath, projectInfo, projectRecent, projectSaveAttachment, projectSaveImage } from "../lib/project";
 import { dropOwner } from "../lib/dropzone";
+import { detectPrompt } from "../lib/prompts";
+import type { TermPrompt } from "../lib/prompts";
+import { readScreen } from "../lib/screens";
 import { attachMeta, attachmentLine, countLines, isLongPaste, PASTED_NAME, textToBase64 } from "../lib/attach";
 import type { Attachment } from "../lib/attach";
 import type { ProjectInfo } from "../lib/project";
@@ -1508,6 +1511,49 @@ export function CommandCenter() {
 
   // Quién trabaja ahora (por su terminal o por sus acciones recientes): su «pensando…» en el chat.
   // Si alguien no contesta, lo dice el acuse de tu mensaje (ChatView).
+  // Preguntas en la pantalla de cada agente (permisos, confirmaciones): se contestan desde el chat.
+  const [termPrompts, setTermPrompts] = useState<Record<string, TermPrompt>>({});
+  const promptKeyRef = useRef("");
+  useEffect(() => {
+    const scan = () => {
+      const next: Record<string, TermPrompt> = {};
+      for (const p of getLayout().panels) {
+        if (p.kind !== "terminal" || !p.cmd || !p.sessionId) continue;
+        const found = detectPrompt(readScreen(p.sessionId));
+        if (found) next[agentKeyFromCmd(p.cmd)] = found;
+      }
+      const key = Object.entries(next)
+        .map(([a, q]) => `${a}:${q.key}`)
+        .sort()
+        .join("\n");
+      if (key === promptKeyRef.current) return;
+      // Avisa de las nuevas (no de las que ya estaban).
+      const before = promptKeyRef.current;
+      promptKeyRef.current = key;
+      setTermPrompts(next);
+      if (loadFlag(NOTIFY_KEY, true) && getSettings().notify.ask) {
+        for (const [a, q] of Object.entries(next)) {
+          if (!before.includes(`${a}:${q.key}`)) notify(`${agentLabel(a)} necesita tu permiso`, [q.title, ...q.detail].join(" · ").slice(0, 180));
+        }
+      }
+    };
+    const id = window.setInterval(scan, 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  /** Contesta desde el chat la pregunta que un agente tiene en su terminal. */
+  const answerPrompt = async (agent: string, keys: string) => {
+    const p = panelForAgent(getLayout().panels, agent);
+    if (!p?.sessionId) return;
+    setTermPrompts((cur) => {
+      const next = { ...cur };
+      delete next[agent];
+      return next;
+    });
+    promptKeyRef.current = "";
+    await termWrite(p.sessionId, keys).catch((e) => say(errMsg(e), true));
+  };
+
   const live = useMemo<LiveAgent[]>(() => {
     const out: LiveAgent[] = [];
     const evs = state?.events ?? [];
@@ -1524,7 +1570,8 @@ export function CommandCenter() {
       // La terminal tarda unos segundos en quedarse quieta tras el fin de turno: si el turno
       // acaba de cerrarse después de que empezara la racha, ya no está trabajando.
       const justEnded = !!ended && now - ended.ts_ms < 6_000 && (act?.since ?? 0) <= ended.ts_ms;
-      const busy = (!!act?.busy && !justEnded) || (toolAge < 20_000 && !finished);
+      const prompt = termPrompts[a.name];
+      const busy = (!!act?.busy && !justEnded) || (toolAge < 20_000 && !finished) || !!prompt;
       if (!busy) continue;
       // Sin terminal que mirar, la racha empieza en la primera acción seguida (sin pausas largas).
       let streak = lastTool?.ts_ms ?? now;
@@ -1540,10 +1587,11 @@ export function CommandCenter() {
         status: act?.status ?? "",
         lastAction: toolAge < 120_000 ? lastTool?.text : undefined,
         hasTerminal: !!p?.sessionId,
+        prompt,
       });
     }
     return out;
-  }, [roster, activity, state, layout.panels, sel]);
+  }, [roster, activity, state, layout.panels, sel, termPrompts]);
 
   // ---- Avisos de Windows (solo si lienzo no está delante) ------------------------------
   const [notifyOn, setNotifyOn] = useState(() => loadFlag(NOTIFY_KEY, true));
@@ -2047,6 +2095,9 @@ export function CommandCenter() {
     </div>
   );
 
+  // Agentes que esperan algo de ti: un permiso en su terminal (aunque no haya avisado el hub).
+  const waiting = blocked.length + Object.keys(termPrompts).filter((a) => !blocked.some((b) => b.name === a)).length;
+
   return (
     <div className="cc">
       <header className="cc-top">
@@ -2068,12 +2119,12 @@ export function CommandCenter() {
         </div>
 
         <TeamStrip agents={roster} states={states} onOpen={() => setOverlay("team")} />
-        {blocked.length + openQuestions.length > 0 && (
+        {waiting + openQuestions.length > 0 && (
           <button
             className="cc-alert"
             onClick={() => {
               // Las preguntas se contestan en el chat; los permisos, en su terminal (tareas).
-              if (openQuestions.length > 0) {
+              if (openQuestions.length > 0 || Object.keys(termPrompts).length > 0) {
                 setOverlay(null);
                 setView("feed");
               } else {
@@ -2083,13 +2134,13 @@ export function CommandCenter() {
             }}
           >
             <Icon name={openQuestions.length > 0 ? "msg" : "warn"} size={14} />
-            {openQuestions.length > 0 && blocked.length === 0
+            {openQuestions.length > 0 && waiting === 0
               ? openQuestions.length === 1
                 ? "Una pregunta para ti"
                 : `${openQuestions.length} preguntas para ti`
-              : blocked.length + openQuestions.length === 1
+              : waiting + openQuestions.length === 1
                 ? "1 espera tu respuesta"
-                : `${blocked.length + openQuestions.length} esperan tu respuesta`}
+                : `${waiting + openQuestions.length} esperan tu respuesta`}
           </button>
         )}
 
@@ -2164,6 +2215,7 @@ export function CommandCenter() {
               onInterrupt={(n) => void interrupt(n)}
               questions={state?.questions}
               onAnswer={answerQuestion}
+              onPrompt={(a, keys) => void answerPrompt(a, keys)}
               skills={skillLib}
               onSkill={skillFromChat}
               empty={

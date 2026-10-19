@@ -185,7 +185,7 @@ fn status_files(root: &Path, paths: &[String]) -> Vec<GitFile> {
 
 /// Repo, rama actual y raiz canonica del proyecto.
 #[tauri::command]
-pub fn project_info(path: String) -> Result<Value, String> {
+pub async fn project_info(path: String) -> Result<Value, String> {
     let root = root_of(&path)?;
     let branch = git(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     let repo = !branch.trim().is_empty() || git(&root, &["rev-parse", "--git-dir"]).is_ok();
@@ -198,7 +198,7 @@ pub fn project_info(path: String) -> Result<Value, String> {
 
 /// Cambios del arbol de trabajo: estado por archivo + diff unificado con HEAD.
 #[tauri::command]
-pub fn project_status(path: String) -> Result<GitStatus, String> {
+pub async fn project_status(path: String) -> Result<GitStatus, String> {
     let root = root_of(&path)?;
     let branch = git(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     if branch.trim().is_empty() && git(&root, &["rev-parse", "--git-dir"]).is_err() {
@@ -228,7 +228,7 @@ pub fn project_status(path: String) -> Result<GitStatus, String> {
 
 /// Diff + estado limitado a las rutas de una tarea (revision por tarea).
 #[tauri::command]
-pub fn project_diff_paths(path: String, paths: Vec<String>) -> Result<TaskDiff, String> {
+pub async fn project_diff_paths(path: String, paths: Vec<String>) -> Result<TaskDiff, String> {
     let root = root_of(&path)?;
     let clean = clean_paths(&root, &paths);
     if clean.is_empty() {
@@ -252,7 +252,7 @@ pub fn project_diff_paths(path: String, paths: Vec<String>) -> Result<TaskDiff, 
 
 /// Confirma (commit) los archivos de una tarea, solo esas rutas.
 #[tauri::command]
-pub fn project_commit_paths(
+pub async fn project_commit_paths(
     path: String,
     paths: Vec<String>,
     message: String,
@@ -296,7 +296,7 @@ pub fn project_commit_paths(
 
 /// Devuelve los archivos de una tarea al ultimo commit (destructivo).
 #[tauri::command]
-pub fn project_revert_paths(path: String, paths: Vec<String>) -> Result<String, String> {
+pub async fn project_revert_paths(path: String, paths: Vec<String>) -> Result<String, String> {
     let root = root_of(&path)?;
     let clean = clean_paths(&root, &paths);
     if clean.is_empty() {
@@ -352,7 +352,7 @@ pub fn project_revert_paths(path: String, paths: Vec<String>) -> Result<String, 
 
 /// Listado de una carpeta del proyecto (ordenado: carpetas primero).
 #[tauri::command]
-pub fn project_list(path: String, rel: String) -> Result<Vec<Entry>, String> {
+pub async fn project_list(path: String, rel: String) -> Result<Vec<Entry>, String> {
     let root = root_of(&path)?;
     let dir = join_rel(&root, &rel)?;
     let meta = std::fs::metadata(&dir).map_err(|_| "la carpeta no existe".to_string())?;
@@ -390,7 +390,7 @@ pub fn project_list(path: String, rel: String) -> Result<Vec<Entry>, String> {
 
 /// Lee un archivo del proyecto (texto plano, con tope de 512 KB).
 #[tauri::command]
-pub fn project_read(path: String, rel: String) -> Result<FileData, String> {
+pub async fn project_read(path: String, rel: String) -> Result<FileData, String> {
     let root = root_of(&path)?;
     let file = join_rel(&root, &rel)?;
     let canon = file
@@ -422,7 +422,7 @@ pub fn project_read(path: String, rel: String) -> Result<FileData, String> {
 
 /// Archivos recientes del proyecto con las extensiones pedidas (para Preview).
 #[tauri::command]
-pub fn project_recent(
+pub async fn project_recent(
     path: String,
     exts: Vec<String>,
     limit: Option<usize>,
@@ -505,7 +505,7 @@ fn image_mime(path: &Path) -> Option<&'static str> {
 /// Es la única lectura que puede salir del proyecto: las capturas suelen quedar en
 /// carpetas temporales. Por eso solo acepta extensiones de imagen y con tope de tamaño.
 #[tauri::command]
-pub fn image_data(path: String, project: Option<String>) -> Result<String, String> {
+pub async fn image_data(path: String, project: Option<String>) -> Result<String, String> {
     use base64::Engine;
     let raw = PathBuf::from(path.trim());
     let file = if raw.is_absolute() {
@@ -534,7 +534,7 @@ pub fn image_data(path: String, project: Option<String>) -> Result<String, Strin
 /// (`.lienzo/capturas/captura-<ms>.<ext>`) y devuelve su ruta absoluta, para pasársela
 /// a los agentes: así ven lo mismo que tú.
 #[tauri::command]
-pub fn project_save_image(path: String, data: String, ext: Option<String>) -> Result<String, String> {
+pub async fn project_save_image(path: String, data: String, ext: Option<String>) -> Result<String, String> {
     use base64::Engine;
     let root = root_of(&path)?;
     let ext = match ext.as_deref().map(str::to_lowercase).as_deref() {
@@ -609,7 +609,7 @@ fn attach_target(root: &Path, name: &str) -> Result<PathBuf, String> {
 /// Guarda en el proyecto algo que pegaste o elegiste en el compositor (texto largo, un archivo)
 /// en `.lienzo/adjuntos/` y devuelve su ruta absoluta, para pasársela a los agentes.
 #[tauri::command]
-pub fn project_save_attachment(path: String, name: String, data: String) -> Result<String, String> {
+pub async fn project_save_attachment(path: String, name: String, data: String) -> Result<String, String> {
     use base64::Engine;
     let root = root_of(&path)?;
     let bytes = base64::engine::general_purpose::STANDARD
@@ -635,7 +635,7 @@ pub struct Attached {
 /// se pasa tal cual; un archivo de fuera se copia a `.lienzo/adjuntos/` para que cualquier
 /// agente pueda leerlo (algunos no salen de la carpeta del proyecto).
 #[tauri::command]
-pub fn project_attach_path(path: String, src: String) -> Result<Attached, String> {
+pub async fn project_attach_path(path: String, src: String) -> Result<Attached, String> {
     let root = root_of(&path)?;
     let src = PathBuf::from(src.trim());
     let meta = std::fs::metadata(&src).map_err(|_| "el archivo no existe".to_string())?;
@@ -677,7 +677,7 @@ mod attach_tests {
         use base64::Engine;
         let root = tmp("save");
         let data = base64::engine::general_purpose::STANDARD.encode("hola\nmundo");
-        let p = project_save_attachment(root.display().to_string(), "pegado.txt".into(), data).unwrap();
+        let p = tauri::async_runtime::block_on(project_save_attachment(root.display().to_string(), "pegado.txt".into(), data)).unwrap();
         assert!(p.contains(".lienzo") && p.ends_with("-pegado.txt"));
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "hola\nmundo");
     }
@@ -690,14 +690,14 @@ mod attach_tests {
         std::fs::write(out.join("fuera.csv"), "a,b").unwrap();
         let proj = root.display().to_string();
 
-        let a = project_attach_path(proj.clone(), root.join("dentro.rs").display().to_string()).unwrap();
+        let a = tauri::async_runtime::block_on(project_attach_path(proj.clone(), root.join("dentro.rs").display().to_string())).unwrap();
         assert!(a.path.ends_with("dentro.rs") && !a.path.contains(".lienzo"));
 
-        let b = project_attach_path(proj.clone(), out.join("fuera.csv").display().to_string()).unwrap();
+        let b = tauri::async_runtime::block_on(project_attach_path(proj.clone(), out.join("fuera.csv").display().to_string())).unwrap();
         assert!(b.path.contains(".lienzo") && b.path.ends_with("-fuera.csv"));
         assert_eq!(std::fs::read_to_string(&b.path).unwrap(), "a,b");
 
-        let c = project_attach_path(proj, out.display().to_string()).unwrap();
+        let c = tauri::async_runtime::block_on(project_attach_path(proj, out.display().to_string())).unwrap();
         assert!(c.dir && !c.path.contains(".lienzo"));
     }
 }

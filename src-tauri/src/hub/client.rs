@@ -105,45 +105,69 @@ impl HubClient {
 
         let mut raw = Vec::new();
         stream.read_to_end(&mut raw).map_err(|e| e.to_string())?;
-        let text = String::from_utf8_lossy(&raw);
-        let (head, payload) = text
-            .split_once("\r\n\r\n")
+        let header_end = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
             .ok_or("respuesta inválida del hub")?;
+        let head = String::from_utf8_lossy(&raw[..header_end]);
+        let body_bytes = &raw[header_end + 4..];
 
         let status = head.lines().next().unwrap_or("");
         if !status.contains(" 200") {
             // Try to surface the hub's error message.
-            let msg = serde_json::from_str::<Value>(payload.trim())
+            let payload_str = String::from_utf8_lossy(body_bytes);
+            let msg = serde_json::from_str::<Value>(payload_str.trim())
                 .ok()
                 .and_then(|v| v["error"].as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| status.trim().to_string());
             return Err(format!("el hub respondió: {msg}"));
         }
 
-        let payload = if head.to_ascii_lowercase().contains("chunked") {
-            dechunk(payload)?
+        let payload_bytes = if head.to_ascii_lowercase().contains("chunked") {
+            dechunk(body_bytes)?
         } else {
-            payload.to_string()
+            body_bytes.to_vec()
         };
+        let payload = String::from_utf8_lossy(&payload_bytes);
         serde_json::from_str(payload.trim()).map_err(|e| format!("json inválido del hub: {e}"))
     }
 }
 
 /// Tiny helper for chunked responses (the hub normally uses Content-Length).
-fn dechunk(body: &str) -> Result<String, String> {
-    let mut out = String::new();
-    let mut rest = body;
+fn dechunk(mut rest: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
     loop {
-        let (size_line, tail) = rest.split_once("\r\n").ok_or("chunk inválido")?;
-        let size = usize::from_str_radix(size_line.trim(), 16).map_err(|_| "chunk inválido")?;
+        let crlf = rest.windows(2).position(|w| w == b"\r\n").ok_or("chunk inválido")?;
+        let size_str = std::str::from_utf8(&rest[..crlf]).map_err(|_| "chunk inválido")?;
+        let size = usize::from_str_radix(size_str.trim(), 16).map_err(|_| "chunk inválido")?;
         if size == 0 {
             break;
         }
+        let tail = &rest[crlf + 2..];
         if tail.len() < size + 2 {
             return Err("chunk incompleto".into());
         }
-        out.push_str(&tail[..size]);
+        out.extend_from_slice(&tail[..size]);
         rest = &tail[size + 2..];
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dechunk;
+
+    #[test]
+    fn trozos_que_parten_una_letra_con_tilde() {
+        // «ñ» son dos bytes: el primer trozo acaba en medio. Antes esto tumbaba el puente.
+        let body = "Año".as_bytes();
+        let mut raw = Vec::new();
+        raw.extend_from_slice(b"2\r\n");
+        raw.extend_from_slice(&body[..2]);
+        raw.extend_from_slice(b"\r\n2\r\n");
+        raw.extend_from_slice(&body[2..]);
+        raw.extend_from_slice(b"\r\n0\r\n\r\n");
+        assert_eq!(String::from_utf8(dechunk(&raw).unwrap()).unwrap(), "Año");
+        assert!(dechunk(b"5\r\nab").is_err());
+    }
 }

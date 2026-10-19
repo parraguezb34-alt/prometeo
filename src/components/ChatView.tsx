@@ -7,7 +7,8 @@ import { stampLabel } from "../lib/chats";
 import { agentColor, agentInitial, agentLabel, shortPath } from "../lib/team";
 import type { QAnswer, TeamEvent, TeamQuestion } from "../lib/team";
 import type { Skill } from "../lib/skills";
-import { QuestionCard, SkillCard } from "./AskCards";
+import { PromptCard, QuestionCard, SkillCard } from "./AskCards";
+import type { TermPrompt } from "../lib/prompts";
 
 const NO_QUESTIONS: TeamQuestion[] = [];
 const NO_SKILLS: Skill[] = [];
@@ -31,6 +32,8 @@ export type LiveAgent = {
   /** Última acción que avisó al equipo (Bash …, Edit …). */
   lastAction?: string;
   hasTerminal: boolean;
+  /** Pregunta que espera en su terminal (permiso, confirmación): se contesta con botones. */
+  prompt?: TermPrompt;
 };
 
 export type ChatTask = { id: number; title: string; status: string };
@@ -58,6 +61,8 @@ type Props = {
   /** Biblioteca de skills (para las propuestas de los agentes) y cómo instalar una. */
   skills?: Skill[];
   onSkill?: (source: string, agent: string) => Promise<void>;
+  /** Teclas para contestar la pregunta que un agente tiene en su terminal. */
+  onPrompt?: (agent: string, keys: string) => void;
   /** Para la página de pruebas: de dónde salen las imágenes (por defecto, del disco vía Tauri). */
   loadImage?: (path: string, project: string | null) => Promise<string>;
 };
@@ -248,6 +253,42 @@ function reveal(path: string, project: string | null) {
 
 // ---- piezas pequeñas -----------------------------------------------------------------
 
+/**
+ * Un mensaje recién llegado se escribe solo, palabra a palabra, como en un chat en vivo (entre
+ * medio segundo y dos y pico, según lo largo). Con las animaciones reducidas sale entero.
+ */
+function Typewriter({ text, onPath }: { text: string; onPath: (p: string) => void }) {
+  const instant = typeof document !== "undefined" && document.documentElement.dataset.motion === "off";
+  const [shown, setShown] = useState(instant ? text.length : 0);
+  useEffect(() => {
+    if (instant) return;
+    const total = text.length;
+    const ms = Math.min(2400, Math.max(500, total * 6));
+    const start = performance.now();
+    let raf = 0;
+    const step = (t: number) => {
+      const k = Math.min(1, (t - start) / ms);
+      // Un poco más rápido al principio: se nota que «empieza a escribir» enseguida.
+      let n = Math.round(total * (1 - Math.pow(1 - k, 1.6)));
+      // Se corta en un final de palabra para que no parpadeen trozos de formato.
+      if (n < total) {
+        const sp = text.indexOf(" ", n);
+        n = sp < 0 ? total : sp;
+      }
+      setShown(n);
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [text, instant]);
+  const done = shown >= text.length;
+  return (
+    <div className="cv-type" data-typing={done ? "0" : "1"}>
+      <Markdown text={done ? text : text.slice(0, shown)} onPath={onPath} />
+    </div>
+  );
+}
+
 const PLAN_PREFIX = /^📋\s*\(modo plan\)\s*/;
 
 function Avatar({ agent, live = false, size }: { agent: string; live?: boolean; size?: "sm" }) {
@@ -302,6 +343,7 @@ export function ChatView({
   onAnswer = noop,
   skills = NO_SKILLS,
   onSkill = noop,
+  onPrompt = () => {},
   loadImage,
 }: Props) {
   const load = loadImage ?? diskImage;
@@ -599,7 +641,7 @@ export function ChatView({
       );
     }
     if (part.k === "ask") {
-      const pending = (lastSeq.get(agent) ?? 0) <= e.seq;
+      const pending = (lastSeq.get(agent) ?? 0) <= e.seq && !busy.get(agent)?.prompt;
       if (!pending) {
         return (
           <div className="cv-line" key={part.key} data-tone="muted">
@@ -669,7 +711,11 @@ export function ChatView({
             {to}
           </span>
         )}
-        <Markdown text={e.text} onPath={openPath} reveal={isNew(part.key) === "1"} />
+        {isNew(part.key) === "1" ? (
+          <Typewriter text={e.text} onPath={openPath} />
+        ) : (
+          <Markdown text={e.text} onPath={openPath} />
+        )}
         {gallery(unseenIn(shown, eventImages(e)))}
       </div>
     );
@@ -701,6 +747,17 @@ export function ChatView({
    * o la frase de su CLI), cuánto lleva y cómo pararlo.
    */
   const thinking = (l: LiveAgent) => {
+    if (l.prompt) {
+      return (
+        <PromptCard
+          key={`prompt-${l.name}-${l.prompt.key}`}
+          agent={l.name}
+          prompt={l.prompt}
+          onPick={(keys) => onPrompt(l.name, keys)}
+          onTerminal={l.hasTerminal ? () => onTerminal(l.name) : undefined}
+        />
+      );
+    }
     const act = l.lastAction ? doingOf(l.lastAction) : null;
     const phrase = statusEs(l.status);
     const label = act && !phrase ? `${act.verb} ${act.detail}`.trim() : phrase || "Pensando…";

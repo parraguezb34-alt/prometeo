@@ -646,13 +646,12 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .st-body,
-  .st-switch,
-  .st-switch span {
-    animation: none;
-    transition: none;
-  }
+/* Animaciones reducidas (Ajustes → General → Animaciones) */
+:root[data-motion="off"] .st-body,
+:root[data-motion="off"] .st-switch,
+:root[data-motion="off"] .st-switch span {
+  animation: none;
+  transition: none;
 }
 
 /* ---- Skills ------------------------------------------------------------------------------ */

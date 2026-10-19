@@ -13,6 +13,7 @@ import type { Dest } from "../components/DestPicker";
 import { Icon } from "../components/Icon";
 import type { TeamEvent, TeamQuestion } from "../lib/team";
 import type { Skill } from "../lib/skills";
+import { detectPrompt } from "../lib/prompts";
 
 /**
  * Banco de pruebas del chat (solo en desarrollo: http://localhost:1420/chat-lab.html).
@@ -169,6 +170,17 @@ const FIXTURE: TeamEvent[] = [
   ),
 ];
 
+const LAB_PROMPT = detectPrompt([
+  "  △ Permission required",
+  "    ← Access external directory ~/OneDrive/Escritorio/pagian3daa/src/scene",
+  "",
+  "  Patterns",
+  "",
+  "  - C:/Users/parra/OneDrive/Escritorio/pagian3daa/src/scene/*",
+  "",
+  "   Allow once   Always allow   Reject          ctrl+f fullscreen  ⇆ select  enter confirm",
+]);
+
 const COLORS = ["#ff9a62", "#5bb4ff", "#b9a0ff", "#4ade9a", "#fbbf4a"];
 const fakeImage = async (path: string) => {
   await new Promise((r) => setTimeout(r, 300 + Math.random() * 700));
@@ -184,6 +196,7 @@ function Lab() {
   const add = (e: Partial<TeamEvent> & { agent: string; kind: string; text: string }) =>
     setEvents((cur) => [...cur, { seq: seq++, ts_ms: Date.now(), session_id: "", files: [], ...e }]);
   const [lastAction, setLastAction] = useState<Record<string, string>>({});
+  const [perm, setPerm] = useState(false);
   const [questions, setQuestions] = useState<TeamQuestion[]>([
     {
       id: 1,
@@ -229,8 +242,9 @@ function Lab() {
         status: name === "antigravity" ? "Generating..." : name === "claude" ? "Pondering…" : "",
         lastAction: name === "opencode" ? lastAction.opencode ?? "Bash npm test" : undefined,
         hasTerminal: true,
+        prompt: name === "opencode" && perm ? (LAB_PROMPT ?? undefined) : undefined,
       })),
-    [busy, lastAction],
+    [busy, lastAction, perm],
   );
   const toggle = (n: string) =>
     setBusy((b) => {
@@ -282,6 +296,14 @@ function Lab() {
       <div className="lab-bar">
         <b>Banco del chat</b>
         <button onClick={simulate}>▶▶ simular turno</button>
+        <button
+          onClick={() => {
+            setBusy((b) => ({ ...b, opencode: b.opencode ?? Date.now() }));
+            setPerm(true);
+          }}
+        >
+          + permiso en terminal
+        </button>
         {["claude", "antigravity", "opencode"].map((n) => (
           <button key={n} onClick={() => toggle(n)} data-on={busy[n] ? "1" : "0"}>
             {busy[n] ? "■" : "▶"} {n}
@@ -370,6 +392,10 @@ function Lab() {
           onTerminal={(a) => console.log("terminal", a)}
           onInterrupt={(a) => toggle(a)}
           loadImage={fakeImage}
+          onPrompt={(a, keys) => {
+            console.log("teclas para", a, JSON.stringify(keys));
+            setPerm(false);
+          }}
           questions={questions}
           onAnswer={async (id, answers) => {
             await new Promise((r) => setTimeout(r, 400));

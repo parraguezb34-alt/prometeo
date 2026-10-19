@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 /**
@@ -388,7 +388,7 @@ function blocks(all: string[], ctx: Ctx, keyBase: string, tight = false): ReactN
   return out;
 }
 
-export function Markdown({
+function MarkdownView({
   text,
   onPath,
   reveal = false,
@@ -412,3 +412,9 @@ export function Markdown({
     </div>
   );
 }
+
+/**
+ * El chat se repinta cada segundo (relojes, acuses): un mensaje solo se vuelve a analizar si
+ * cambia su texto. `onPath` se ignora al comparar: hace lo mismo aunque sea otra función.
+ */
+export const Markdown = memo(MarkdownView, (a, b) => a.text === b.text && a.reveal === b.reveal);

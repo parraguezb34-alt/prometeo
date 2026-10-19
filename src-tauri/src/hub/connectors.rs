@@ -523,7 +523,7 @@ fn is_connected(id: &str, project: Option<&Path>) -> bool {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn team_detect(app: tauri::AppHandle) -> Result<Value, String> {
+pub async fn team_detect(app: tauri::AppHandle) -> Result<Value, String> {
     let project = project_of(&app);
     let project_path = project
         .as_deref()
@@ -550,7 +550,7 @@ pub fn team_detect(app: tauri::AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn team_connect(app: tauri::AppHandle, agent: String, project: Option<String>) -> Result<Value, String> {
+pub async fn team_connect(app: tauri::AppHandle, agent: String, project: Option<String>) -> Result<Value, String> {
     let project = project
         .filter(|p| !p.trim().is_empty())
         .or_else(|| project_of(&app))
@@ -739,7 +739,7 @@ fn set_opencode_model(project: &Path, model: &str) -> Result<(), String> {
 /// `mode = "plan"` starts the CLI in its read-only planning mode when it
 /// supports one.
 #[tauri::command]
-pub fn team_open(
+pub async fn team_open(
     app: tauri::AppHandle,
     agent: String,
     mode: Option<String>,
@@ -854,7 +854,7 @@ fn opencode_session_for(dir: &str) -> Result<String, String> {
 /// memoria, sin teclear nada en su TUI. La petición es duradera: aunque la
 /// respuesta tarde, el servidor la ejecuta al llegar al siguiente límite de paso.
 #[tauri::command]
-pub fn opencode_compact(project: String) -> Result<String, String> {
+pub async fn opencode_compact(project: String) -> Result<String, String> {
     let dir = project.trim().to_string();
     if dir.is_empty() {
         return Err("sin carpeta de proyecto".into());
@@ -981,7 +981,7 @@ fn toml_top_value(text: &str, key: &str) -> Option<String> {
 /// Modelos y niveles de esfuerzo que admite cada agente, para el selector del
 /// modal de equipo. `current` es lo que el propio agente tiene configurado.
 #[tauri::command]
-pub fn team_models(agent: String) -> Result<Value, String> {
+pub async fn team_models(agent: String) -> Result<Value, String> {
     match agent.as_str() {
         "claude" => {
             let efforts = std_efforts();
@@ -1083,7 +1083,7 @@ pub fn team_models(agent: String) -> Result<Value, String> {
 /// carpeta (`workspace`) y la conversación (`conversationId`). Claude Code y Codex lo
 /// mandan con sus hooks (ver `AgentInfo::cli_session`), así que aquí no hace falta.
 #[tauri::command]
-pub fn team_agent_session(agent: String, project: String) -> Option<String> {
+pub async fn team_agent_session(agent: String, project: String) -> Option<String> {
     if agent != "antigravity" {
         return None;
     }

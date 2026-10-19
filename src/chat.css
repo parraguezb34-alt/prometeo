@@ -1558,32 +1558,31 @@ ol.md-list li::marker {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  [data-new="1"],
-  [data-new="1"]::after,
-  .cv-user[data-new="1"] .cv-bubble,
-  .cv-user[data-new="1"] .cv-user-meta,
-  .md[data-reveal="1"] > .md-r,
-  .cv-step,
-  .cv-think,
-  .cv-think .cv-shimmer,
-  .cv-receipt,
-  .cv-lightbox,
-  .cv-lightbox-stage img,
-  .cv-tile img,
-  .cv-jump {
-    animation: none;
-  }
-  .cv-av[data-live="1"]::before,
-  .cv-spin,
-  .cv-think-orb,
-  .cv-receipt-av[data-live="1"],
-  .cv-pulse,
-  .cv-dots i,
-  .cv-shimmer,
-  .cv-tile[data-ready="0"] {
-    animation-duration: 0s;
-  }
+/* Animaciones reducidas (Ajustes → General → Animaciones) */
+:root[data-motion="off"] [data-new="1"],
+:root[data-motion="off"] [data-new="1"]::after,
+:root[data-motion="off"] .cv-user[data-new="1"] .cv-bubble,
+:root[data-motion="off"] .cv-user[data-new="1"] .cv-user-meta,
+:root[data-motion="off"] .md[data-reveal="1"] > .md-r,
+:root[data-motion="off"] .cv-step,
+:root[data-motion="off"] .cv-think,
+:root[data-motion="off"] .cv-think .cv-shimmer,
+:root[data-motion="off"] .cv-receipt,
+:root[data-motion="off"] .cv-lightbox,
+:root[data-motion="off"] .cv-lightbox-stage img,
+:root[data-motion="off"] .cv-tile img,
+:root[data-motion="off"] .cv-jump {
+  animation: none;
+}
+:root[data-motion="off"] .cv-av[data-live="1"]::before,
+:root[data-motion="off"] .cv-spin,
+:root[data-motion="off"] .cv-think-orb,
+:root[data-motion="off"] .cv-receipt-av[data-live="1"],
+:root[data-motion="off"] .cv-pulse,
+:root[data-motion="off"] .cv-dots i,
+:root[data-motion="off"] .cv-shimmer,
+:root[data-motion="off"] .cv-tile[data-ready="0"] {
+  animation-duration: 0s;
 }
 
 /* ---- «Para: …» del compositor ------------------------------------------------------------- */
@@ -1760,10 +1759,9 @@ ol.md-list li::marker {
 .dp-opt-sub[data-state="login"] {
   color: var(--warn);
 }
-@media (prefers-reduced-motion: reduce) {
-  .dp-menu {
-    animation: none;
-  }
+/* Animaciones reducidas (Ajustes → General → Animaciones) */
+:root[data-motion="off"] .dp-menu {
+  animation: none;
 }
 
 /* campana de avisos silenciada */
@@ -2350,9 +2348,138 @@ ol.md-list li::marker {
 .cv-btn[data-tone="accent"]:hover {
   background: color-mix(in srgb, var(--accent) 85%, #fff);
 }
-@media (prefers-reduced-motion: reduce) {
-  .qa-opt,
-  .qa-ic {
-    animation: none;
+/* Animaciones reducidas (Ajustes → General → Animaciones) */
+:root[data-motion="off"] .qa-opt,
+:root[data-motion="off"] .qa-ic {
+  animation: none;
+}
+
+/* ---- un mensaje que se está escribiendo: cursor al final ---------------------------------- */
+
+.cv-type[data-typing="1"] .md > p:last-child::after,
+.cv-type[data-typing="1"] .md > .md-list:last-child > li:last-child::after,
+.cv-type[data-typing="1"] .md > .md-h:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: -0.15em;
+  border-radius: 2px;
+  background: var(--ac, var(--accent));
+  animation: cv-caret 0.9s steps(2, jump-none) infinite;
+}
+@keyframes cv-caret {
+  50% {
+    opacity: 0;
   }
+}
+
+/* ---- un agente espera tu permiso en su terminal ------------------------------------------- */
+
+.tp {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--warn) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 7%, transparent);
+}
+.tp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tp-ic {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #2a1d00;
+  background: var(--warn);
+  --ac: var(--warn);
+  animation: cv-breathe 1.8s ease-out infinite;
+}
+.tp-t {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 13.5px;
+  color: var(--text);
+}
+.tp-t b {
+  font-weight: 650;
+}
+.tp-t span {
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+.tp-detail {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.tp-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tp-opt {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  padding: 7px 14px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text);
+  background: var(--raised-2);
+  border: 1px solid var(--line);
+  animation: cv-in 0.25s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  transition:
+    background 0.15s,
+    transform 0.15s;
+}
+.tp-opt:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.tp-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.tp-opt[data-tone="yes"] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.tp-opt[data-tone="always"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.tp-opt[data-tone="no"] {
+  color: var(--text-soft);
+}
+.tp-opt:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+:root[data-motion="off"] .tp-ic,
+:root[data-motion="off"] .tp-opt,
+:root[data-motion="off"] .cv-type .md > *::after {
+  animation: none;
 }

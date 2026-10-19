@@ -245,7 +245,7 @@ fn is_foreign_session_var(key: &str) -> bool {
 /// When `command` is set, the shell starts already running it (used by the
 /// team panel to open agent sessions like `claude` or the OpenCode CLI).
 #[tauri::command]
-pub fn term_spawn(
+pub async fn term_spawn(
     app: AppHandle,
     state: State<'_, PtyManager>,
     cwd: Option<String>,
@@ -410,7 +410,7 @@ pub fn term_kill(state: State<'_, PtyManager>, id: String) -> Result<(), String>
 }
 
 #[tauri::command]
-pub fn term_list(state: State<'_, PtyManager>) -> Result<Vec<SessionInfo>, String> {
+pub async fn term_list(state: State<'_, PtyManager>) -> Result<Vec<SessionInfo>, String> {
     let map = state.0.lock().map_err(|e| e.to_string())?;
     Ok(map
         .iter()
@@ -424,7 +424,7 @@ pub fn term_list(state: State<'_, PtyManager>) -> Result<Vec<SessionInfo>, Strin
 
 /// Full scrollback (base64) used to repaint a re-attached terminal.
 #[tauri::command]
-pub fn term_scrollback(state: State<'_, PtyManager>, id: String) -> Result<String, String> {
+pub async fn term_scrollback(state: State<'_, PtyManager>, id: String) -> Result<String, String> {
     let map = state.0.lock().map_err(|e| e.to_string())?;
     let session = map.get(&id).ok_or("session not found")?;
     let buffer = session.buffer.lock().map_err(|e| e.to_string())?;

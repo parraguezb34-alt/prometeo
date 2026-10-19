@@ -8,6 +8,8 @@ import type { DispatchConfig } from "./dispatcher";
  * navegador, como el resto de preferencias de lienzo.
  */
 export type LeaderMode = "last" | "never" | "any";
+/** on = siempre · system = como diga Windows («Efectos de animación») · off = reducidas. */
+export type MotionMode = "on" | "system" | "off";
 
 export type Settings = {
   dispatch: {
@@ -38,6 +40,9 @@ export type Settings = {
     /** Modo director: limpiar el contexto del líder (Claude) al acabar cada misión. */
     leaderClean: boolean;
   };
+  ui: {
+    motion: MotionMode;
+  };
   /** Agentes que no se abren al iniciar ni reciben tareas del despacho. */
   skipAgents: string[];
   /** Carpetas de proyecto usadas hace poco, la más reciente primero. */
@@ -55,6 +60,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   notify: { ask: true, done: true, reply: true, lateMin: 3, whenFocused: false },
   team: { relayInbox: true, leaderClean: true },
+  ui: { motion: "on" },
   skipAgents: [],
   recentProjects: [],
 };
@@ -71,6 +77,7 @@ function load(): Settings {
         dispatch: { ...DEFAULT_SETTINGS.dispatch, ...(p.dispatch ?? {}) },
         notify: { ...DEFAULT_SETTINGS.notify, ...(p.notify ?? {}) },
         team: { ...DEFAULT_SETTINGS.team, ...(p.team ?? {}) },
+        ui: { ...DEFAULT_SETTINGS.ui, ...(p.ui ?? {}) },
         skipAgents: Array.isArray(p.skipAgents) ? p.skipAgents : [],
         recentProjects: Array.isArray(p.recentProjects) ? p.recentProjects : [],
       };
@@ -92,6 +99,7 @@ export function updateSettings(patch: {
   dispatch?: Partial<Settings["dispatch"]>;
   notify?: Partial<Settings["notify"]>;
   team?: Partial<Settings["team"]>;
+  ui?: Partial<Settings["ui"]>;
   skipAgents?: string[];
   recentProjects?: string[];
 }) {
@@ -99,6 +107,7 @@ export function updateSettings(patch: {
     dispatch: { ...current.dispatch, ...(patch.dispatch ?? {}) },
     notify: { ...current.notify, ...(patch.notify ?? {}) },
     team: { ...current.team, ...(patch.team ?? {}) },
+    ui: { ...current.ui, ...(patch.ui ?? {}) },
     skipAgents: patch.skipAgents ?? current.skipAgents,
     recentProjects: patch.recentProjects ?? current.recentProjects,
   };
@@ -143,4 +152,24 @@ export function dispatchConfig(s: Settings): DispatchConfig {
     idleMs: s.dispatch.idleS * 1000,
     leaderMode: s.dispatch.leader,
   };
+}
+
+/**
+ * Marca en <html> si las animaciones van reducidas (`data-motion="off"`). En «Como Windows»
+ * sigue a «Efectos de animación» del sistema, que la ventana ve como prefers-reduced-motion.
+ */
+export function applyMotion(mode: MotionMode = current.ui.motion) {
+  const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const off = mode === "off" || (mode === "system" && reduce);
+  document.documentElement.dataset.motion = off ? "off" : "on";
+}
+
+if (typeof document !== "undefined") {
+  applyMotion();
+  listeners.add(() => applyMotion());
+  try {
+    matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change", () => applyMotion());
+  } catch {
+    /* sin matchMedia: se queda como esté */
+  }
 }

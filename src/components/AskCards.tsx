@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Skill } from "../lib/skills";
 import { findSkill } from "../lib/skills";
+import type { TermPrompt } from "../lib/prompts";
 import { agentLabel } from "../lib/team";
 import type { QAnswer, TeamQuestion } from "../lib/team";
 import { Icon } from "./Icon";
@@ -166,6 +167,61 @@ export function QuestionCard({
           {busy ? "Enviando…" : "Enviar respuestas"}
           <Icon name="send" size={13} />
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** Un agente espera en su terminal que le des permiso (o elijas una opción): botones aquí mismo. */
+export function PromptCard({
+  agent,
+  prompt,
+  onPick,
+  onTerminal,
+}: {
+  agent: string;
+  prompt: TermPrompt;
+  onPick: (keys: string) => void;
+  onTerminal?: () => void;
+}) {
+  const [sent, setSent] = useState<string | null>(null);
+  return (
+    <div className="tp" data-new="1">
+      <div className="tp-head">
+        <span className="tp-ic">
+          <Icon name="shield" size={14} />
+        </span>
+        <div className="tp-t">
+          <b>
+            {agentLabel(agent)} {prompt.title === "Pide permiso" ? "pide permiso" : "te pregunta"}
+          </b>
+          {prompt.title !== "Pide permiso" && <span>{prompt.title}</span>}
+        </div>
+        {onTerminal && (
+          <button className="cv-ghost" onClick={onTerminal} title="Ver su terminal">
+            <Icon name="term" size={12} />
+            Terminal
+          </button>
+        )}
+      </div>
+      {prompt.detail.length > 0 && (
+        <pre className="tp-detail">{prompt.detail.join("\n")}</pre>
+      )}
+      <div className="tp-opts">
+        {prompt.options.map((o) => (
+          <button
+            key={o.label}
+            className="tp-opt"
+            data-tone={o.tone}
+            disabled={sent !== null}
+            onClick={() => {
+              setSent(o.label);
+              onPick(o.keys);
+            }}
+          >
+            {sent === o.label ? "Enviado…" : o.label}
+          </button>
+        ))}
       </div>
     </div>
   );
