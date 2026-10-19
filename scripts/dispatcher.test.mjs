@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { EMPTY_DISPATCH, DISPATCH_CONFIG as C, tick, isParked, retryTask, sendFailed, dispatchPrompt } from "./dispatcher.js";
+import { EMPTY_DISPATCH, DISPATCH_CONFIG as C, tick, isParked, retryTask, sendFailed, dispatchPrompt } from "./lib/dispatcher.js";
 
 const t = (id, status = "open", owner = "", parents = []) => ({ id, title: `t${id}`, notes: "", status, owner, parents });
 const a = (name, extra = {}) => ({ name, online: true, hasTerminal: true, blocked: false, lastActivityMs: 0, ...extra });

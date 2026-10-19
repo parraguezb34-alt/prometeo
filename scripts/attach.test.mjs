@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { attachMeta, attachmentLine, countLines, displayName, isLongPaste, kindOf, splitAttachments, textToBase64 } from "./attach.js";
+import { attachMeta, attachmentLine, countLines, displayName, isLongPaste, kindOf, splitAttachments, textToBase64 } from "./lib/attach.js";
 
 let n = 0;
 function test(name, fn) {

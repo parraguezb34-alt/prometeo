@@ -223,6 +223,23 @@
   overflow-wrap: anywhere;
   user-select: text;
 }
+/* tu mensaje sale disparado desde el compositor */
+.cv-user[data-new="1"] {
+  animation: none;
+}
+.cv-user[data-new="1"] .cv-bubble {
+  transform-origin: 100% 100%;
+  animation: cv-send 0.42s cubic-bezier(0.2, 0.9, 0.25, 1.15) both;
+}
+.cv-user[data-new="1"] .cv-user-meta {
+  animation: cv-fade 0.3s 0.12s ease-out both;
+}
+@keyframes cv-send {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.92);
+  }
+}
 .cv-tag {
   padding: 1px 8px;
   border-radius: 999px;
@@ -275,8 +292,14 @@
   opacity: 0.35;
   transition: opacity 0.3s;
 }
+.cv-receipt-av {
+  transition:
+    opacity 0.3s,
+    transform 0.35s cubic-bezier(0.2, 0.9, 0.25, 1.4);
+}
 .cv-receipt-av[data-on="1"] {
   opacity: 1;
+  transform: scale(1.08);
 }
 .cv-receipt-av[data-live="1"] {
   opacity: 1;
@@ -302,8 +325,23 @@
   background: color-mix(in srgb, var(--ac) 16%, var(--raised));
   border: 1px solid color-mix(in srgb, var(--ac) 32%, transparent);
 }
+.cv-av {
+  position: relative;
+}
+/* trabajando: un anillo de su color gira alrededor del avatar */
+.cv-av[data-live="1"]::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0 55%, var(--ac) 85%, transparent 100%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1.5px));
+  animation: cv-rot 1.4s linear infinite;
+}
 .cv-av[data-live="1"] {
-  animation: cv-breathe 1.8s ease-out infinite;
+  box-shadow: 0 0 18px -4px color-mix(in srgb, var(--ac) 70%, transparent);
+  transition: box-shadow 0.4s;
 }
 .cv-turn-main {
   min-width: 0;
@@ -414,21 +452,91 @@
 .md-h[data-level="1"] {
   font-size: 17px;
 }
+.md-h[data-level="2"] {
+  font-size: 16px;
+}
+.md-h[data-level="4"] {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
 .md-list {
   margin: 0;
-  padding-left: 22px;
+  padding-left: 24px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
+}
+.md-list li {
+  padding-left: 2px;
+}
+.md-list li > * + * {
+  margin-top: 6px;
 }
 .md-list li::marker {
   color: var(--faint);
+}
+ol.md-list li::marker {
+  color: color-mix(in srgb, var(--ac, var(--accent)) 70%, var(--muted));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.md-list .md-list {
+  gap: 3px;
+  padding-left: 20px;
+}
+.md-list .md-list li::marker {
+  color: var(--faint);
+  font-weight: 400;
 }
 .md-quote {
   margin: 0;
   padding: 2px 0 2px 12px;
   border-left: 3px solid var(--line-strong);
   color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.md-hr {
+  border: 0;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line-soft);
+}
+.md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+.md-table {
+  border-collapse: collapse;
+  min-width: 100%;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.md-table th,
+.md-table td {
+  padding: 7px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line-soft);
+}
+.md-table th {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  background: var(--surface);
+  white-space: nowrap;
+}
+.md-table tr:last-child td {
+  border-bottom: 0;
+}
+.md s {
+  color: var(--faint);
 }
 .md-code {
   font-family: var(--mono);
@@ -440,17 +548,92 @@
   color: var(--text);
 }
 .md-pre {
-  margin: 0;
-  padding: 12px 14px;
+  min-width: 0;
   border-radius: 12px;
   background: var(--bg);
   border: 1px solid var(--line);
+  overflow: hidden;
+}
+.md-pre-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px 5px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--faint);
+}
+/* sin lenguaje (salida de un comando): sin barra, el «Copiar» flota en la esquina */
+.md-pre {
+  position: relative;
+}
+.md-pre[data-bare="1"] .md-pre-bar {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.md-pre-bar button {
+  all: unset;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-family: var(--font, inherit);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
+}
+.md-pre:hover .md-pre-bar button,
+.md-pre-bar button:focus-visible,
+.md-pre-bar button[data-done="1"] {
+  opacity: 1;
+}
+.md-pre-bar button:hover {
+  color: var(--text);
+  background: var(--raised);
+}
+.md-pre-bar button[data-done="1"] {
+  color: var(--ok);
+}
+.md-pre pre {
+  margin: 0;
+  padding: 11px 14px;
   font-family: var(--mono);
   font-size: 12.5px;
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--text-soft);
   overflow-x: auto;
   white-space: pre;
+  user-select: text;
+}
+.md-path-lines {
+  opacity: 0.6;
+}
+/* un mensaje recién llegado se «escribe»: cada bloque entra tras el anterior */
+.md[data-reveal="1"] > .md-r {
+  animation: md-write 0.42s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+@keyframes md-write {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: blur(0);
+  }
 }
 .md-link {
   color: var(--link);
@@ -550,6 +733,33 @@
 }
 .cv-done[data-new="1"] .cv-done-ic {
   animation: cv-pop 0.4s 0.15s ease-out both;
+}
+/* tarea recién cerrada: un brillo verde la recorre una vez */
+.cv-done {
+  position: relative;
+  overflow: hidden;
+}
+.cv-done[data-new="1"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    color-mix(in srgb, var(--ok) 16%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  animation: cv-sweep 1.1s 0.25s ease-out both;
+}
+@keyframes cv-sweep {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
 }
 .cv-done-tag {
   margin-left: auto;
@@ -748,6 +958,47 @@
 .cv-step:hover {
   background: var(--surface);
 }
+/* en vivo: los últimos pasos sin desplegar; el nuevo entra por abajo y los viejos se apagan */
+.cv-steps[data-live="1"] {
+  border-left-color: color-mix(in srgb, var(--ac) 45%, var(--line-soft));
+}
+.cv-steps[data-live="1"] .cv-step {
+  opacity: calc(1 - var(--age, 0) * 0.28);
+  animation: cv-step-in 0.35s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  transition: opacity 0.4s;
+}
+.cv-steps[data-live="1"] .cv-step:last-child .cv-step-ic {
+  color: var(--ac);
+}
+@keyframes cv-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    max-height: 0;
+  }
+  to {
+    max-height: 40px;
+  }
+}
+.cv-step-more {
+  padding: 1px 6px 3px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.cv-spin {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--ac) 25%, transparent);
+  border-top-color: var(--ac);
+  animation: cv-rot 0.9s linear infinite;
+}
+.cv-work[data-running="1"] .cv-work-head {
+  border-color: color-mix(in srgb, var(--ac) 30%, var(--line-soft));
+}
+.cv-work[data-running="1"] .cv-work-t {
+  color: var(--text);
+}
 .cv-step-ic {
   display: grid;
   place-items: center;
@@ -819,6 +1070,38 @@
   background-clip: text;
   color: transparent;
   animation: cv-shine 2.4s linear infinite;
+}
+.cv-think-orb {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--ac);
+  background: color-mix(in srgb, var(--ac) 12%, transparent);
+  animation: cv-breathe 2s ease-out infinite;
+}
+.cv-think-orb .cv-dots {
+  gap: 2px;
+}
+.cv-think-orb .cv-dots i {
+  width: 3.5px;
+  height: 3.5px;
+}
+.cv-think .cv-shimmer {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation:
+    cv-shine 2.4s linear infinite,
+    cv-phrase 0.35s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes cv-phrase {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
 }
 .cv-think-clock {
   font-family: var(--mono);
@@ -1092,8 +1375,13 @@
 
 @media (prefers-reduced-motion: reduce) {
   [data-new="1"],
+  [data-new="1"]::after,
+  .cv-user[data-new="1"] .cv-bubble,
+  .cv-user[data-new="1"] .cv-user-meta,
+  .md[data-reveal="1"] > .md-r,
   .cv-step,
   .cv-think,
+  .cv-think .cv-shimmer,
   .cv-receipt,
   .cv-lightbox,
   .cv-lightbox-stage img,
@@ -1101,7 +1389,9 @@
   .cv-jump {
     animation: none;
   }
-  .cv-av[data-live="1"],
+  .cv-av[data-live="1"]::before,
+  .cv-spin,
+  .cv-think-orb,
   .cv-receipt-av[data-live="1"],
   .cv-pulse,
   .cv-dots i,

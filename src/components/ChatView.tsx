@@ -8,7 +8,7 @@ import { agentColor, agentInitial, agentLabel, shortPath } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
 import { askPhrase, buildTimeline, clock, eventImages, isDispatch, samePath, span } from "../lib/timeline";
 import type { Part, Row, TaskInfo, Turn } from "../lib/timeline";
-import { stepOf, workSummary } from "../lib/steps";
+import { doingOf, statusEs, stepOf, workSummary } from "../lib/steps";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import { Markdown } from "./Markdown";
@@ -419,20 +419,57 @@ export function ChatView({
     return out;
   };
 
+  const stepRow = (e: TeamEvent, style: CSSProperties) => {
+    const s = stepOf(e);
+    return (
+      <li className="cv-step" key={e.seq} style={style}>
+        <span className="cv-step-ic">
+          <Icon name={s.icon} size={12} />
+        </span>
+        <span className="cv-step-verb">{s.verb}</span>
+        {s.path ? (
+          <button className="md-path" onClick={() => openPath(s.path as string)} title={s.path}>
+            {shortPath(s.path)}
+          </button>
+        ) : (
+          <code className="cv-step-cmd" title={s.detail}>
+            {s.detail}
+          </code>
+        )}
+        {stamp(e.ts_ms)}
+      </li>
+    );
+  };
+
+  /** Pasos que se ven sin desplegar mientras el agente trabaja: los últimos, entrando por abajo. */
+  const LIVE_TAIL = 3;
+
   const renderWork = (part: Extract<Part, { k: "work" }>, running: boolean, shown: string[]) => {
     const evs = part.events;
     const isOpen = open.has(part.key);
     const dur = evs[evs.length - 1].ts_ms - evs[0].ts_ms;
     const summary = workSummary(evs);
     const imgs = unseenIn(shown, evs.flatMap(eventImages));
+    const tail = running && !isOpen ? evs.slice(-LIVE_TAIL) : [];
+    const hidden = evs.length - tail.length;
     return (
-      <div className="cv-work" key={part.key} data-open={isOpen ? "1" : "0"} data-new={isNew(part.key)}>
+      <div
+        className="cv-work"
+        key={part.key}
+        data-open={isOpen ? "1" : "0"}
+        data-running={running ? "1" : "0"}
+        data-new={isNew(part.key)}
+      >
         <button className="cv-work-head" onClick={() => toggle(part.key)} aria-expanded={isOpen}>
           <span className="cv-work-ic" data-running={running ? "1" : "0"}>
-            {running ? <span className="cv-pulse" /> : <Icon name="check" size={12} />}
+            {running ? <span className="cv-spin" /> : <Icon name="check" size={12} />}
           </span>
           <span className="cv-work-t">
-            {running ? "En curso" : dur > 20_000 ? `Trabajó ${span(dur)}` : "Trabajó"}
+            {running
+              ? `Trabajando${dur > 20_000 ? ` · ${span(dur)}` : ""}`
+              : dur > 20_000
+                ? `Trabajó ${span(dur)}`
+                : "Trabajó"}
           </span>
           {summary && <span className="cv-work-sum">{summary}</span>}
           <span className="cv-work-chev">
@@ -440,28 +477,16 @@ export function ChatView({
           </span>
         </button>
         {isOpen && (
-          <ol className="cv-steps">
-            {evs.map((e, i) => {
-              const s = stepOf(e);
-              return (
-                <li className="cv-step" key={e.seq} style={{ "--i": Math.min(i, 14) } as CSSProperties}>
-                  <span className="cv-step-ic">
-                    <Icon name={s.icon} size={12} />
-                  </span>
-                  <span className="cv-step-verb">{s.verb}</span>
-                  {s.path ? (
-                    <button className="md-path" onClick={() => openPath(s.path as string)} title={s.path}>
-                      {shortPath(s.path)}
-                    </button>
-                  ) : (
-                    <code className="cv-step-cmd" title={s.detail}>
-                      {s.detail}
-                    </code>
-                  )}
-                  {stamp(e.ts_ms)}
-                </li>
-              );
-            })}
+          <ol className="cv-steps">{evs.map((e, i) => stepRow(e, { "--i": Math.min(i, 14) } as CSSProperties))}</ol>
+        )}
+        {tail.length > 0 && (
+          <ol className="cv-steps" data-live="1">
+            {hidden > 0 && (
+              <li className="cv-step-more" key="more">
+                {hidden === 1 ? "1 paso antes" : `${hidden} pasos antes`}
+              </li>
+            )}
+            {tail.map((e, i) => stepRow(e, { "--age": tail.length - 1 - i } as CSSProperties))}
           </ol>
         )}
         {gallery(imgs)}
@@ -605,7 +630,7 @@ export function ChatView({
             {to}
           </span>
         )}
-        <Markdown text={e.text} onPath={openPath} />
+        <Markdown text={e.text} onPath={openPath} reveal={isNew(part.key) === "1"} />
         {gallery(unseenIn(shown, eventImages(e)))}
       </div>
     );
@@ -632,18 +657,25 @@ export function ChatView({
     return out;
   };
 
-  /** «Pensando…» al pie del turno de un agente que está trabajando. */
-  const thinking = (l: LiveAgent) => (
-    <div className="cv-think" key={`think-${l.name}`}>
-      <Dots />
-      <span className="cv-shimmer">{l.status || "Trabajando…"}</span>
-      <span className="cv-think-clock">{clock(now - l.since)}</span>
-      {l.lastAction && !l.status && (
-        <code className="cv-think-act" title={l.lastAction}>
-          {l.lastAction}
-        </code>
-      )}
-      <span className="cv-grow" />
+  /**
+   * Al pie del turno de un agente que trabaja: qué está haciendo ahora mismo (su última acción
+   * o la frase de su CLI), cuánto lleva y cómo pararlo.
+   */
+  const thinking = (l: LiveAgent) => {
+    const act = l.lastAction ? doingOf(l.lastAction) : null;
+    const phrase = statusEs(l.status);
+    const label = act && !phrase ? `${act.verb} ${act.detail}`.trim() : phrase || "Pensando…";
+    return (
+      <div className="cv-think" key={`think-${l.name}`}>
+        <span className="cv-think-orb" aria-hidden="true">
+          {act && !phrase ? <Icon name={act.icon} size={12} /> : <Dots />}
+        </span>
+        {/* La clave hace que cada frase nueva entre con su animación. */}
+        <span className="cv-shimmer" key={label} title={l.status || l.lastAction}>
+          {label}
+        </span>
+        <span className="cv-think-clock">{clock(now - l.since)}</span>
+        <span className="cv-grow" />
       {l.hasTerminal && (
         <>
           <button className="cv-ghost" onClick={() => onTerminal(l.name)} title="Ver su terminal">
@@ -656,8 +688,9 @@ export function ChatView({
           </button>
         </>
       )}
-    </div>
-  );
+      </div>
+    );
+  };
 
   const turnHead = (agent: string, ts: number | null, reply: boolean, liveNow: boolean, turn?: Turn) => {
     const text = turn

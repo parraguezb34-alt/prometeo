@@ -110,6 +110,29 @@ const FIXTURE: TeamEvent[] = [
     { to: "opencode" },
   ),
   ev(15, "tú", "message", "¿Puedes revisar que el HUD se vea bien en 1366×768?", { to: "opencode" }),
+  // Tal cual lo escribió Antigravity en una prueba real: listas anidadas, código dentro de
+  // listas y enlaces a archivos con la etiqueta entre comillas de código.
+  ev(
+    16,
+    "antigravity",
+    "reply",
+    "He leído el mensaje **#982** de Claude en el buzón y aplicado las correcciones solicitadas para la tarea **#18**:\n\n1. **Pruebas unitarias**: Se creó [`utilidades/fecha.test.js`](file:///C:/Users/parra/OneDrive/Escritorio/Nueva%20carpeta/utilidades/fecha.test.js) con `node:assert`, validando:\n   - [`formatearFecha`](file:///C:/Users/parra/OneDrive/Escritorio/Nueva%20carpeta/utilidades/fecha.js#L11-L16) con casos de un solo dígito (ceros a la izquierda) y fecha completa.\n   - [`diasEntre`](file:///C:/Users/parra/OneDrive/Escritorio/Nueva%20carpeta/utilidades/fecha.js#L26-L31) en orden cronológico e invertido (sin signo negativo) y mismo día.\n2. **Ejecución de pruebas**:\n   ```bash\n   node utilidades/fecha.test.js\n   ```\n   **Salida**:\n   ```\n   OK: todos los tests de fecha pasaron\n   ```\n3. **Entrega y liberación**: Se volvió a cerrar la tarea con `team_task_done` (ahora en estado *en revisión*) y se liberó la reserva del archivo con `team_release_files`. No fue necesario responder por mensaje ya que la entrega cubre todos los puntos.",
+  ),
+  ev(17, "claude", "task", "#18 la asume claude (era de antigravity)"),
+  ev(17.1, "claude", "tool", "Bash node utilidades/fecha.test.js"),
+  ev(
+    17.3,
+    "claude",
+    "task",
+    "#18 hecha por claude: Tomada tras la ronda 1 de corrección (prueba del flujo). antigravity entregó utilidades/fecha.js (formatearFecha y diasEntre) y, tras pedírselo en la corrección",
+    { files: ["utilidades/fecha.js", "utilidades/fecha.test.js"] },
+  ),
+  ev(
+    17.4,
+    "claude",
+    "reply",
+    "La tarea #18 está cerrada. Resumen de la prueba del flujo:\n\n1. Repartí el encargo a antigravity (solo `utilidades/fecha.js`).\n2. Entregó código correcto → en la ronda 1 le pedí con `fix` que añadiera `utilidades/fecha.test.js` con `node:assert`.\n3. Volvió a entregar con el test incluido → la tomé con `take`, verifiqué ejecutando `node utilidades/fecha.test.js` (pasó sin errores) y la cerré yo con `team_task_done`.",
+  ),
 ];
 
 const COLORS = ["#ff9a62", "#5bb4ff", "#b9a0ff", "#4ade9a", "#fbbf4a"];
@@ -126,6 +149,7 @@ function Lab() {
   const [busy, setBusy] = useState<Record<string, number>>({ claude: Date.now() - 42_000 });
   const add = (e: Partial<TeamEvent> & { agent: string; kind: string; text: string }) =>
     setEvents((cur) => [...cur, { seq: seq++, ts_ms: Date.now(), session_id: "", files: [], ...e }]);
+  const [lastAction, setLastAction] = useState<Record<string, string>>({});
   const live: LiveAgent[] = useMemo(
     () =>
       Object.entries(busy).map(([name, since]) => ({
@@ -133,10 +157,10 @@ function Lab() {
         busy: true,
         since,
         status: name === "antigravity" ? "Generating..." : name === "claude" ? "Pondering…" : "",
-        lastAction: name === "opencode" ? "Bash npm test" : undefined,
+        lastAction: name === "opencode" ? lastAction.opencode ?? "Bash npm test" : undefined,
         hasTerminal: true,
       })),
-    [busy],
+    [busy, lastAction],
   );
   const toggle = (n: string) =>
     setBusy((b) => {
@@ -146,10 +170,48 @@ function Lab() {
       return next;
     });
 
+  /** Un turno entero de OpenCode: le escribes, trabaja paso a paso, contesta y cierra la tarea. */
+  const simulate = () => {
+    const steps: [number, () => void][] = [
+      [0, () => add({ agent: "tú", kind: "message", text: "OpenCode, añade el minimapa al HUD y comprueba que compila.", to: "opencode" })],
+      [900, () => setBusy((b) => ({ ...b, opencode: Date.now() }))],
+      [2200, () => tool("Read juego3d/src/hud.js", ["juego3d/src/hud.js"])],
+      [3600, () => tool("Search minimap|minimapa")],
+      [5000, () => tool("Write juego3d/src/hud/minimap.js", ["juego3d/src/hud/minimap.js"])],
+      [6600, () => tool("Edit juego3d/src/hud.js", ["juego3d/src/hud.js"])],
+      [8200, () => tool("Bash node --check juego3d/src/hud/minimap.js")],
+      [10200, () => {
+        setBusy((b) => {
+          const next = { ...b };
+          delete next.opencode;
+          return next;
+        });
+        add({
+          agent: "opencode",
+          kind: "reply",
+          text: "Listo el **minimapa**:\n\n1. Nuevo `juego3d/src/hud/minimap.js` con el trazado y los checkpoints.\n   - Se dibuja en un `canvas` de 160×160 en la esquina.\n   - Gira con el buggy.\n2. Conectado desde `juego3d/src/hud.js`.\n\n```\n$ node --check juego3d/src/hud/minimap.js\n(sin errores)\n```",
+        });
+      }],
+      [11000, () =>
+        add({
+          agent: "opencode",
+          kind: "task",
+          text: "#13 hecha por opencode: Minimapa en el HUD con trazado, checkpoints y rotación con el buggy; node --check sin errores.",
+          files: ["juego3d/src/hud/minimap.js", "juego3d/src/hud.js"],
+        })],
+    ];
+    for (const [ms, fn] of steps) window.setTimeout(fn, ms);
+  };
+  const tool = (text: string, files: string[] = []) => {
+    setLastAction((a) => ({ ...a, opencode: text }));
+    add({ agent: "opencode", kind: "tool", text, files });
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "var(--bg)" }}>
       <div className="lab-bar">
         <b>Banco del chat</b>
+        <button onClick={simulate}>▶▶ simular turno</button>
         {["claude", "antigravity", "opencode"].map((n) => (
           <button key={n} onClick={() => toggle(n)} data-on={busy[n] ? "1" : "0"}>
             {busy[n] ? "■" : "▶"} {n}

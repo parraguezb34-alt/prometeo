@@ -707,7 +707,8 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                             "#{} {verb} por {}: {}",
                             task.id,
                             agent,
-                            summary.chars().take(160).collect::<String>()
+                            // Entero (ya viene acotado): el chat lo pliega y el puente lo recorta para los agentes.
+                            summary
                         ),
                         files_in.clone(),
                     )
