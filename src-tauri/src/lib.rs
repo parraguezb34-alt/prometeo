@@ -2,6 +2,12 @@ pub mod hub;
 mod project;
 mod pty;
 
+// Los tests también necesitan el manifiesto de Windows que tauri-build solo
+// enlaza en los binarios (ver build.rs); sin él no llegan a arrancar.
+#[cfg(all(test, windows))]
+#[link(name = "resource", kind = "static", modifiers = "+whole-archive")]
+unsafe extern "C" {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

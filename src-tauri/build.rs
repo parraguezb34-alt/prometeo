@@ -57,5 +57,19 @@ fn main() {
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=Cargo.toml");
     unblock_locked_bins();
-    tauri_build::build()
+    tauri_build::build();
+    link_manifest_into_tests();
+}
+
+/// tauri-build solo enlaza el manifiesto de Windows (comctl32 v6) en los
+/// binarios; sin él los tests mueren al arrancar con STATUS_ENTRYPOINT_NOT_FOUND.
+/// Aquí solo se publica dónde está el recurso: lo enlaza `lib.rs` con `cfg(test)`.
+fn link_manifest_into_tests() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let Some(out) = std::env::var_os("OUT_DIR").map(PathBuf::from) else { return };
+    if out.join("libresource.a").is_file() || out.join("resource.lib").is_file() {
+        println!("cargo:rustc-link-search=native={}", out.display());
+    }
 }
