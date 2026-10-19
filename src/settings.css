@@ -610,7 +610,7 @@
   color: var(--muted);
 }
 .st-tag {
-  font-family: "Manrope Variable", "Segoe UI", system-ui, sans-serif;
+  font-family: "Inter Variable", "Segoe UI", system-ui, sans-serif;
   font-weight: 700;
   color: var(--ac);
 }

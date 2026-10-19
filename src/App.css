@@ -1,45 +1,49 @@
-/* Sistema de diseño: "Mesa de equipo". Todos los colores de la app salen de
-   estos tokens; cambiar la paleta es cambiar este bloque. */
+/* Sistema de diseño: grafito y rojo, a la manera de Apple. Todos los colores de la app salen
+   de estos tokens; cambiar la paleta es cambiar este bloque. El rojo se reserva para lo
+   importante (enviar, lo activo, lo que está trabajando); el resto es gris neutro. */
 :root {
   color-scheme: dark;
-  font-family: "Manrope Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-family: "Inter Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-feature-settings: "cv11", "ss03";
+  letter-spacing: -0.008em;
+  -webkit-font-smoothing: antialiased;
   --mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
 
-  /* superficies, de más hundida a más elevada */
-  --bg: #0e1220;
-  --surface: #121829;
-  --raised: #1a2236;
-  --raised-2: #232d47;
+  /* superficies, de más hundida a más elevada (grises neutros, sin tinte azul) */
+  --bg: #161618;
+  --surface: #1c1c1e;
+  --raised: #242427;
+  --raised-2: #2f2f33;
 
   /* líneas */
-  --line-soft: #1e2740;
-  --line: #28324d;
-  --line-strong: #3a4766;
+  --line-soft: #222225;
+  --line: #2e2e32;
+  --line-strong: #444449;
 
   /* texto */
-  --faint: #6f7b9c;
-  --dim: #8591b1;
-  --muted: #a8b2cd;
-  --text-soft: #d3daee;
-  --text: #eef1fb;
+  --faint: #6e6e73;
+  --dim: #8e8e93;
+  --muted: #aeaeb2;
+  --text-soft: #d1d1d6;
+  --text: #f5f5f7;
   --text-strong: #ffffff;
 
   /* acento y estado */
-  --accent: #35d0c8;
-  --accent-ink: #06201e;
-  --ok: #4ade9a;
-  --warn: #fbbf4a;
-  --err: #ff7b7b;
-  --link: #7cc4ff;
+  --accent: #e5484d;
+  --accent-ink: #ffffff;
+  --ok: #30d158;
+  --warn: #ffb340;
+  --err: #ff6961;
+  --link: #6cb6ff;
 
-  /* identidad de los agentes */
-  --c-claude: #ff9a62;
-  --c-opencode: #5bb4ff;
-  --c-codex: #4ade9a;
-  --c-antigravity: #b9a0ff;
+  /* identidad de los agentes (apagada, para no competir con el rojo) */
+  --c-claude: #e8a582;
+  --c-opencode: #8fb4d9;
+  --c-codex: #8fcfa4;
+  --c-antigravity: #b4a8d9;
 
-  --r: 16px;
-  --r-sm: 10px;
+  --r: 14px;
+  --r-sm: 9px;
 }
 
 * {

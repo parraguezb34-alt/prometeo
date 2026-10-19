@@ -704,8 +704,9 @@ ol.md-list li::marker {
   gap: 8px;
   padding: 12px 14px;
   border-radius: 14px;
-  background: color-mix(in srgb, var(--ok) 5%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--ok) 22%, var(--line-soft));
+  /* Neutra: el verde queda en el check (y en el brillo al cerrarse). */
+  background: var(--surface);
+  border: 1px solid var(--line);
 }
 .cv-done-head {
   display: flex;
@@ -1365,7 +1366,7 @@ ol.md-list li::marker {
   font-size: 18px;
   font-weight: 700;
   color: #fff;
-  background: rgba(8, 11, 20, 0.6);
+  background: rgba(0, 0, 0, 0.55);
 }
 .cv-tile-missing {
   display: inline-flex;
@@ -1388,7 +1389,7 @@ ol.md-list li::marker {
   justify-content: center;
   gap: 14px;
   padding: 48px 72px 28px;
-  background: rgba(5, 8, 16, 0.88);
+  background: rgba(12, 12, 14, 0.9);
   backdrop-filter: blur(6px);
   cursor: zoom-out;
   animation: cv-fade 0.18s ease-out both;
@@ -1451,7 +1452,7 @@ ol.md-list li::marker {
   place-items: center;
   border-radius: 50%;
   color: var(--text);
-  background: rgba(35, 45, 71, 0.85);
+  background: rgba(47, 47, 51, 0.88);
   transition: background 0.15s;
 }
 .cv-lightbox-x:hover,
@@ -1809,7 +1810,7 @@ ol.md-list li::marker {
   display: grid;
   place-items: center;
   color: #fff;
-  background: rgba(8, 11, 20, 0.75);
+  background: rgba(0, 0, 0, 0.65);
   opacity: 0;
   transition: opacity 0.15s;
 }

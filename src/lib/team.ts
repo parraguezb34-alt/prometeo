@@ -279,15 +279,8 @@ export function ago(ts: number): string {
   return `${Math.round(seconds / 86400)}d`;
 }
 
-const PALETTE = [
-  "#7aa2f7",
-  "#9ece6a",
-  "#f7768e",
-  "#e0af68",
-  "#bb9af7",
-  "#7dcfff",
-  "#ff9e64",
-];
+// Tonos apagados (como la identidad de los agentes) para que ninguno compita con el rojo.
+const PALETTE = ["#8fb4d9", "#8fcfa4", "#d9a0a4", "#d6bd8a", "#b4a8d9", "#8ccfd6", "#e8a582"];
 
 /** Identidad fija de los agentes conocidos (tokens de App.css). */
 const IDENTITY: [string, string][] = [

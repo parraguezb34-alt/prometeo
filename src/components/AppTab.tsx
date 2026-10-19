@@ -250,19 +250,12 @@ export function AppTab({
                 <Icon name="term" size={15} />
               </button>
             )}
-            {running ? (
+            {/* Arrancar está en el centro; aquí solo Parar (un único botón rojo a la vista). */}
+            {running && (
               <button className="hs-btn" onClick={() => void stop()} disabled={busy}>
                 <Icon name="stop" size={12} />
                 Parar
               </button>
-            ) : (
-              project &&
-              det?.kind !== "none" && (
-                <button className="hs-btn hs-btn-go" onClick={() => void start()} disabled={busy || !det}>
-                  <Icon name="play" size={12} />
-                  Arrancar
-                </button>
-              )
             )}
           </>
         )}
