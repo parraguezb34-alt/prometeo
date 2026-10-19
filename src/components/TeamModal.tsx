@@ -117,6 +117,7 @@ export function TeamModal({
   onApply,
   onStart,
   onRestart,
+  onReload,
   onAutoStart,
   onSettings,
   usage,
@@ -148,6 +149,8 @@ export function TeamModal({
   onApply: (name: string) => void;
   onStart: (name: string) => void;
   onRestart: (name: string) => void;
+  /** Reinicia un agente en marcha retomando su conversación (p. ej. para cargar herramientas nuevas). */
+  onReload: (name: string) => void;
   onAutoStart: (on: boolean) => void;
   onSettings: () => void;
   usage?: Record<string, AgentUsage>;
@@ -456,6 +459,15 @@ export function TeamModal({
                       <button className="cc-btn sec" onClick={() => onTerminal(name)}>
                         <Icon name="term" size={14} />
                         Terminal
+                      </button>
+                      <button
+                        className="cc-btn sec"
+                        disabled={busy === name}
+                        onClick={() => onReload(name)}
+                        title="Cierra su terminal y la vuelve a abrir retomando la misma conversación (carga las herramientas y skills nuevas)"
+                      >
+                        <Icon name="refresh" size={14} />
+                        {busy === name ? "Reiniciando…" : "Reiniciar"}
                       </button>
                       <button
                         className={ctx && ctx.pct >= 75 ? "cc-btn hot" : "cc-btn sec"}

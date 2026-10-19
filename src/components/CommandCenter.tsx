@@ -707,6 +707,35 @@ export function CommandCenter() {
     await launchAgent(name, agentLabel(name), { selectTerm: true, force: true });
   };
 
+  /**
+   * Reinicia un agente que ya trabaja sin perder el hilo: cierra su terminal y abre otra con el
+   * mismo modo y modelo, retomando la conversación de este chat. Sirve para que cargue las
+   * herramientas y skills nuevas.
+   */
+  const reloadAgent = async (name: string) => {
+    const label = agentLabel(name);
+    const panel = panelForAgent(layout.panels, name);
+    if (!panel) {
+      await launchAgent(name, label, { selectTerm: false });
+      return;
+    }
+    const p = prefs[name] ?? {};
+    setOpening(name);
+    try {
+      if (panel.sessionId) await termKill(panel.sessionId).catch(() => {});
+      removePanel(panel.id);
+      const mode: Shoot = /(?:--mode|--permission-mode)[ =]plan/.test(panel.cmd ?? "") ? "plan" : "exec";
+      const r = await teamOpen(name, mode, { model: p.model, effort: p.effort });
+      if (r.kind === "pty") addAgentTerminal(label, withResume(r.cmd, sessionRef(name) ?? LATEST));
+      say(`✓ ${label} reiniciado: retoma su conversación con las herramientas nuevas.`);
+      refresh();
+    } catch (e) {
+      say(errMsg(e), true);
+    } finally {
+      setOpening(null);
+    }
+  };
+
   const toggleAutoStart = (on: boolean) => {
     setAutoStart(on);
     saveAutoStart(on);
@@ -2314,6 +2343,7 @@ export function CommandCenter() {
           onRestart={(name) => {
             void restartAgent(name);
           }}
+          onReload={(name) => void reloadAgent(name)}
           startedAt={startedAtRef.current}
           tails={tails}
           onAutoStart={toggleAutoStart}
