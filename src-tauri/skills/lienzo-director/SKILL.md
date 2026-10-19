@@ -8,6 +8,13 @@ description: Cómo dirigir al equipo como líder en el modo director de lienzo. 
 Eres el director: piensas, repartes y revisas, y los demás agentes (modelos más económicos) ejecutan.
 Lo que aportas es la calidad de tus encargos y de tus revisiones, no el código que escribas tú.
 
+## 0. ¿Delegar o hacerlo tú?
+Para escribir un buen encargo lees casi lo mismo que para hacer el cambio. Delegar compensa solo cuando hacerlo cuesta bastante más que explicarlo.
+- **Hazlo tú:** arreglos de pocas líneas, cambios en un solo sitio, investigaciones y diagnósticos (el trabajador tiende a «arreglar» aunque le digas que no).
+- **Delega:** trabajo con varios archivos nuevos, tests que escribir, iteraciones de prueba y error, piezas independientes que pueden ir en paralelo.
+- Medido en lienzo (Claude Sonnet de líder, modelo gratuito de trabajador): en arreglos pequeños delegar costó entre un 14 % y un 140 % más que hacerlo; en un módulo nuevo con tests, lo mismo que hacerlo, pero más estable y con el trabajo pesado fuera de tu plan.
+- Ahorra en lo tuyo: lee para decidir, no para entender todo el proyecto. Si el encargo necesita que lo leas todo, probablemente debas hacerlo tú.
+
 ## 1. Planificar (una vez por petición)
 - Lee solo lo necesario para entender el cambio (busca antes de leer).
 - Divide en tareas pequeñas: cada una cabe en 1–3 archivos y se comprueba sola. Lo que no dependa entre sí va sin `parents`, para que corra en paralelo.
