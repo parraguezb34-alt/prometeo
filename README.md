@@ -153,6 +153,14 @@ bloqueados se apartan como `.locked-<ts>` y los procesos vivos siguen con su cop
 npm run tauri build
 ```
 
+Deja dos instaladores en `src-tauri/target/release/bundle/`: `nsis/Prometeo_<versión>_x64-setup.exe`
+(por usuario, en `%LOCALAPPDATA%\Prometeo`, sin pedir administrador) y `msi/Prometeo_<versión>_x64_en-US.msi`.
+Los dos llevan `lienzo.exe`, `WebView2Loader.dll` y **`lienzo-mcp.exe`**: Tauri empaqueta solo
+todos los binarios de `src-tauri/src/bin/`, así que no hace falta declararlo en `externalBin` ni
+`resources` (`externalBin` pediría además un `lienzo-mcp-<triple>.exe` ya compilado antes del build).
+La app busca el puente junto a su ejecutable, de modo que la config MCP que escribe apunta al
+`lienzo-mcp.exe` instalado. Instalación silenciosa para probar: `Prometeo_<versión>_x64-setup.exe /S`.
+
 ## Requisitos (ya configurados en este equipo)
 
 - **Rust** con toolchain GNU (`stable-x86_64-pc-windows-gnu`) y **WinLibs GCC** como linker
