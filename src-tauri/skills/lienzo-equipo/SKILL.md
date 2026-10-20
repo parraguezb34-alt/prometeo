@@ -26,7 +26,18 @@ Trabajas con otros agentes de IA en el mismo proyecto. lienzo os coordina con la
 | Datos o decisiones sobre una tarea concreta | `team_task_comment` (queda en su tablón para quien la lleve) |
 | Algo que todos deban recordar siempre | `team_memory_propose` (el líder decide; guía: `lienzo-memoria`) |
 | Planificar antes de ejecutar (modo plan) | skill `lienzo-plan`; acuerda el plan y pregunta con `team_ask_user` |
-| Repartir trabajo | `team_task_create` con `parents` para el orden |
+| Repartir trabajo | `team_task_create` con `parents` para el orden; a quién: skill `lienzo-reparto` |
+| Pactar cómo encajan dos partes | un archivo de contrato: skill `lienzo-contrato` |
+
+### Lo que cuesta cada canal
+- `team_message` **despierta** al otro agente: le cuesta un turno entero releer su contexto. Úsalo solo si necesitas que actúe o conteste (guía: `lienzo-consulta`).
+- `team_task_comment` **no despierta** a nadie: lo lee quien abra la tarea. Para datos y decisiones de una tarea, casi siempre es mejor.
+- `team_update` lo ve el usuario y el feed; nadie tiene que contestar.
+
+### Cuándo no escribir
+- Para confirmar que leíste algo, dar las gracias o repetir lo que ya está en una entrega.
+- Para contar lo que ya muestra `team_context` (quién está, qué tareas hay, qué está reservado).
+- A todo el equipo, si en realidad solo le importa a uno.
 
 ## Pedir trabajo a otro
 - Crea la tarea con un título accionable y, en `notes`, el criterio de terminado y las rutas exactas.
@@ -64,6 +75,6 @@ Cuando una decisión depende de su gusto o de algo que no sabes (estilo, alcance
 
 ## Skills
 Si al equipo le vendría bien una guía que no tiene (diseño, pruebas, un framework), mira `team_skill_list` y propón una con `team_skill_propose` (nombre de la biblioteca o enlace de GitHub). La instala el usuario.
-- Guías: `lienzo-ahorro` (gastar menos), `lienzo-relevo` (pasar el testigo), `lienzo-memoria` (qué recordar y cómo proponerlo), `lienzo-plan` (acordar el plan antes de tocar nada), `lienzo-revision`, `lienzo-director`, `lienzo-trabajador` (cumplir encargos), `prometeo-guia` (ayudar al usuario con la app) y `caveman` (respuestas breves).
+- Guías: `lienzo-reparto` (a quién darle cada cosa), `lienzo-consulta` (pedir ayuda a un compañero), `lienzo-contrato` (pactar cómo encajan las partes), `lienzo-integracion` (juntar y probar el conjunto), `lienzo-investigar` (buscar con fuentes), `lienzo-ahorro` (gastar menos), `lienzo-relevo` (pasar el testigo), `lienzo-memoria` (qué recordar y cómo proponerlo), `lienzo-plan` (acordar el plan antes de tocar nada), `lienzo-revision`, `lienzo-director`, `lienzo-trabajador` (cumplir encargos), `prometeo-guia` (ayudar al usuario con la app) y `caveman` (respuestas breves).
 
 <!-- lienzo:gestionado — lienzo actualiza este archivo al conectar. Quita esta línea para conservar tus cambios. -->

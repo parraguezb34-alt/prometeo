@@ -100,6 +100,41 @@ const BUILTINS: &[Builtin] = &[
         short: "ayudarte a usar Prometeo",
         locked: false,
     },
+    Builtin {
+        name: "lienzo-reparto",
+        body: include_str!("../skills/lienzo-reparto/SKILL.md"),
+        category: "equipo",
+        short: "a quién darle cada tarea",
+        locked: false,
+    },
+    Builtin {
+        name: "lienzo-consulta",
+        body: include_str!("../skills/lienzo-consulta/SKILL.md"),
+        category: "equipo",
+        short: "pedir ayuda a un compañero",
+        locked: false,
+    },
+    Builtin {
+        name: "lienzo-contrato",
+        body: include_str!("../skills/lienzo-contrato/SKILL.md"),
+        category: "equipo",
+        short: "pactar cómo encajan las partes",
+        locked: false,
+    },
+    Builtin {
+        name: "lienzo-integracion",
+        body: include_str!("../skills/lienzo-integracion/SKILL.md"),
+        category: "pruebas",
+        short: "juntar y probar el conjunto",
+        locked: false,
+    },
+    Builtin {
+        name: "lienzo-investigar",
+        body: include_str!("../skills/lienzo-investigar/SKILL.md"),
+        category: "docs",
+        short: "investigar con fuentes",
+        locked: false,
+    },
     // De la comunidad (JuliusBrussee/caveman, Apache-2.0), traducida; ver skills/THIRD_PARTY.md.
     Builtin {
         name: "caveman",

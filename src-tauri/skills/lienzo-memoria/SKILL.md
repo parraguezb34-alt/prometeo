@@ -30,6 +30,16 @@ La memoria guarda lo que todo el equipo debe recordar siempre: decisiones de arq
 - **No guardar**: estado temporal, logs, errores puntuales ni lo que ya está en los archivos.
 - **Regla**: 1 hecho por entrada, claro y autosuficiente, máximo ~300 caracteres.
 
+## Cuando el usuario te corrige
+Una corrección del usuario que valga para más de una tarea («los textos van en español», «no uses esa librería», «los tests se corren con X») es memoria: si no se guarda, el siguiente agente repetirá el error.
+- Propónla en cuanto la recibas: `team_memory_propose` con `kind: "convencion"` (cómo se hace) o `"aviso"` (qué evitar), en sus palabras y con el porqué si lo dio.
+- Si solo vale para la tarea en curso, va en `team_task_comment`, no en la memoria.
+
+## Lo que aprende el equipo
+- Un dato verificado de una investigación (una versión, un límite, con su fuente): `kind: "hecho"`.
+- Un contrato que debe durar (ver `lienzo-contrato`): `kind: "convencion"`, con la ruta del archivo.
+- Una trampa descubierta al integrar o revisar («los tests de X solo pasan con Y»): `kind: "aviso"`.
+
 ## Ejemplos
 - **Bueno** (convención): «Todas las skills van en español y con description enfocada en cuándo usarlas».
 - **Bueno** (decisión): «Las propuestas de skills se crean en propuestas/ sin tocar las carpetas originales».

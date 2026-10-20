@@ -71,6 +71,88 @@ fn ago(ts: u64) -> String {
     }
 }
 
+/// Fortalezas típicas de cada CLI, si el usuario no escribió las suyas (Ajustes → Equipo).
+fn default_strength(name: &str) -> &'static str {
+    let n = name.to_lowercase();
+    if n.contains("claude") {
+        "diseño, arquitectura y lo difícil"
+    } else if n.contains("opencode") {
+        "trabajo mecánico y en volumen (modelos gratis)"
+    } else if n.contains("antigravity") || n.contains("agy") || n.contains("gemini") {
+        "leer mucho, buscar en la web y contexto largo"
+    } else if n.contains("codex") {
+        "código preciso y refactors"
+    } else {
+        ""
+    }
+}
+
+/// Cuánto le queda a un agente, en escalones (no en %: los hooks reinyectan una sección cuando
+/// cambia, y un número que sube cada minuto la reenviaría sin parar).
+fn usage_step(limits: &Value, now: u64) -> Option<String> {
+    let windows = limits["windows"].as_array()?;
+    let worst = windows
+        .iter()
+        .max_by(|a, b| a["used_pct"].as_f64().unwrap_or(0.0).total_cmp(&b["used_pct"].as_f64().unwrap_or(0.0)))?;
+    let pct = worst["used_pct"].as_f64().unwrap_or(0.0);
+    let label = worst["label"].as_str().unwrap_or("uso");
+    let reset = worst["resets_at"].as_u64().filter(|t| *t > now).map(|t| {
+        let h = (t - now) / 3_600_000;
+        if h >= 48 { format!(", se reinicia en {} días", h / 24) } else if h >= 1 { format!(", se reinicia en {h} h") } else { ", se reinicia en menos de 1 h".into() }
+    });
+    Some(if pct >= 90.0 {
+        format!("⛔ {label} casi agotado{}: no le des trabajo pesado", reset.unwrap_or_default())
+    } else if pct >= 70.0 {
+        format!("⚠ {label} alto{}: solo lo que necesite él", reset.unwrap_or_default())
+    } else if pct >= 40.0 {
+        format!("{label} a medias")
+    } else {
+        format!("{label} holgado")
+    })
+}
+
+/// Quién está en línea y qué conviene darle: modelo, cuota que le queda y fortalezas.
+fn team_roster(state: &Value, now: u64) -> String {
+    let empty = vec![];
+    let mut names: Vec<String> = state["agents"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .filter(|a| a["online"].as_bool().unwrap_or(false))
+        .filter_map(|a| a["name"].as_str().map(|s| s.to_string()))
+        .collect();
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        return "No hay otros agentes en línea ahora mismo.\n".to_string();
+    }
+    let mut out = String::from("Agentes en línea (para repartir: skill lienzo-reparto):\n");
+    for name in &names {
+        let mut parts: Vec<String> = Vec::new();
+        let model = state["agents"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .filter(|a| a["name"].as_str() == Some(name))
+            .find_map(|a| a["model"].as_str().filter(|m| !m.is_empty()).map(|m| m.to_string()));
+        if let Some(m) = model {
+            parts.push(m);
+        }
+        match usage_step(&state["limits"][name.as_str()], now) {
+            Some(u) => parts.push(format!("uso: {u}")),
+            None if name.to_lowercase().contains("opencode") => parts.push("uso: sin límite (modelos gratis)".into()),
+            None => {}
+        }
+        let own = state["strengths"][name.as_str()].as_str().filter(|s| !s.trim().is_empty());
+        let strength = own.map(|s| trunc(s, 120)).unwrap_or_else(|| default_strength(name).to_string());
+        if !strength.is_empty() {
+            parts.push(format!("se le da bien: {strength}"));
+        }
+        out.push_str(&format!("- {name}{}\n", if parts.is_empty() { String::new() } else { format!(" · {}", parts.join(" · ")) }));
+    }
+    out
+}
+
 fn str_array(v: &Value) -> Vec<String> {
     v.as_array()
         .map(|a| {
@@ -112,14 +194,6 @@ fn context_sections(state: &Value, me: &str) -> Vec<(&'static str, String)> {
                     "Modo director: diriges tú. Divide el trabajo en encargos cerrados con team_task_create (notes, level, assign), \
 revisa cada entrega con team_task_review (máx. {rounds} rondas de fix) y haz tú solo lo difícil. Pauta: skill lienzo-director.\n"
                 ));
-                // Lo que el usuario dice que se le da bien a cada uno: para elegir `assign`.
-                if let Some(map) = state["strengths"].as_object().filter(|m| !m.is_empty()) {
-                    let list: Vec<String> = map
-                        .iter()
-                        .filter_map(|(k, v)| v.as_str().map(|t| format!("{k}: {}", trunc(t, 120))))
-                        .collect();
-                    lead.push_str(&format!("Fortalezas del equipo: {}.\n", list.join(" · ")));
-                }
             } else {
                 lead.push_str(&format!(
                     "Modo director: {leader} reparte y revisa tus entregas. Sigue el encargo al pie de la letra, \
@@ -133,22 +207,7 @@ entrega con evidencia real y corrige lo que te pida.\n"
     }
     sections.push(("lead", lead));
 
-    let agents = state["agents"].as_array().unwrap_or(&empty);
-    let mut names: Vec<String> = agents
-        .iter()
-        .filter(|a| a["online"].as_bool().unwrap_or(false))
-        .map(|a| a["name"].as_str().unwrap_or("?").to_string())
-        .collect();
-    names.sort();
-    names.dedup();
-    sections.push((
-        "online",
-        if names.is_empty() {
-            "No hay otros agentes en línea ahora mismo.\n".to_string()
-        } else {
-            format!("Agentes en línea: {}\n", names.join(", "))
-        },
-    ));
+    sections.push(("online", team_roster(state, now_ms())));
 
     let tasks = state["tasks"].as_array().unwrap_or(&empty);
     let mut work = String::new();
@@ -2362,4 +2421,39 @@ fn ack_pending(client: &HubClient, agent: &str, session: &str, seq: u64) {
         "/broadcast/ack",
         &json!({ "agent": agent, "session": session, "seq": seq }),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lista_del_equipo_con_uso_y_fortalezas() {
+        let now = 1_800_000_000_000u64;
+        let state = json!({
+            "agents": [
+                { "name": "claude", "online": true, "model": "Sonnet 5" },
+                { "name": "opencode", "online": true },
+                { "name": "opencode", "online": true },
+                { "name": "antigravity", "online": true },
+                { "name": "codex", "online": false }
+            ],
+            "strengths": { "antigravity": "investigar en la web" },
+            "limits": {
+                "claude": { "windows": [
+                    { "label": "Sesión (5 h)", "used_pct": 11.0, "resets_at": null },
+                    { "label": "Semana", "used_pct": 92.0, "resets_at": now + 3 * 86_400_000 }
+                ] },
+                "antigravity": { "windows": [ { "label": "Gemini · semana", "used_pct": 14.0, "resets_at": null } ] }
+            }
+        });
+        let r = team_roster(&state, now);
+        assert!(r.contains("- claude · Sonnet 5 · uso: ⛔ Semana casi agotado, se reinicia en 3 días"), "{r}");
+        assert!(r.contains("se le da bien: diseño, arquitectura y lo difícil"), "{r}");
+        assert!(r.contains("- opencode · uso: sin límite (modelos gratis)"), "{r}");
+        assert_eq!(r.matches("- opencode").count(), 1, "sin repetidos: {r}");
+        assert!(r.contains("- antigravity · uso: Gemini · semana holgado · se le da bien: investigar en la web"), "{r}");
+        assert!(!r.contains("codex"), "solo los que están en línea: {r}");
+        assert_eq!(team_roster(&json!({ "agents": [] }), now), "No hay otros agentes en línea ahora mismo.\n");
+    }
 }

@@ -25,12 +25,20 @@ Ojo: <trampas, comandos que fallan, supuestos sin comprobar>
 
 ### Ejemplo
 ```
-Objetivo: Mejorar skill lienzo-equipo con pautas de buzón y reservas.
-Hecho: Creado propuestas/lienzo-equipo/SKILL.md con reglas de concurrencia.
-Decisiones: Mantener description enfocada en cuándo usarla para el selector de skills.
-Falta: Validar formato con bash y cerrar tarea #44 con team_task_done.
-Ojo: No tocar las skills originales de .claude/ ni dejar marcas automáticas.
+Objetivo: #44 exportar la tabla de pedidos a CSV desde src/components/Pedidos.tsx.
+Hecho: botón y función exportCsv() en src/lib/csv.ts; prueba en tests/csv.test.ts (pasa).
+Decisiones: separador «;» porque el usuario abre los CSV en Excel en español; no exportar columnas ocultas.
+Falta: 1) fechas en formato local, 2) npm test completo, 3) team_task_done con evidencia.
+Ojo: Pedidos.tsx también lo tiene reservado opencode (#45): solo toqué el botón.
 ```
+
+## Al volver de un reinicio
+Prometeo, tu sesión o el equipo pueden reiniciarse con trabajo a medias. Antes de seguir:
+1. `team_context`: ¿tienes alguna tarea en curso (`claimed`) a tu nombre? ¿Siguen tuyas tus reservas?
+2. `team_task_claim` de esa tarea: te devuelve tu último relevo y las entregas de las que depende.
+3. `team_inbox`: los mensajes que llegaron mientras no estabas.
+4. Si estabas esperando una respuesta del usuario (`team_ask_user`), búscala en `team_feed` como «💬 Respuestas del usuario a tu pregunta qN» o en tu terminal: no la vuelvas a preguntar.
+5. Sigue desde «Falta» de tu relevo, no desde el principio.
 
 ## Después
 - Al retomar tras compactar: lee tu relevo con team_task_claim antes de nada.
