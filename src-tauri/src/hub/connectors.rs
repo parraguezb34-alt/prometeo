@@ -93,6 +93,30 @@ fn newest_locked_copy(dir: &Path, name: &str) -> Option<PathBuf> {
         .map(|e| e.path())
 }
 
+/// La ruta de verdad en el disco. Si Prometeo se instaló desde una app empaquetada (MSIX, p. ej.
+/// la de Claude), Windows guarda sus archivos en `AppData\Local\Packages\…\LocalCache` aunque
+/// dentro de esa app se vean en `AppData\Local\Prometeo`: escrita así en la config de un agente,
+/// fuera de esa app la ruta no existe y el agente no se conecta.
+fn real_path(p: &Path) -> PathBuf {
+    match std::fs::canonicalize(p) {
+        Ok(c) => {
+            let s = c.display().to_string();
+            match s.strip_prefix(r"\\?\") {
+                Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+                _ => c,
+            }
+        }
+        Err(_) => p.to_path_buf(),
+    }
+}
+
+/// ¿La config de un agente arranca este mismo puente? (cruda, o escapada como en JSON/TOML).
+fn uses_bridge(text: &str, exe: &str) -> bool {
+    let low = text.to_lowercase();
+    let exe = exe.to_lowercase();
+    low.contains(&exe) || low.contains(&exe.replace('\\', "\\\\")) || low.contains(&exe.replace('\\', "/"))
+}
+
 fn mcp_exe_path() -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("sin directorio de la app")?;
@@ -107,7 +131,7 @@ fn mcp_exe_path() -> Result<String, String> {
         }
     }
     if candidate.exists() {
-        Ok(candidate.display().to_string())
+        Ok(real_path(&candidate).display().to_string())
     } else {
         Err(format!(
             "no se encontró lienzo-mcp.exe junto a la app ({})",
@@ -497,32 +521,26 @@ fn connect_antigravity(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<St
     Ok((files, notes))
 }
 
+/// Conectado = su config tiene `lienzo-team` y arranca el puente de ESTA Prometeo. Si apunta a
+/// otro (una compilación de desarrollo, una ruta que ya no existe…), cuenta como desconectado y
+/// al abrir Prometeo se vuelve a escribir.
 fn is_connected(id: &str, project: Option<&Path>) -> bool {
+    let exe = mcp_exe_path().ok();
+    let ok = |path: PathBuf, marker: &str| {
+        std::fs::read_to_string(path)
+            .map(|s| s.contains(marker) && exe.as_deref().is_none_or(|e| uses_bridge(&s, e)))
+            .unwrap_or(false)
+    };
     match id {
-        "claude" => project
-            .map(|p| {
-                std::fs::read_to_string(p.join(".mcp.json"))
-                    .map(|s| s.contains("lienzo-team"))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false),
-        "codex" => std::fs::read_to_string(home().join(".codex").join("config.toml"))
-            .map(|s| s.contains("mcp_servers.lienzo-team"))
-            .unwrap_or(false),
-        "opencode" => project
-            .map(|p| {
-                std::fs::read_to_string(p.join("opencode.json"))
-                    .map(|s| s.contains("lienzo-team"))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false),
-        "antigravity" => project
-            .map(|p| {
-                std::fs::read_to_string(p.join(".agents").join("mcp_config.json"))
-                    .map(|s| s.contains("lienzo-team"))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false),
+        "claude" => project.is_some_and(|p| ok(p.join(".mcp.json"), "lienzo-team")),
+        "codex" => ok(home().join(".codex").join("config.toml"), "mcp_servers.lienzo-team"),
+        "opencode" => project.is_some_and(|p| ok(p.join("opencode.json"), "lienzo-team")),
+        "antigravity" => {
+            // Antigravity también lee la config global: si existe, tiene que ir bien.
+            let global = home().join(".gemini").join("config").join("mcp_config.json");
+            let global_ok = !std::fs::read_to_string(&global).is_ok_and(|s| s.contains("lienzo-team")) || ok(global, "lienzo-team");
+            global_ok && project.is_some_and(|p| ok(p.join(".agents").join("mcp_config.json"), "lienzo-team"))
+        }
         _ => false,
     }
 }
@@ -1127,4 +1145,31 @@ pub async fn team_agent_session(agent: String, project: String) -> Option<String
     })?;
     let id = last["conversationId"].as_str()?;
     (!id.is_empty() && id.len() < 100).then(|| id.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconoce_el_puente_en_la_config() {
+        let exe = r"C:\Users\yo\AppData\Local\Prometeo\lienzo-mcp.exe";
+        let json = r#"{"mcpServers":{"lienzo-team":{"command":"C:\Users\yo\AppData\Local\Prometeo\lienzo-mcp.exe"}}}"#;
+        assert!(uses_bridge(json, exe));
+        assert!(uses_bridge(&format!("command = '{exe}'"), exe));
+        // Otro puente (la compilación de desarrollo) no cuenta como conectado.
+        let dev = r#"{"command":"C:\Users\yo\Projects\lienzo\src-tauri\target\debug\lienzo-mcp.exe"}"#;
+        assert!(!uses_bridge(dev, exe));
+    }
+
+    #[test]
+    fn ruta_real_sin_prefijo_de_windows() {
+        let dir = std::env::temp_dir();
+        let r = real_path(&dir).display().to_string();
+        assert!(!r.starts_with(r"\?\"), "{r}");
+        assert!(Path::new(&r).exists());
+        // Si no existe, se queda como estaba.
+        let missing = dir.join("no-existe-lienzo-xyz");
+        assert_eq!(real_path(&missing), missing);
+    }
 }
