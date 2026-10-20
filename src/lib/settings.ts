@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from "react";
 import { DISPATCH_CONFIG } from "./dispatcher";
 import type { DispatchConfig } from "./dispatcher";
+import { STALL_CONFIG } from "./stall";
+import type { StallConfig } from "./stall";
 
 /**
  * Ajustes de la interfaz que no son del hub: cómo reparte tareas el despacho, qué
@@ -24,6 +26,10 @@ export type Settings = {
     idleS: number;
     /** last = el líder solo si no hay nadie más · never = nunca · any = como uno más. */
     leader: LeaderMode;
+    /** Minutos sin señales con una tarea tomada para avisar de que está colgado (0 = nunca). */
+    stallQuietMin: number;
+    /** Minutos con la misma herramienta para avisar de que está atascado (0 = nunca). */
+    stallToolMin: number;
   };
   notify: {
     ask: boolean;
@@ -59,6 +65,8 @@ export const DEFAULT_SETTINGS: Settings = {
     pauseMin: DISPATCH_CONFIG.pauseMs / 60_000,
     idleS: DISPATCH_CONFIG.idleMs / 1000,
     leader: "last",
+    stallQuietMin: STALL_CONFIG.quietMs / 60_000,
+    stallToolMin: STALL_CONFIG.sameToolMs / 60_000,
   },
   notify: { ask: true, done: true, reply: true, lateMin: 3, whenFocused: false, style: "lienzo" },
   team: { relayInbox: true, leaderClean: true },
@@ -154,6 +162,11 @@ export function dispatchConfig(s: Settings): DispatchConfig {
     idleMs: s.dispatch.idleS * 1000,
     leaderMode: s.dispatch.leader,
   };
+}
+
+/** Los umbrales para dar a un agente por colgado. */
+export function stallConfig(s: Settings): StallConfig {
+  return { quietMs: s.dispatch.stallQuietMin * 60_000, sameToolMs: s.dispatch.stallToolMin * 60_000 };
 }
 
 /**

@@ -8,6 +8,8 @@ import { ctxLevel, ctxOf, fmtTokens, shortModel } from "./AgentCard";
 import { Icon } from "./Icon";
 import { fmtReset, level, windowLabel, worst } from "../lib/limits";
 import type { AgentLimits } from "../lib/limits";
+import { stallText } from "../lib/stall";
+import type { Stall } from "../lib/stall";
 
 /** work = con tarea · idle = libre · blocked = espera tu respuesta · login = su terminal pide iniciar sesión · starting = terminal abierta, aún sin conectar · off = sin sesión */
 export type AgentState = "work" | "idle" | "blocked" | "login" | "starting" | "off";
@@ -169,6 +171,9 @@ export function TeamModal({
   onUsage,
   limits,
   onReadUsage,
+  stalls,
+  onAskStalled,
+  onInterrupt,
 }: {
   agents: TeamAgent[];
   states: Map<string, AgentState>;
@@ -206,6 +211,12 @@ export function TeamModal({
   limits?: Record<string, AgentLimits>;
   /** Lee el límite de un agente que solo lo dice con /usage (Antigravity). */
   onReadUsage: (name: string) => void;
+  /** Agentes con una tarea tomada que no dan señales. */
+  stalls?: Record<string, Stall>;
+  /** Le pide por su terminal un team_update de cómo va. */
+  onAskStalled: (name: string) => void;
+  /** Esc en su terminal, como el botón ⎋. */
+  onInterrupt: (name: string) => void;
 }) {
   const online = agents.filter((a) => a.online).length;
   const teamUsage = sumUsage(Object.keys(usage ?? {}).map((n) => usageOf(usage, n)!));
@@ -257,6 +268,7 @@ export function TeamModal({
               const spent = usageOf(usage, name);
               const spentPct = spent ? cachePct(spent) : null;
               const mail = inbox?.[name];
+              const stall = stalls?.[name];
               return (
                 <article
                   key={a.session_id}
@@ -305,6 +317,31 @@ export function TeamModal({
                     )}
                   </div>
 
+                  {stall && (
+                    <div className="cc-stall" role="status">
+                      <span className="cc-stall-txt">
+                        <Icon name="warn" size={13} />
+                        {stallText(stall)}
+                        <small> · tarea #{stall.taskId}</small>
+                      </span>
+                      <span className="cc-stall-acts">
+                        <button
+                          className="cc-btn sec"
+                          onClick={() => onAskStalled(name)}
+                          title="Le escribe en su terminal que te cuente cómo va con team_update"
+                        >
+                          Preguntarle
+                        </button>
+                        <button
+                          className="cc-btn sec"
+                          onClick={() => onInterrupt(name)}
+                          title="Pulsa Esc en su terminal para detener lo que esté haciendo (como ⎋)"
+                        >
+                          Interrumpir
+                        </button>
+                      </span>
+                    </div>
+                  )}
                   {state === "starting" && (
                     <div className="cc-field-note" data-warn={Date.now() - (startedAt[name] ?? Date.now()) > 60_000 ? "1" : "0"}>
                       {Date.now() - (startedAt[name] ?? Date.now()) > 60_000

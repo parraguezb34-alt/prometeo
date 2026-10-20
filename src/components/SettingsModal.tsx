@@ -1105,6 +1105,28 @@ function Dispatch({ dispatchOn, dispatchState, onDispatch, onDispatchClear }: Pr
           <Pick label="Duración de la pausa" value={d.pauseMin} disabled={off} onChange={(pauseMin) => set({ pauseMin })} options={nums([2, 5, 10, 15, 30], "min")} />
         </Row>
       </Group>
+
+      <Group
+        title="Agentes colgados"
+        desc="Si un agente con una tarea tomada deja de dar señales, te aviso y su tarjeta del equipo ofrece preguntarle o interrumpirlo. Funciona aunque el despacho automático esté apagado."
+      >
+        <Row label="Sin señales durante" hint="Ni acciones en el equipo ni trabajo en su terminal. No cuenta si espera tu permiso o tu respuesta.">
+          <Pick
+            label="Sin señales durante"
+            value={d.stallQuietMin}
+            onChange={(stallQuietMin) => set({ stallQuietMin })}
+            options={[{ v: 0, l: "Nunca" }, ...nums([3, 5, 8, 10, 15, 30], "min")]}
+          />
+        </Row>
+        <Row label="Con la misma herramienta" hint="Una orden que no acaba o que repite una y otra vez, aunque su terminal se mueva.">
+          <Pick
+            label="Con la misma herramienta"
+            value={d.stallToolMin}
+            onChange={(stallToolMin) => set({ stallToolMin })}
+            options={[{ v: 0, l: "Nunca" }, ...nums([10, 15, 20, 30, 45, 60], "min")]}
+          />
+        </Row>
+      </Group>
     </>
   );
 }

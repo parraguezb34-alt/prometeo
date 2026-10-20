@@ -41,6 +41,7 @@ import type { Skill } from "../lib/skills";
 import {
   EMPTY_DISPATCH,
   dispatchPrompt,
+  remindPrompt,
   retryTask,
   sendFailed,
   tick as dispatchTick,
@@ -62,10 +63,12 @@ import type { Attachment } from "../lib/attach";
 import type { ProjectInfo } from "../lib/project";
 import { chatLineage, currentTeamChat, inChat, prepareChat, useChats } from "../lib/chats";
 import { LATEST, resetCommand, withResume } from "../lib/resume";
-import { useTermActivity } from "../lib/activity";
+import { termLastBusyMs, useTermActivity } from "../lib/activity";
+import { STALL_CHECK_MS, detectStall, stallPrompt, stallText } from "../lib/stall";
+import type { Stall } from "../lib/stall";
 import { askPhrase, eventImages, isDispatch, isImagePath, isNotice, parseTask, samePath } from "../lib/timeline";
 import { notify } from "../lib/notify";
-import { dispatchConfig, getSettings, rememberProject, renameRecentProject, useSettings } from "../lib/settings";
+import { dispatchConfig, getSettings, stallConfig, rememberProject, renameRecentProject, useSettings } from "../lib/settings";
 import type { Chat } from "../lib/chats";
 import { AgentQuickCmds, fmtTokens } from "./AgentCard";
 import { ChatView } from "./ChatView";
@@ -111,6 +114,23 @@ const SHOOT_KEY = "lienzo.shoot.v1";
 const CHATS_MIN_KEY = "lienzo.chatsmin.v1";
 const DISPATCH_KEY = "lienzo.dispatch.v1";
 const NOTIFY_KEY = "lienzo.notify.v1";
+/**
+ * Cuándo se abrió Prometeo: lo de antes no se vio (ni el silencio ni el trabajo de los agentes).
+ * Vive en la ventana para que la recarga en caliente del desarrollo no lo reinicie.
+ */
+const BOOT_MS: number = ((window as unknown as { __lienzoBootMs?: number }).__lienzoBootMs ??= Date.now());
+/** Lo que cuenta como trabajo de un agente en el feed (entrar o abrir sesión no). */
+const WORK_KINDS = new Set(["tool", "task", "update"]);
+
+/** Cuándo tomó cada tarea su dueño, según el feed (el último «#N tomada por …»). */
+function claimTimes(events: TeamEvent[]): Map<number, number> {
+  const m = new Map<number, number>();
+  for (const e of events) {
+    const t = parseTask(e);
+    if (t?.op === "tomada" && e.ts_ms > (m.get(t.id) ?? 0)) m.set(t.id, e.ts_ms);
+  }
+  return m;
+}
 
 /** Ruido de conexión que no aporta a una conversación: nunca se muestra en el chat. */
 const HIDDEN_KINDS = new Set(["join", "leave", "session", "stop", "prompt"]);
@@ -811,15 +831,22 @@ export function CommandCenter() {
         const now = Date.now();
         const byName = new Map<string, DAgent>();
         const cfg = getSettings();
+        const claims = claimTimes(cur.events);
+        const lastWork = new Map<string, number>();
+        for (const e of cur.events)
+          if (WORK_KINDS.has(e.kind) && e.ts_ms > (lastWork.get(e.agent) ?? 0)) lastWork.set(e.agent, e.ts_ms);
         for (const a of cur.agents) {
           if (cfg.skipAgents.includes(a.name)) continue;
           const prev = byName.get(a.name);
+          const sid = panelForAgent(cur.panels, a.name)?.sessionId;
           byName.set(a.name, {
             name: a.name,
             online: (prev?.online ?? false) || a.online,
-            hasTerminal: !!panelForAgent(cur.panels, a.name)?.sessionId,
+            hasTerminal: !!sid,
             blocked: cur.blocked.includes(a.name),
             lastActivityMs: cur.lastByAgent.get(a.name)?.ts_ms ?? 0,
+            lastWorkMs: lastWork.get(a.name) ?? 0,
+            busy: !!sid && now - termLastBusyMs(sid) < 5_000,
           });
         }
         const res = dispatchTick(dispatchRef.current, {
@@ -833,10 +860,12 @@ export function CommandCenter() {
             parents: t.parents ?? [],
             level: t.level ?? "",
             assign: t.assign ?? "",
+            claimedMs: claims.get(t.id) ?? 0,
           })),
           agents: [...byName.values()],
           leader: cur.leader,
           director: cur.director,
+          bootMs: BOOT_MS,
         }, dispatchConfig(cfg));
         let next = res.state;
         for (const note of res.notes) say(note, true);
@@ -862,6 +891,29 @@ export function CommandCenter() {
           } catch (e) {
             next = sendFailed(next, taskId, agent, now);
             say(`No pude avisar a ${agentLabel(agent)}: ${errMsg(e)}`, true);
+          }
+        }
+        if (res.remind) {
+          // Una tarea que se quedó a medias al cerrar Prometeo: se le recuerda a su dueño.
+          const { taskId, agent } = res.remind;
+          const task = cur.tasks.find((t) => t.id === taskId);
+          const panel = panelForAgent(cur.panels, agent);
+          try {
+            if (!task || !panel?.sessionId) throw new Error("sin terminal");
+            await termWrite(
+              panel.sessionId,
+              `${remindPrompt({
+                id: task.id,
+                title: task.title,
+                notes: task.notes,
+                status: task.status,
+                owner: task.owner,
+                parents: task.parents ?? [],
+              })}\r`,
+            );
+            say(`🔁 #${taskId} seguía a medias desde antes de abrir Prometeo: se la recordé a ${agentLabel(agent)}.`);
+          } catch (e) {
+            say(`No pude recordarle #${taskId} a ${agentLabel(agent)}: ${errMsg(e)}`, true);
           }
         }
         dispatchRef.current = next;
@@ -1837,6 +1889,73 @@ export function CommandCenter() {
   const liveRef = useRef(live);
   liveRef.current = live;
 
+  // ---- Agentes colgados: con una tarea tomada y sin señales (un latido cada 30 s). -------
+  const [stalls, setStalls] = useState<Record<string, Stall>>({});
+  const stallInRef = useRef({ prompts: termPrompts, notifyOn });
+  stallInRef.current = { prompts: termPrompts, notifyOn };
+  const stallWarned = useRef(new Set<string>());
+  useEffect(() => {
+    const check = () => {
+      const cur = latestRef.current;
+      if (!cur) return;
+      const now = Date.now();
+      const cfg = stallConfig(getSettings());
+      const claims = claimTimes(cur.events);
+      const next: Record<string, Stall> = {};
+      for (const t of cur.tasks) {
+        if (t.status !== "claimed" || !t.owner || next[t.owner]) continue;
+        // Solo se vigila a quien tiene su terminal aquí: es a quien se le puede preguntar.
+        const sid = panelForAgent(cur.panels, t.owner)?.sessionId;
+        if (!sid || !cur.agents.some((a) => a.name === t.owner && a.online)) continue;
+        const s = detectStall(
+          {
+            now,
+            agent: t.owner,
+            taskId: t.id,
+            events: cur.events,
+            termBusyMs: termLastBusyMs(sid),
+            waiting: cur.blocked.includes(t.owner) || !!stallInRef.current.prompts[t.owner],
+            claimedMs: claims.get(t.id) ?? 0,
+            fromMs: BOOT_MS,
+          },
+          cfg,
+        );
+        if (s) next[t.owner] = s;
+      }
+      setStalls((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+      for (const s of Object.values(next)) {
+        // Un aviso por episodio: si vuelve a dar señales y se cuelga otra vez, se avisa de nuevo.
+        const k = `${s.agent}|${s.taskId}|${s.reason}|${s.sinceMs}`;
+        if (stallWarned.current.has(k)) continue;
+        stallWarned.current.add(k);
+        if (stallInRef.current.notifyOn)
+          notify(`${agentLabel(s.agent)} parece colgado`, `${stallText(s)} en la tarea #${s.taskId}. Abre el equipo para preguntarle o interrumpirlo.`, {
+            agent: s.agent,
+            kind: "late",
+          });
+      }
+    };
+    const first = window.setTimeout(check, 5_000);
+    const id = window.setInterval(check, STALL_CHECK_MS);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(id);
+    };
+  }, []);
+
+  /** «Preguntarle»: una línea en su terminal pidiéndole un team_update de cómo va. */
+  const askStalled = async (name: string) => {
+    const s = stalls[name];
+    const p = panelForAgent(getLayout().panels, name);
+    if (!s || !p?.sessionId) return;
+    try {
+      await termWrite(p.sessionId, `${stallPrompt(s)}\r`);
+      say(`Le pregunté a ${agentLabel(name)} cómo va con #${s.taskId}.`);
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
   // ---- Límites de uso: Claude los manda solo (su barra de estado); aquí OpenCode Go y Antigravity.
   const hasOpenCode = roster.some((a) => a.name.toLowerCase().includes("opencode"));
   useEffect(() => {
@@ -2751,6 +2870,9 @@ export function CommandCenter() {
           onUsage={() => openSettings("usage")}
           limits={state?.limits}
           onReadUsage={(n) => void readUsage(n)}
+          stalls={stalls}
+          onAskStalled={(n) => void askStalled(n)}
+          onInterrupt={(n) => void interrupt(n)}
         />
       )}
 

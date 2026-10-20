@@ -2280,3 +2280,34 @@ button.cc-lead {
 .cc-chat-item:hover .cc-chat-item-t {
   padding-right: 48px;
 }
+
+/* Agente colgado: aviso en su tarjeta del equipo, con preguntarle o interrumpirlo. */
+.cc-stall {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.cc-stall-txt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+}
+.cc-stall-txt small {
+  font-weight: 400;
+  opacity: 0.8;
+}
+.cc-stall-acts {
+  display: inline-flex;
+  gap: 6px;
+}

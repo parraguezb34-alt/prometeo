@@ -47,6 +47,14 @@ function lastPhrase(tail: string): string {
   return found.length > 0 ? found[found.length - 1].slice(0, 60) : "";
 }
 
+/** Última vez que cada terminal se vio trabajando (salida con el aviso de interrumpir puesto). */
+const lastBusy = new Map<string, number>();
+
+/** Cuándo se vio trabajando por última vez la terminal `sid` (ms epoch; 0 si nunca). */
+export function termLastBusyMs(sid: string): number {
+  return lastBusy.get(sid) ?? 0;
+}
+
 type Track = { tail: string; lastMs: number; since: number; armed: boolean; busy: boolean; status: string };
 
 /**
@@ -81,6 +89,7 @@ export function useTermActivity(): Map<string, Activity> {
       if (MARKER.test(clean(t.tail.slice(-120) + text))) t.armed = true;
       t.tail = (t.tail + text).slice(-TAIL);
       t.lastMs = Date.now();
+      if (t.armed) lastBusy.set(e.payload.id, t.lastMs);
       tracks.current.set(e.payload.id, t);
     });
     const id = window.setInterval(() => {

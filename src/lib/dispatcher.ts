@@ -19,6 +19,8 @@ export type DTask = {
   level?: string;
   /** Agente al que va dirigida ("" = a quien esté libre). */
   assign?: string;
+  /** Cuándo la tomó su dueño (ms epoch); 0 o sin indicar = no se sabe (de antes). */
+  claimedMs?: number;
 };
 
 export type DAgent = {
@@ -30,6 +32,10 @@ export type DAgent = {
   blocked: boolean;
   /** Último movimiento visible del agente (ms epoch); 0 si no hay. */
   lastActivityMs: number;
+  /** Último trabajo suyo en el hub (herramienta, tarea o avance), sin contar entrar o abrir sesión. */
+  lastWorkMs?: number;
+  /** Su terminal se ve trabajando ahora mismo. */
+  busy?: boolean;
 };
 
 export type DispatchState = {
@@ -44,6 +50,8 @@ export type DispatchState = {
   agentPausedUntil: Record<string, number>;
   lastSentToAgent: Record<string, number>;
   lastSentAny: number;
+  /** Tareas tomadas antes de abrir Prometeo cuyo dueño ya recibió el recordatorio. */
+  reminded: Record<number, string>;
 };
 
 export const EMPTY_DISPATCH: DispatchState = {
@@ -54,6 +62,7 @@ export const EMPTY_DISPATCH: DispatchState = {
   agentPausedUntil: {},
   lastSentToAgent: {},
   lastSentAny: 0,
+  reminded: {},
 };
 
 export type DispatchConfig = {
@@ -72,6 +81,8 @@ export type DispatchConfig = {
   idleMs: number;
   /** last = el líder solo si no hay nadie más · never = nunca · any = como uno más. */
   leaderMode: "last" | "never" | "any";
+  /** Tras abrir Prometeo, cuánto se espera antes de recordar una tarea a medias (que el agente arranque). */
+  remindAfterMs: number;
 };
 
 export const DISPATCH_CONFIG: DispatchConfig = {
@@ -83,11 +94,14 @@ export const DISPATCH_CONFIG: DispatchConfig = {
   globalGapMs: 4_000,
   idleMs: 20_000,
   leaderMode: "last",
+  remindAfterMs: 45_000,
 };
 
 export type DispatchResult = {
   state: DispatchState;
   send: { taskId: number; agent: string } | null;
+  /** Recordar a su dueño una tarea que quedó a medias al cerrar Prometeo. */
+  remind: { taskId: number; agent: string } | null;
   /** Lo que pasó en este ciclo, para mostrarlo en el feed. */
   notes: string[];
 };
@@ -161,7 +175,15 @@ export function sendFailed(
  */
 export function tick(
   prev: DispatchState,
-  input: { now: number; tasks: DTask[]; agents: DAgent[]; leader: string; director?: boolean },
+  input: {
+    now: number;
+    tasks: DTask[];
+    agents: DAgent[];
+    leader: string;
+    director?: boolean;
+    /** Cuándo se abrió Prometeo (ms epoch); sin él no se recuerdan tareas a medias. */
+    bootMs?: number;
+  },
   cfg: DispatchConfig = DISPATCH_CONFIG,
 ): DispatchResult {
   const { now, tasks, agents, leader } = input;
@@ -175,6 +197,7 @@ export function tick(
     agentFails: { ...prev.agentFails },
     agentPausedUntil: { ...prev.agentPausedUntil },
     lastSentToAgent: { ...prev.lastSentToAgent },
+    reminded: { ...(prev.reminded ?? {}) },
   };
 
   // 1) Avisos pendientes: ¿la reclamaron o se agotó el plazo?
@@ -213,13 +236,23 @@ export function tick(
   }
 
   // 2) Frenos globales.
-  if (now - state.lastSentAny < cfg.globalGapMs) return { state, send: null, notes };
+  if (now - state.lastSentAny < cfg.globalGapMs) return { state, send: null, remind: null, notes };
+
+  // 2b) Tareas que quedaron a medias al cerrar Prometeo: su dueño volvió pero no trabaja en
+  //     ellas. Se le recuerdan una vez, en vez de dejarlas «tomadas» para siempre.
+  const remind = staleClaim(state, tasks, agents, now, input.bootMs ?? 0, cfg);
+  if (remind) {
+    state.reminded[remind.id] = remind.owner;
+    state.lastSentToAgent[remind.owner] = now;
+    state.lastSentAny = now;
+    return { state, send: null, remind: { taskId: remind.id, agent: remind.owner }, notes };
+  }
 
   // 3) Tareas listas, de la más antigua a la más nueva.
   const ready = tasks
     .filter((t) => isReady(t, tasks) && !state.pending[t.id] && !isParked(state, t.id, cfg))
     .sort((a, b) => a.id - b.id);
-  if (ready.length === 0) return { state, send: null, notes };
+  if (ready.length === 0) return { state, send: null, remind: null, notes };
 
   // 4) Agentes libres: en línea, con terminal, sin trabajo en curso ni aviso en vuelo.
   const busy = new Set<string>();
@@ -235,7 +268,7 @@ export function tick(
       now - (state.lastSentToAgent[a.name] ?? 0) >= cfg.agentCooldownMs &&
       now - a.lastActivityMs >= cfg.idleMs,
   );
-  if (free.length === 0) return { state, send: null, notes };
+  if (free.length === 0) return { state, send: null, remind: null, notes };
 
   // 5) Primera tarea para la que haya agente: los trabajadores antes que el líder
   //    (que coordina), y entre ellos el que lleva más tiempo sin recibir nada.
@@ -255,9 +288,53 @@ export function tick(
     state.pending[task.id] = { agent: pick.name, sentMs: now };
     state.lastSentToAgent[pick.name] = now;
     state.lastSentAny = now;
-    return { state, send: { taskId: task.id, agent: pick.name }, notes };
+    return { state, send: { taskId: task.id, agent: pick.name }, remind: null, notes };
   }
-  return { state, send: null, notes };
+  return { state, send: null, remind: null, notes };
+}
+
+/**
+ * Una tarea tomada desde antes de abrir Prometeo cuyo dueño está aquí, libre y sin
+ * haber trabajado nada desde entonces (ni una herramienta ni un avance).
+ */
+function staleClaim(
+  state: DispatchState,
+  tasks: DTask[],
+  agents: DAgent[],
+  now: number,
+  bootMs: number,
+  cfg: DispatchConfig,
+): DTask | null {
+  if (!bootMs || now - bootMs < cfg.remindAfterMs) return null;
+  const claimed = tasks
+    .filter((t) => t.status === "claimed" && t.owner && !state.reminded[t.id] && (t.claimedMs ?? 0) < bootMs)
+    .sort((a, b) => a.id - b.id);
+  for (const t of claimed) {
+    const a = agents.find((x) => x.name === t.owner);
+    if (
+      a &&
+      a.online &&
+      a.hasTerminal &&
+      !a.blocked &&
+      !a.busy &&
+      (a.lastWorkMs ?? 0) < bootMs &&
+      now - a.lastActivityMs >= cfg.idleMs &&
+      now >= (state.agentPausedUntil[a.name] ?? 0) &&
+      now - (state.lastSentToAgent[a.name] ?? 0) >= cfg.agentCooldownMs
+    )
+      return t;
+  }
+  return null;
+}
+
+/** El recordatorio de una tarea a medias (una sola línea). */
+export function remindPrompt(task: DTask): string {
+  const title = task.title.trim().replace(/\s+/g, " ");
+  return (
+    `🔁 Recordatorio de Prometeo: la tarea #${task.id} «${title}» sigue a tu nombre, pero se cortó al cerrar la app. ` +
+    `Retómala (team_task_claim id ${task.id} te devuelve el encargo y tu relevo) y ciérrala con team_task_done; ` +
+    `si no puedes seguir, dilo con team_update.`
+  );
 }
 
 /** El aviso que se escribe en la terminal del agente (una sola línea). */

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { EMPTY_DISPATCH, DISPATCH_CONFIG as C, tick, isParked, retryTask, sendFailed, dispatchPrompt } from "./lib/dispatcher.js";
+import { EMPTY_DISPATCH, DISPATCH_CONFIG as C, tick, isParked, retryTask, sendFailed, dispatchPrompt, remindPrompt } from "./lib/dispatcher.js";
 
 const t = (id, status = "open", owner = "", parents = []) => ({ id, title: `t${id}`, notes: "", status, owner, parents });
 const a = (name, extra = {}) => ({ name, online: true, hasTerminal: true, blocked: false, lastActivityMs: 0, ...extra });
@@ -185,6 +185,61 @@ test("una entrega en revisión no se reparte y bloquea a sus hijas", () => {
 test("un encargo largo no se teclea entero en la terminal", () => {
   const p = dispatchPrompt({ ...t(3), notes: "x".repeat(2000) });
   assert.ok(p.length < 900 && p.includes("encargo"));
+});
+
+// ---- Tareas a medias al reabrir Prometeo ----
+const BOOT = NOW - 60_000; // Prometeo se abrió hace un minuto
+const owned = (id, owner, extra = {}) => ({ ...t(id, "claimed", owner), ...extra });
+
+test("recuerda una vez la tarea tomada antes de abrir Prometeo", () => {
+  const input = { now: NOW, tasks: [owned(4, "opencode")], agents: [a("opencode")], leader: "", bootMs: BOOT };
+  const r = tick(EMPTY_DISPATCH, input);
+  assert.deepEqual(r.remind, { taskId: 4, agent: "opencode" });
+  assert.equal(r.send, null);
+  assert.equal(r.state.reminded[4], "opencode");
+  const again = tick(r.state, { ...input, now: NOW + 600_000 });
+  assert.equal(again.remind, null, "no se repite");
+});
+
+test("no recuerda si el agente ya trabaja en ella tras abrir", () => {
+  const base = { now: NOW, tasks: [owned(4, "x")], leader: "", bootMs: BOOT };
+  assert.equal(tick(EMPTY_DISPATCH, { ...base, agents: [a("x", { lastWorkMs: BOOT + 1_000 })] }).remind, null);
+  assert.equal(tick(EMPTY_DISPATCH, { ...base, agents: [a("x", { busy: true })] }).remind, null);
+  assert.equal(tick(EMPTY_DISPATCH, { ...base, agents: [a("x", { lastActivityMs: NOW - 5_000 })] }).remind, null);
+});
+
+test("no recuerda tareas tomadas después de abrir, ni sin bootMs, ni nada más abrir", () => {
+  const agents = [a("x")];
+  assert.equal(tick(EMPTY_DISPATCH, { now: NOW, tasks: [owned(4, "x", { claimedMs: BOOT + 10 })], agents, leader: "", bootMs: BOOT }).remind, null);
+  assert.equal(tick(EMPTY_DISPATCH, { now: NOW, tasks: [owned(4, "x")], agents, leader: "" }).remind, null);
+  assert.equal(tick(EMPTY_DISPATCH, { now: BOOT + C.remindAfterMs - 1, tasks: [owned(4, "x")], agents, leader: "", bootMs: BOOT }).remind, null);
+});
+
+test("no recuerda a un agente sin conexión, sin terminal o que te espera", () => {
+  const base = { now: NOW, tasks: [owned(4, "x")], leader: "", bootMs: BOOT };
+  for (const extra of [{ online: false }, { hasTerminal: false }, { blocked: true }])
+    assert.equal(tick(EMPTY_DISPATCH, { ...base, agents: [a("x", extra)] }).remind, null);
+});
+
+test("el recordatorio respeta la pausa entre avisos y no estorba el reparto después", () => {
+  const tasks = [owned(4, "x"), t(5)];
+  const r = tick(EMPTY_DISPATCH, { now: NOW, tasks, agents: [a("x"), a("y")], leader: "", bootMs: BOOT });
+  assert.equal(r.remind.taskId, 4);
+  const pronto = tick(r.state, { now: NOW + 1_000, tasks, agents: [a("x"), a("y")], leader: "", bootMs: BOOT });
+  assert.equal(pronto.send, null, "pausa global entre avisos");
+  const luego = tick(r.state, { now: NOW + C.globalGapMs + 1, tasks, agents: [a("x"), a("y")], leader: "", bootMs: BOOT });
+  assert.deepEqual(luego.send, { taskId: 5, agent: "y" }, "x sigue con su tarea; la nueva va a y");
+});
+
+test("un estado guardado sin «reminded» sigue funcionando", () => {
+  const { reminded: _r, ...old } = EMPTY_DISPATCH;
+  const r = tick(old, { now: NOW, tasks: [owned(4, "x")], agents: [a("x")], leader: "", bootMs: BOOT });
+  assert.equal(r.remind.taskId, 4);
+});
+
+test("el recordatorio es una sola línea con el id de la tarea", () => {
+  const p = remindPrompt({ ...t(9), title: "Arreglar\nel   login" });
+  assert.ok(!p.includes("\n") && p.includes("#9") && p.includes("team_task_claim id 9") && p.includes("«Arreglar el login»"));
 });
 
 console.log(`\n${n} pruebas pasadas`);
