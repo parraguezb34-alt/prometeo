@@ -143,11 +143,11 @@
 .cc-logobox {
   width: 28px;
   height: 28px;
-  border-radius: var(--r-sm);
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 14px;
-  font-weight: 800;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(#2e2e32, #1c1c1e);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.14);
 }
 .cc-brandname {
   font-size: 15px;

@@ -73,6 +73,8 @@ import { ChatsSidebar } from "./ChatsSidebar";
 import { DestPicker } from "./DestPicker";
 import { HistoryTab } from "./HistoryTab";
 import { SlidingPill } from "./SlidingPill";
+import { InAppAvisos, Toast } from "./Avisos";
+import { listen } from "@tauri-apps/api/event";
 import { taskPaths } from "../lib/history";
 import { appStop } from "../lib/devapp";
 import { reportError, useUnseenErrors } from "../lib/errors";
@@ -291,6 +293,19 @@ export function CommandCenter() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [overlay]);
+
+  // Pulsaste un aviso (dentro o en la esquina de la pantalla): al chat, que es donde está.
+  const openAviso = useCallback(() => {
+    setOverlay(null);
+    setView("feed");
+  }, []);
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const un = listen("aviso://open", () => openAviso());
+    return () => {
+      void un.then((f) => f()).catch(() => {});
+    };
+  }, [openAviso]);
 
   const project = state?.project ?? null;
   const chats = useChats(project);
@@ -1682,7 +1697,11 @@ export function CommandCenter() {
       setTermPrompts(next);
       if (loadFlag(NOTIFY_KEY, true) && getSettings().notify.ask) {
         for (const [a, q] of Object.entries(next)) {
-          if (!before.includes(`${a}:${q.key}`)) notify(`${agentLabel(a)} necesita tu permiso`, [q.title, ...q.detail].join(" · ").slice(0, 180));
+          if (!before.includes(`${a}:${q.key}`))
+            notify(`${agentLabel(a)} necesita tu permiso`, [q.title, ...q.detail].join(" · ").slice(0, 180), {
+              agent: a,
+              kind: "ask",
+            });
         }
       }
     };
@@ -1772,17 +1791,19 @@ export function CommandCenter() {
       if (e.agent === "tú" || !team.has(e.agent)) continue;
       const who = agentLabel(e.agent);
       if (e.kind === "waiting" && !isNotice(e)) {
-        if (want.ask) notify(`${who} necesita tu respuesta`, `Pide ${askPhrase(e.text)}.`);
+        if (want.ask) notify(`${who} necesita tu respuesta`, `Pide ${askPhrase(e.text)}.`, { agent: e.agent, kind: "ask" });
       } else if (e.kind === "question") {
-        if (want.ask) notify(`${who} te pregunta`, e.text.replace(/^❓ q\d+ · /, ""));
+        if (want.ask) notify(`${who} te pregunta`, e.text.replace(/^❓ q\d+ · /, ""), { agent: e.agent, kind: "ask" });
       } else if (e.kind === "skill") {
-        if (want.ask) notify(`${who} propone una skill`, e.text.slice(0, 160));
+        if (want.ask) notify(`${who} propone una skill`, e.text.slice(0, 160), { agent: e.agent, kind: "ask" });
       } else if (e.kind === "task") {
         const t = parseTask(e);
-        if (want.done && t?.op === "hecha") notify(`${who} terminó la tarea #${t.id}`, t.detail || "Tarea hecha.");
-        if (want.done && t?.op === "aprobada") notify(`${who} aprobó la tarea #${t.id}`, "Revisada y cerrada.");
+        if (want.done && t?.op === "hecha")
+          notify(`${who} terminó la tarea #${t.id}`, t.detail || "Tarea hecha.", { agent: e.agent, kind: "done" });
+        if (want.done && t?.op === "aprobada")
+          notify(`${who} aprobó la tarea #${t.id}`, "Revisada y cerrada.", { agent: e.agent, kind: "done" });
       } else if (e.kind === "reply" || (e.kind === "message" && e.to === "tú")) {
-        if (want.reply) notify(`${who} respondió`, e.text.replace(/\s+/g, " ").slice(0, 160));
+        if (want.reply) notify(`${who} respondió`, e.text.replace(/\s+/g, " ").slice(0, 160), { agent: e.agent, kind: "reply" });
       }
     }
   }, [state, notifyOn, roster]);
@@ -1801,7 +1822,10 @@ export function CommandCenter() {
       if (evs.some((e) => e.agent === a && e.seq > mine.seq)) return;
       if (liveRef.current.some((l) => l.name === a && l.busy)) return;
       lateWarned.current.add(mine.seq);
-      notify(`${agentLabel(a)} no ha respondido`, `Lleva ${lateMin} minutos sin contestar a tu mensaje. Mira su terminal en lienzo.`);
+      notify(`${agentLabel(a)} no ha respondido`, `Lleva ${lateMin} minutos sin contestar a tu mensaje. Mira su terminal en lienzo.`, {
+        agent: a,
+        kind: "late",
+      });
     }, 30_000);
     return () => window.clearInterval(id);
   }, [notifyOn, lateMin]);
@@ -2259,7 +2283,13 @@ export function CommandCenter() {
               : "Elegir la carpeta del proyecto"
           }
         >
-          <span className="cc-logobox">L</span>
+          <span className="cc-logobox" aria-hidden="true">
+            {/* El mismo dibujo que el icono de la app (src-tauri/icons/lienzo.svg). */}
+            <svg viewBox="0 0 1024 1024" width="28" height="28">
+              <path d="M392 290 V694 H622" fill="none" stroke="#f5f5f7" strokeWidth="104" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="726" cy="694" r="62" fill="var(--accent)" />
+            </svg>
+          </span>
           <span className="cc-brandname">lienzo</span>
           <span className="cc-slash">/</span>
           <span className="cc-branch-name" data-warn={project ? "0" : "1"}>
@@ -2654,11 +2684,8 @@ export function CommandCenter() {
         ))}
       </div>
 
-      {flash && (
-        <div className="cc-toast" data-err={flash.err ? "1" : undefined}>
-          {flash.text}
-        </div>
-      )}
+      <Toast flash={flash} onDismiss={() => setFlash(null)} />
+      <InAppAvisos onOpen={openAviso} />
 
       {overlay === "settings" && (
         <SettingsModal

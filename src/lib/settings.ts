@@ -31,8 +31,10 @@ export type Settings = {
     reply: boolean;
     /** Minutos sin respuesta a tu mensaje antes de avisar (0 = nunca). */
     lateMin: number;
-    /** Avisar también cuando lienzo está delante. */
+    /** Avisar también fuera cuando lienzo está delante (dentro de la app se avisa siempre). */
     whenFocused: boolean;
+    /** Cómo se ven los avisos fuera de lienzo: con su diseño o como avisos de Windows. */
+    style: "lienzo" | "windows";
   };
   team: {
     /** Escribir en la terminal de un agente libre cuando le llega un mensaje de otro. */
@@ -58,7 +60,7 @@ export const DEFAULT_SETTINGS: Settings = {
     idleS: DISPATCH_CONFIG.idleMs / 1000,
     leader: "last",
   },
-  notify: { ask: true, done: true, reply: true, lateMin: 3, whenFocused: false },
+  notify: { ask: true, done: true, reply: true, lateMin: 3, whenFocused: false, style: "lienzo" },
   team: { relayInbox: true, leaderClean: true },
   ui: { motion: "on" },
   skipAgents: [],

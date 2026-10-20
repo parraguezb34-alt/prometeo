@@ -1,3 +1,4 @@
+mod aviso;
 mod devapp;
 pub mod errlog;
 pub mod history;
@@ -87,6 +88,11 @@ pub fn run() {
             errlog::errors_clear,
             errlog::errors_file,
             errlog::errors_report,
+            aviso::aviso_push,
+            aviso::aviso_take,
+            aviso::aviso_resize,
+            aviso::aviso_close,
+            aviso::aviso_open,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

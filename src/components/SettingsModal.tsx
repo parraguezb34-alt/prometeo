@@ -1117,21 +1117,51 @@ function Notify({ notifyOn, onNotify, say }: Props) {
   const off = !notifyOn;
   return (
     <>
-      <Group title="Avisos de Windows" desc="Te aviso en la esquina de la pantalla cuando el equipo te necesita.">
+      <Group
+        title="Avisos"
+        desc="Si estás mirando lienzo, salen arriba a la derecha; si estás en otra ventana, en la esquina de la pantalla."
+      >
         <Row label="Activar avisos" hint="También con la campana de la barra superior.">
-          <Switch on={notifyOn} onChange={onNotify} label="Avisos de Windows" />
+          <Switch on={notifyOn} onChange={onNotify} label="Avisos" />
         </Row>
-        <Row label="Avisar aunque lienzo esté delante" hint="Si no, solo cuando estás en otra ventana." disabled={off}>
+        <Row
+          label="Aspecto fuera de lienzo"
+          hint={
+            n.style === "lienzo"
+              ? "Con el diseño de lienzo. No quedan en el centro de notificaciones de Windows."
+              : "Los de Windows: sin el diseño de lienzo, pero quedan en el centro de notificaciones."
+          }
+          disabled={off}
+        >
+          <Seg
+            label="Aspecto de los avisos"
+            value={n.style}
+            disabled={off}
+            onChange={(style) => set({ style })}
+            options={[
+              { v: "lienzo", l: "lienzo" },
+              { v: "windows", l: "Windows" },
+            ]}
+          />
+        </Row>
+        <Row label="Avisar también en la esquina de la pantalla aunque lienzo esté delante" hint="Dentro de la app se avisa siempre." disabled={off}>
           <Switch on={n.whenFocused} disabled={off} onChange={(whenFocused) => set({ whenFocused })} label="Avisar aunque lienzo esté delante" />
         </Row>
         <div className="st-status">
-          <span className="st-row-h">Comprueba que Windows deja a lienzo mostrar avisos.</span>
+          <span className="st-row-h">Mira cómo se ve un aviso en la esquina de la pantalla.</span>
           <span className="cc-c-grow" />
           <button
             className="st-link"
             onClick={() =>
               void testNotify().then((ok) =>
-                say(ok ? "Aviso de prueba enviado." : "Windows no deja mostrar avisos: revisa Configuración › Notificaciones.", !ok),
+                say(
+                  ok
+                    ? "Aviso de prueba enviado."
+                    : n.style === "windows"
+                      ? "Windows no deja mostrar avisos: revisa Configuración › Notificaciones."
+                      : "No pude abrir la ventanita de avisos.",
+                  !ok,
+                ),
               )
             }
           >

@@ -1263,27 +1263,7 @@ select {
   pointer-events: none;
 }
 
-.cc-toast {
-  position: fixed;
-  top: 64px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 60;
-  background: rgba(9, 9, 11, 0.97);
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  padding: 8px 14px;
-  font-size: 12px;
-  color: var(--ok);
-  white-space: pre-wrap;
-  max-width: 72vw;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-}
-
-.cc-toast[data-err="1"] {
-  color: var(--err);
-  border-color: #7f1d1d;
-}
+/* .cc-toast: ver avisos.css */
 
 .cc-backdrop {
   position: fixed;
