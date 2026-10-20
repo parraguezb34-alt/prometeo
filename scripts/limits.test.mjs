@@ -74,6 +74,48 @@ test("panel con barra entre corchetes y nombre arriba; el panel dice lo que qued
   assert.equal(w[0].resets_at, NOW + 3 * 86400 * 1000);
 });
 
+test("Antigravity real: grupos de modelos, lo que queda y la nota del pie", () => {
+  const w = parseUsagePanel(
+    [
+      "└ Models & Quota",
+      "  Account: alguien@example.com",
+      "GEMINI MODELS",
+      "  Models within this group: Gemini Flash, Gemini Pro",
+      "  Weekly Limit Remaining",
+      "    [███████████████████████████████████████████░░░░░░░] 86.33%",
+      "    Refreshes in 90h 4m",
+      "  Five Hour Limit Remaining",
+      "    [██████████████████████████████████████████████████] 100.00%",
+      "    Quota available",
+      "CLAUDE AND GPT MODELS",
+      "  Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+      "  Weekly Limit Remaining",
+      "    [██████████████████████████████████████████████████] 100.00%",
+      "    Quota available",
+      "  Five Hour Limit Remaining",
+      "    [█████████████████████████████████████████░░░░░░░░░] 82.00%",
+      "    Refreshes in 2h 30m",
+      "  │Within each group, models share a weekly limit and a 5-hour limit. Quota is",
+      "  │consumed proportionally to the cost of the tokens.",
+      "  (1–22 of 30 lines)",
+    ],
+    NOW,
+  );
+  assert.deepEqual(
+    w.map((x) => [x.label, x.used_pct]),
+    [
+      ["Gemini · semana", 13.7],
+      ["Gemini · 5 h", 0],
+      ["Claude y GPT · semana", 0],
+      ["Claude y GPT · 5 h", 18],
+    ],
+  );
+  assert.equal(new Set(w.map((x) => x.key)).size, 4);
+  assert.equal(w[0].resets_at, NOW + (90 * 3600 + 4 * 60) * 1000);
+  assert.equal(w[1].resets_at, null);
+  assert.equal(w[3].resets_at, NOW + (2 * 3600 + 30 * 60) * 1000);
+});
+
 test("sin porcentajes no hay ventanas", () => {
   assert.deepEqual(parseUsagePanel(["> hola", "nada que ver"], NOW), []);
   assert.deepEqual(parseUsagePanel(null, NOW), []);

@@ -80,31 +80,55 @@ const tidy = (s: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+/** «GEMINI MODELS», «CLAUDE AND GPT MODELS»: el encabezado de un grupo de modelos (todo en mayúsculas). */
+const isGroup = (s: string) => !PCT.test(s) && !/[a-z]/.test(s) && /[A-Z]{3,}.*\s[A-Z]{2,}/.test(s);
+const groupName = (s: string) =>
+  s
+    .replace(/\b(MODELS?|MODELOS?)\b/g, " ")
+    .trim()
+    .split(/\s+/)
+    .map((w) => (w === "AND" || w === "Y" ? "y" : w.length <= 3 ? w : w[0] + w.slice(1).toLowerCase()))
+    .join(" ");
+/** «Weekly Limit» → «semana», «Five Hour Limit» → «5 h». */
+const windowName = (s: string) =>
+  /week|seman/i.test(s) ? "semana" : /five.?hour|5.?h|cinco/i.test(s) ? "5 h" : /month|mes/i.test(s) ? "mes" : /daily|day|día|diari/i.test(s) ? "día" : s;
+
 export function parseUsagePanel(lines: string[] | null, now = Date.now()): LimitWindow[] {
   if (!lines) return [];
   const rows = lines.map(clean).filter(Boolean);
   // Si el panel habla de lo que queda (y no de lo usado), todos sus números son «lo que queda».
   const panelRemains = rows.some((r) => REMAIN.test(r)) && !rows.some((r) => USED.test(r));
   const out: LimitWindow[] = [];
+  let group = "";
   rows.forEach((row, i) => {
+    if (isGroup(row)) {
+      group = groupName(row);
+      return;
+    }
     const m = PCT.exec(row);
     if (!m) return;
     let pct = Number(m[1].replace(",", "."));
     if (!(pct >= 0 && pct <= 100)) return;
-    const remains = REMAIN.test(row) || (!USED.test(row) && panelRemains);
-    if (remains) pct = 100 - pct;
     // El nombre va delante del número o, si ahí solo hay la barra, en la línea de arriba.
-    let label = tidy(row.slice(0, m.index));
+    let title = row.slice(0, m.index);
+    let label = tidy(title);
     if (!hasWords(label)) {
       for (let j = i - 1; j >= Math.max(0, i - 3); j--) {
-        if (PCT.test(rows[j])) break;
-        if (hasWords(rows[j]) && !/reset|restabl/i.test(rows[j])) {
-          label = tidy(rows[j]);
+        if (PCT.test(rows[j]) || isGroup(rows[j]) || /@|account|cuenta/i.test(rows[j])) break;
+        if (hasWords(rows[j]) && !/reset|restabl|refresh|available|disponible/i.test(rows[j])) {
+          title = rows[j];
+          label = tidy(title);
           break;
         }
       }
     }
+    // «Weekly Limit Remaining»: lo dice su propio título (o la línea); si no, lo que diga el panel.
+    const remains =
+      REMAIN.test(row) || REMAIN.test(title) || (!USED.test(row) && !USED.test(title) && panelRemains);
+    if (remains) pct = 100 - pct;
     if (!hasWords(label)) label = "";
+    // Con grupos de modelos (Antigravity): «Gemini · semana».
+    if (group) label = label ? `${group} · ${windowName(label)}` : group;
     label = label.slice(0, 40) || `Límite ${out.length + 1}`;
     let key = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || `w${out.length}`;
     // Claves únicas: dos ventanas con el mismo nombre no se pisan.
