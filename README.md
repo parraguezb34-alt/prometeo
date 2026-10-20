@@ -1,15 +1,18 @@
-# lienzo
+# Prometeo
 
 Centro de mando con chats y terminales para orquestar agentes de IA.
 Recreación **ligera y mejorada** de Deska: Tauri 2 + Rust + React (nada de Electron ni 300 MB de asar).
 
+El nombre interno sigue siendo **lienzo**: el crate, los binarios `lienzo.exe` y `lienzo-mcp.exe`,
+los datos en `%APPDATA%\lienzo`, el identificador `dev.lienzo.app` y el servidor MCP `lienzo-team`.
+
 ## ¿De qué trata?
 
-lienzo es un **centro de mando conversacional para dirigir un equipo de agentes de IA que ya viven en tu máquina** — Claude Code, OpenCode, Codex y Antigravity — sin saltar entre cuatro terminales y cuatro contextos distintos:
+Prometeo es un **centro de mando conversacional para dirigir un equipo de agentes de IA que ya viven en tu máquina** — Claude Code, OpenCode, Codex y Antigravity — sin saltar entre cuatro terminales y cuatro contextos distintos:
 
 - **Les hablas como a un equipo**: un chat único para pedir una misión al grupo (en modo plan o directo) o un mensaje privado a un agente concreto (`@claude`, `@opencode`…). Lo que escribes llega de verdad a su terminal.
-- **Trabajan sin pisarse**: cada tarea tiene dueño y cada agente reclama los archivos que va a tocar. lienzo te enseña quién hace qué, marca los bloqueos cuando un agente espera tu respuesta y detecta *scope creep* (archivos tocados fuera de lo reclamado).
-- **Las sesiones largas no se pudren**: cuando un agente va a quedarse sin contexto, guarda un **relevo con memoria** pegado a su tarea y lienzo compacta por él; quien retome el trabajo continúa con ese resumen, sin amnesia.
+- **Trabajan sin pisarse**: cada tarea tiene dueño y cada agente reclama los archivos que va a tocar. Prometeo te enseña quién hace qué, marca los bloqueos cuando un agente espera tu respuesta y detecta *scope creep* (archivos tocados fuera de lo reclamado).
+- **Las sesiones largas no se pudren**: cuando un agente va a quedarse sin contexto, guarda un **relevo con memoria** pegado a su tarea y Prometeo compacta por él; quien retome el trabajo continúa con ese resumen, sin amnesia.
 - **Tú mandas sobre lo que cambia**: diffs filtrados por tarea, aceptar o revertir por archivos/con bloques, commit solo bajo tu OK, y preview en vivo de los HTML/SVG/MD que producen.
 - **Datos reales, nada fingido**: el termómetro de contexto (% y tokens), el feed, las tareas y los diffs salen de las fuentes locales de cada CLI (transcripts, `opencode.db`, rollouts de Codex) y de git. Si algo no se puede medir, no se inventa.
 
@@ -37,7 +40,7 @@ lienzo es un **centro de mando conversacional para dirigir un equipo de agentes 
   - **Conexión con 1 clic**: detecta Claude Code, Codex, OpenCode y Antigravity y escribe su configuración (`.mcp.json`, `~/.codex/config.toml`, `opencode.json`, `.agents/mcp_config.json`) + bloque de protocolo en `AGENTS.md`/`CLAUDE.md`.
   - **Reporte automático**: los hooks de Claude Code (y Codex) publican cada edición/comando en el feed y **inyectan el contexto del equipo en cada prompt** — Claude ve lo que hizo otro agente antes de responder.
   - **Sin pisarse archivos**: `team_claim_files` reserva archivos y devuelve conflictos si otro agente ya los tiene.
-  - **Hub local** (Rust, `127.0.0.1` + token): descubrimiento en `%APPDATA%\lienzo\hub.json`; las terminales que abre lienzo heredan `LIENZO_HUB` / `LIENZO_TOKEN`.
+  - **Hub local** (Rust, `127.0.0.1` + token): descubrimiento en `%APPDATA%\lienzo\hub.json`; las terminales que abre Prometeo heredan `LIENZO_HUB` / `LIENZO_TOKEN`.
 - **Orquestador del equipo** 🎛️:
   - **Prompt para todos** (📣 en Ajustes del equipo): publica el mensaje en el feed y lo **escribe en la terminal de cada agente abierto** (OpenCode/Antigravity/Claude la reciben al instante), y a Claude en cualquier ventana le llega como bloque del **hook Stop** cuando termina su turno. El texto viaja **envuelto con el protocolo de equipo** (llama a `team_context`, reparte/reclama tareas, publica avances con `team_update`, reserva archivos) para que los agentes coordinen de verdad en vez de trabajar cada uno por su cuenta.
   - **Normas del equipo (system prompt global)**: texto editable en la pestaña Agentes que se inyecta a los agentes en `team_context`, en las instrucciones del MCP y en cada prompt vía hooks — saben que trabajan juntos y cómo coordinarse.
@@ -73,7 +76,7 @@ lienzo es un **centro de mando conversacional para dirigir un equipo de agentes 
 2. Escribe la carpeta del proyecto y pulsa **Guardar**.
 3. Pulsa **Conectar** en el agente que quieras (Claude Code, Codex, OpenCode, Antigravity).
 4. Pulsa **Abrir** para lanzarlo ya dentro del proyecto: Claude/Codex/OpenCode **y Antigravity**
-   se abren en una **terminal del lienzo** (OpenCode usa su CLI v2, `mcp.servers`;
+   se abren en una **terminal de Prometeo** (OpenCode usa su CLI v2, `mcp.servers`;
    Antigravity usa su CLI oficial `agy` — misma cuenta y misma config MCP — lanzada con
    `--dangerously-skip-permissions` para que no pida permiso en cada herramienta; quita la
    bandera en `connectors.rs` si prefieres recuperar los avisos; si `agy` no está, se abre
@@ -97,9 +100,9 @@ lienzo es un **centro de mando conversacional para dirigir un equipo de agentes 
    - **Entrega estructurada**: cerrar exige `summary` (qué hizo y decidió) y admite `files` y `evidence` (cómo lo comprobó). Se guarda en la tarea y se ve en el panel.
    - **Los dependientes la reciben**: al reclamar una tarea, el agente recibe las entregas de sus padres; `team_context` también las resume.
 
-5. **Despacho automático** (interruptor en el panel de Tareas, activado por defecto): cuando una tarea queda **lista** (abierta, sin dueño y con todos sus padres hechos) y hay un agente **libre**, lienzo le escribe en su terminal que la tome y la reclame con `team_task_claim`. Frenos:
+5. **Despacho automático** (interruptor en el panel de Tareas, activado por defecto): cuando una tarea queda **lista** (abierta, sin dueño y con todos sus padres hechos) y hay un agente **libre**, Prometeo le escribe en su terminal que la tome y la reclame con `team_task_claim`. Frenos:
    - **Un trabajo en curso por agente**: no se avisa a quien ya tiene una tarea reclamada o un aviso sin responder.
-   - **Solo a quien puede**: en línea, con terminal en lienzo, sin esperar tu permiso y sin actividad en los últimos 20 s. Los trabajadores van antes que el líder.
+   - **Solo a quien puede**: en línea, con terminal en Prometeo, sin esperar tu permiso y sin actividad en los últimos 20 s. Los trabajadores van antes que el líder.
    - **Plazo de 90 s** para reclamar. Si nadie lo hace, se prueba con otro agente (nunca con el mismo) y, tras **2 fallos**, la tarea se queda parada hasta que pulses *Reintentar*.
    - **Pausa de 5 min** para un agente que no responde a 3 avisos seguidos, y como mínimo 4 s entre dos avisos cualesquiera (nada de tormentas).
    La lógica está en `src/lib/dispatcher.ts` (pura, sin Tauri) y se prueba con `npm test`.
@@ -116,7 +119,7 @@ de sus comandos rápidos):
 1. El agente guarda su relevo con `team_handover_save`: qué hizo, decisiones tomadas,
    qué falta y qué archivos tocó. Queda **pegado a su tarea** (se ve en `± Cambios`
    junto a su diff) y anunciado en el feed.
-2. En cuanto lo guarda, lienzo **compacta su contexto solo**: Claude recibe
+2. En cuanto lo guarda, Prometeo **compacta su contexto solo**: Claude recibe
    `/compact` con el foco de la tarea («Mantén el contexto de la tarea #X y los
    archivos Y»), Codex su `/compact`, y OpenCode se compacta vía la API de su
    servidor local (`POST /api/session/:id/compact`; la petición es duradera y se
@@ -129,7 +132,7 @@ de sus comandos rápidos):
 
 - **OpenCode**: su servicio de fondo se queda con la conexión MCP muerta si el puente
   muere de golpe (p. ej. reinicio brusco); la sesión se queda sin las `team_*`. Al pulsar
-  **Abrir**, lienzo lanza solo `opencode reload` para refrescarla. A mano: ejecuta
+  **Abrir**, Prometeo lanza solo `opencode reload` para refrescarla. A mano: ejecuta
   `opencode reload` en la carpeta del proyecto y comprueba con `opencode mcp list`.
 - **Puentes y reinicios**: los puentes (`lienzo-mcp.exe`) se re-descubren solos si la app
   reinicia (leen el `hub.json` nuevo); si una sesión quedó rara, ciérrala y **vuelve a

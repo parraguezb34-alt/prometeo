@@ -1,8 +1,8 @@
 [package]
 name = "lienzo"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "1.0.0"
+description = "Prometeo: centro de mando para dirigir un equipo de agentes de IA"
+authors = ["Prometeo"]
 edition = "2024"
 # Two binaries ship together: the app and the MCP bridge for agents.
 default-run = "lienzo"
