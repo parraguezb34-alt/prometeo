@@ -960,10 +960,69 @@ pub async fn opencode_compact(project: String) -> Result<String, String> {
 
 const EFFORTS_STD: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
+/// Sin esto Antigravity, al arrancar, lanza su buscador de actualizaciones con una consola
+/// propia (una ventana que parpadea). Solo vale «true»: con «1» lo ignora.
+pub const AGY_NO_UPDATE: (&str, &str) = ("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
+
+fn agy_exe() -> PathBuf {
+    let local = std::env::var("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default();
+    let agy = local.join(r"agy\bin\agy.exe");
+    if agy.exists() { agy } else { PathBuf::from("agy") }
+}
+
+/// Como Antigravity ya no se actualiza solo (ver `AGY_NO_UPDATE`), Prometeo lo hace sin ventana
+/// una vez al día, en segundo plano. Un fallo solo se anota en el registro de errores.
+pub fn update_agy_daily() {
+    const EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+    let stamp = super::data_dir().join("agy-update.stamp");
+    let recent = std::fs::metadata(&stamp)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < EVERY);
+    let exe = agy_exe();
+    if recent || !exe.is_absolute() {
+        return;
+    }
+    let _ = std::fs::write(&stamp, super::now_ms().to_string());
+    let mut cmd = Command::new(&exe);
+    cmd.arg("update")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let Ok(mut child) = cmd.spawn() else { return };
+    for _ in 0..(10 * 60) {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    let mut err = String::new();
+                    if let Some(mut e) = child.stderr.take() {
+                        use std::io::Read;
+                        let _ = e.read_to_string(&mut err);
+                    }
+                    let detail = err.trim().chars().take(600).collect::<String>();
+                    crate::errlog::log("antigravity", "No se pudo actualizar Antigravity", &detail);
+                }
+                return;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_secs(1)),
+            Err(_) => return,
+        }
+    }
+    let _ = child.kill();
+    crate::errlog::log("antigravity", "La actualización de Antigravity tardó demasiado", "");
+}
+
 /// Ejecuta un CLI sin ventana y devuelve su stdout, con tope de espera.
 fn run_capture(exe: &Path, args: &[&str], wait_ms: u64) -> Option<String> {
     let mut cmd = Command::new(exe);
     cmd.args(args)
+        .env(AGY_NO_UPDATE.0, AGY_NO_UPDATE.1)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
@@ -1080,9 +1139,7 @@ pub async fn team_models(agent: String) -> Result<Value, String> {
             }))
         }
         "antigravity" => {
-            let local = std::env::var("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default();
-            let agy = local.join(r"agy\bin\agy.exe");
-            let exe = if agy.exists() { agy } else { PathBuf::from("agy") };
+            let exe = agy_exe();
             let efforts = std_efforts();
             let mut models: Vec<Value> = vec![];
             if let Some(out) = run_capture(&exe, &["models"], 12_000) {

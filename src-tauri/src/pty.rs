@@ -305,6 +305,10 @@ pub async fn term_spawn(
         }
     }
     cmd.env("TERM", "xterm-256color");
+    // Antigravity busca actualizaciones al arrancar lanzando un proceso con consola propia: una
+    // ventana que parpadea al abrir Prometeo. Prometeo lo actualiza él, sin ventana (ver
+    // `connectors::update_agy_daily`).
+    cmd.env(crate::hub::connectors::AGY_NO_UPDATE.0, crate::hub::connectors::AGY_NO_UPDATE.1);
     // Any agent launched inside a lienzo terminal can find the team hub.
     for (key, value) in crate::hub::terminal_env_vars() {
         cmd.env(key, value);

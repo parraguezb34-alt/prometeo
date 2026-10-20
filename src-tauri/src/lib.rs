@@ -31,6 +31,17 @@ pub fn run() {
             if let Err(e) = hub::init(app.handle().clone()) {
                 errlog::log("hub", "No se pudo iniciar el hub del equipo", &e);
             }
+            // Las skills de esta versión de Prometeo al proyecto abierto (y su lista en CLAUDE.md y
+            // AGENTS.md): si los agentes ya estaban conectados, nadie más las pondría al día.
+            let project = hub::with_inner(app.handle(), |i| i.project.clone()).flatten();
+            std::thread::spawn(move || {
+                skills::apply(project);
+            });
+            // Antigravity se actualiza sin ventana, en segundo plano, una vez al día.
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(90));
+                hub::connectors::update_agy_daily();
+            });
             if let Err(e) = tray::init(app.handle()) {
                 errlog::log("bandeja", "No se pudo crear el icono de la bandeja", &e.to_string());
             }
