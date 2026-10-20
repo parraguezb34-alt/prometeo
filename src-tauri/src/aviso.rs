@@ -1,6 +1,6 @@
-//! Avisos de lienzo fuera de la app: una ventanita propia en la esquina de la pantalla, con el
+//! Avisos de Prometeo fuera de la app: una ventanita propia en la esquina de la pantalla, con el
 //! mismo diseño que la app (en vez del aviso de Windows, que no se puede personalizar). No
-//! roba el foco; al pulsar un aviso se abre lienzo en lo que avisa.
+//! roba el foco; al pulsar un aviso se abre Prometeo en lo que avisa.
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -54,7 +54,7 @@ pub fn aviso_push(app: AppHandle, item: Aviso) -> Result<(), String> {
         return Ok(());
     }
     let win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html?aviso=1".into()))
-        .title("Avisos de lienzo")
+        .title("Avisos de Prometeo")
         .inner_size(WIDTH, 110.0)
         .decorations(false)
         .transparent(true)

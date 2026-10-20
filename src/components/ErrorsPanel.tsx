@@ -12,7 +12,7 @@ function asText(e: ErrEntry): string {
   return `[${when}] ${SOURCE_ES[e.source] ?? e.source}: ${e.message}${e.detail ? `\n${e.detail}` : ""}`;
 }
 
-/** Ajustes → Errores: lo que ha fallado en lienzo, del más nuevo al más viejo. */
+/** Ajustes → Errores: lo que ha fallado en Prometeo, del más nuevo al más viejo. */
 export function ErrorsPanel({ say }: { say: (text: string, err?: boolean) => void }) {
   const [all, setAll] = useState<ErrEntry[] | null>(null);
   const [src, setSrc] = useState<string>("all");
@@ -70,7 +70,7 @@ export function ErrorsPanel({ say }: { say: (text: string, err?: boolean) => voi
         <div>
           <h4>Registro de errores</h4>
           <p>
-            Lo que ha fallado en lienzo (la interfaz, el hub, el historial o la app en vivo), con la hora
+            Lo que ha fallado en Prometeo (la interfaz, el hub, el historial o la app en vivo), con la hora
             y el detalle. Se guardan los últimos 500.
           </p>
         </div>

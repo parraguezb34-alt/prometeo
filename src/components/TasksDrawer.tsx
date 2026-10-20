@@ -216,7 +216,7 @@ export function TasksDrawer({
                       ? "Despacho automático apagado: repartes tú o el líder."
                       : pausedAgents.length > 0
                         ? `Despacho automático. En pausa: ${pausedAgents.join(", ")}`
-                        : "Despacho automático: cuando una tarea del chat abierto está lista y un agente libre, lienzo le pide que la tome."
+                        : "Despacho automático: cuando una tarea del chat abierto está lista y un agente libre, Prometeo le pide que la tome."
                   }
                 >
                   <span className="cc-sw" />

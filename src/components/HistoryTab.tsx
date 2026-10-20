@@ -279,7 +279,7 @@ export function HistoryTab({
                   {sel === "pending"
                     ? "Están en disco pero no vinieron de una entrega. Guárdalos para poder deshacerlos."
                     : entry?.kind === "inicio"
-                      ? "Cómo estaba el proyecto cuando lienzo empezó a guardar el historial."
+                      ? "Cómo estaba el proyecto cuando Prometeo empezó a guardar el historial."
                       : entry?.kind === "deshacer" || entry?.kind === "rehacer"
                         ? `${entry ? new Date(entry.ts_ms).toLocaleString() : ""} · para ${
                             entry?.kind === "deshacer" ? "rehacerla" : "deshacerla"

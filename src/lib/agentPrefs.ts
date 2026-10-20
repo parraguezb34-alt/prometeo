@@ -33,7 +33,7 @@ export function prefsFor(agent: string): AgentPref {
 
 const APPLIED_KEY = "lienzo.agentapplied.v1";
 
-/** Lo último que se aplicó a la sesión de cada agente. Se guarda para que, al reabrir lienzo
+/** Lo último que se aplicó a la sesión de cada agente. Se guarda para que, al reabrir Prometeo
  * (las terminales vuelven con las mismas flags), no aparezca un «Reiniciar con esto» falso. */
 export function loadApplied(): Record<string, AgentPref | undefined> {
   try {

@@ -1,6 +1,6 @@
 /**
  * Despachador ligero: cuando una tarea queda lista (abierta, sin dueño y con
- * todos sus padres hechos) y hay un agente libre, lienzo le pide que la tome.
+ * todos sus padres hechos) y hay un agente libre, Prometeo le pide que la tome.
  *
  * Es lógica pura (sin Tauri ni React) para poder probarla. Los frenos copian lo
  * útil de un despachador de tableros: un solo trabajo en curso por agente, un
@@ -24,7 +24,7 @@ export type DTask = {
 export type DAgent = {
   name: string;
   online: boolean;
-  /** lienzo tiene su terminal, así que puede escribirle. */
+  /** Prometeo tiene su terminal, así que puede escribirle. */
   hasTerminal: boolean;
   /** Espera tu permiso o respuesta: no se le molesta. */
   blocked: boolean;
@@ -267,7 +267,7 @@ export function dispatchPrompt(task: DTask): string {
   const notes = !brief ? "" : brief.length <= 240 ? ` Notas: ${brief}.` : " Trae un encargo detallado: síguelo al pie de la letra.";
   const title = task.title.trim().replace(/\s+/g, " ");
   return (
-    `📌 Despacho de lienzo: toma la tarea #${task.id} «${title}».${notes} ` +
+    `📌 Despacho de Prometeo: toma la tarea #${task.id} «${title}».${notes} ` +
     `1) Reclámala con team_task_claim (id ${task.id}); recibirás el encargo y las entregas de las tareas previas. ` +
     `2) Mira team_context y reserva con team_claim_files lo que vayas a editar. ` +
     `3) Al terminar, ciérrala con team_task_done: summary (qué hiciste), files y evidence (cómo lo comprobaste). ` +

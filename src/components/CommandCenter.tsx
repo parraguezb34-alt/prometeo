@@ -73,6 +73,7 @@ import { ChatsSidebar } from "./ChatsSidebar";
 import { DestPicker } from "./DestPicker";
 import { HistoryTab } from "./HistoryTab";
 import { SlidingPill } from "./SlidingPill";
+import { BrandIcon, BrandWordmark } from "./Brand";
 import { InAppAvisos, Toast } from "./Avisos";
 import { listen } from "@tauri-apps/api/event";
 import { taskPaths } from "../lib/history";
@@ -317,7 +318,7 @@ export function CommandCenter() {
   /** Conversación que el chat del equipo abierto tiene apuntada para un agente (o null). */
   const sessionRef = (name: string): string | null =>
     currentTeamChat(chats.current())?.sessions?.[name] ?? null;
-  // Si lienzo se reinicia, cada agente se reabre retomando la conversación de este chat.
+  // Si Prometeo se reinicia, cada agente se reabre retomando la conversación de este chat.
   setRespawnResolver((panel) => (panel.cmd ? withResume(panel.cmd, sessionRef(agentKeyFromCmd(panel.cmd))) : null));
 
   // Rama git del proyecto, para la barra superior.
@@ -1102,7 +1103,7 @@ export function CommandCenter() {
     }
   };
 
-  /** Relevo con memoria: cuando un agente guarda su handover, lienzo compacta
+  /** Relevo con memoria: cuando un agente guarda su handover, Prometeo compacta
    * su contexto — Claude/Codex por su terminal, OpenCode por su API local. */
   const autoCompact = async (e: TeamEvent) => {
     const name = e.agent;
@@ -1761,7 +1762,7 @@ export function CommandCenter() {
     return out;
   }, [roster, activity, state, layout.panels, sel, termPrompts]);
 
-  // ---- Avisos de Windows (solo si lienzo no está delante) ------------------------------
+  // ---- Avisos de Windows (solo si Prometeo no está delante) ------------------------------
   const [notifyOn, setNotifyOn] = useState(() => loadFlag(NOTIFY_KEY, true));
   const notifSeq = useRef<number | null>(null);
   const lateWarned = useRef<Set<number>>(new Set());
@@ -1778,7 +1779,7 @@ export function CommandCenter() {
   useEffect(() => {
     const evs = state?.events ?? [];
     const top = evs[0]?.seq ?? 0;
-    // Lo que ya había al abrir lienzo no se avisa.
+    // Lo que ya había al abrir Prometeo no se avisa.
     if (notifSeq.current === null || !notifyOn) {
       if (evs.length > 0) notifSeq.current = top;
       return;
@@ -1822,7 +1823,7 @@ export function CommandCenter() {
       if (evs.some((e) => e.agent === a && e.seq > mine.seq)) return;
       if (liveRef.current.some((l) => l.name === a && l.busy)) return;
       lateWarned.current.add(mine.seq);
-      notify(`${agentLabel(a)} no ha respondido`, `Lleva ${lateMin} minutos sin contestar a tu mensaje. Mira su terminal en lienzo.`, {
+      notify(`${agentLabel(a)} no ha respondido`, `Lleva ${lateMin} minutos sin contestar a tu mensaje. Mira su terminal en Prometeo.`, {
         agent: a,
         kind: "late",
       });
@@ -1874,7 +1875,7 @@ export function CommandCenter() {
   const directorOn = state ? !!state.director : null;
   const prevDirector = useRef<boolean | null>(null);
   useEffect(() => {
-    // Al activar el modo director (no al abrir lienzo con él ya activo) también se empieza limpio.
+    // Al activar el modo director (no al abrir Prometeo con él ya activo) también se empieza limpio.
     if (directorOn && prevDirector.current === false) cleanRef.current.pending = true;
     if (directorOn !== null) prevDirector.current = directorOn;
   }, [directorOn]);
@@ -1884,7 +1885,7 @@ export function CommandCenter() {
       const c = cleanRef.current;
       if (!cur?.director || !getSettings().team.leaderClean || cur.leader !== "claude") return;
       if (c.key !== cleanKey) {
-        // Por proyecto: lo ya limpiado no se vuelve a limpiar al reabrir lienzo.
+        // Por proyecto: lo ya limpiado no se vuelve a limpiar al reabrir Prometeo.
         let saved = -1;
         try {
           saved = Number(localStorage.getItem(cleanKey) ?? "-1");
@@ -2283,14 +2284,8 @@ export function CommandCenter() {
               : "Elegir la carpeta del proyecto"
           }
         >
-          <span className="cc-logobox" aria-hidden="true">
-            {/* El mismo dibujo que el icono de la app (src-tauri/icons/lienzo.svg). */}
-            <svg viewBox="0 0 1024 1024" width="28" height="28">
-              <path d="M392 290 V694 H622" fill="none" stroke="#f5f5f7" strokeWidth="104" strokeLinecap="round" strokeLinejoin="round" />
-              <circle cx="726" cy="694" r="62" fill="var(--accent)" />
-            </svg>
-          </span>
-          <span className="cc-brandname">lienzo</span>
+          <BrandIcon size={28} />
+          <BrandWordmark height={20} />
           <span className="cc-slash">/</span>
           <span className="cc-branch-name" data-warn={project ? "0" : "1"}>
             {info?.repo ? info.branch || "…" : project ? shortPath(project) : "sin carpeta"}

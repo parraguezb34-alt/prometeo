@@ -38,7 +38,7 @@ export function MemoryTab({
             Aún no hay relevos guardados.
             <br />
             Pídele uno a un agente con «Relevo» (en el modal de Equipo): guardará su resumen y
-            lienzo compactará su contexto sin perder el hilo.
+            Prometeo compactará su contexto sin perder el hilo.
           </div>
         </div>
       )}

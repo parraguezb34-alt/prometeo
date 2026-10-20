@@ -131,7 +131,7 @@ const flat = (s: string) => s.toLowerCase().replace(/\\/g, "/").replace(/\s+/g, 
 
 /**
  * «¿Confías en esta carpeta?» que Claude Code y Antigravity preguntan la primera vez que abren
- * una carpeta. Si la carpeta que nombra es `project` (la que elegiste en lienzo), devuelve las
+ * una carpeta. Si la carpeta que nombra es `project` (la que elegiste en Prometeo), devuelve las
  * teclas que eligen «Sí, confío»; si no, null y la pregunta se queda para ti.
  */
 export function detectTrust(lines: string[] | null, project: string | null): string | null {

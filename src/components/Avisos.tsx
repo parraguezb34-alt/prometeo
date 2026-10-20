@@ -5,6 +5,7 @@ import { agentColor, agentInitial } from "../lib/team";
 import { onInAppAviso } from "../lib/notify";
 import type { Aviso } from "../lib/notify";
 import { Icon } from "./Icon";
+import { PixelFlame } from "./Brand";
 import type { IconName } from "./Icon";
 import "../avisos.css";
 
@@ -33,7 +34,7 @@ function AvisoCard({ a, onOpen, onClose }: { a: Live; onOpen: () => void; onClos
       style={{ ["--av-c" as string]: color, ["--av-life" as string]: `${LIFE_MS[a.kind] ?? 7000}ms` }}
     >
       <span className="av-avatar" aria-hidden="true">
-        {a.agent ? agentInitial(a.agent) : "L"}
+        {a.agent ? agentInitial(a.agent) : <PixelFlame size={18} />}
         {badge && (
           <i className="av-badge" data-kind={a.kind}>
             <Icon name={badge} size={10} />
@@ -42,7 +43,7 @@ function AvisoCard({ a, onOpen, onClose }: { a: Live; onOpen: () => void; onClos
       </span>
       <span className="av-text">
         <span className="av-top">
-          <span className="av-app">lienzo</span>
+          <span className="av-app">Prometeo</span>
           <span className="av-when">ahora</span>
         </span>
         <b>{a.title}</b>
@@ -95,7 +96,7 @@ function useStack() {
   return { items, add, close };
 }
 
-/** Avisos dentro de lienzo (cuando lo estás mirando), arriba a la derecha. */
+/** Avisos dentro de Prometeo (cuando lo estás mirando), arriba a la derecha. */
 export function InAppAvisos({ onOpen }: { onOpen: (a: Aviso) => void }) {
   const { items, add, close } = useStack();
   useEffect(() => onInAppAviso(add), [add]);

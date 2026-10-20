@@ -46,7 +46,7 @@ type Props = {
   live: LiveAgent[];
   /** Agentes en línea de esta conversación (para el acuse de un mensaje al equipo). */
   team: string[];
-  /** Agentes con terminal abierta en lienzo. */
+  /** Agentes con terminal abierta en Prometeo. */
   terminals: string[];
   leader: string;
   tasks: ChatTask[];
@@ -980,7 +980,7 @@ export function ChatView({
           </span>
           <span className="cv-notice-t">
             <span>
-              <span className="cv-notice-who">Lienzo</span> {title}
+              <span className="cv-notice-who">Prometeo</span> {title}
             </span>
             {sub && <small>{sub}</small>}
           </span>
@@ -1070,7 +1070,7 @@ export function ChatView({
             ? "Imagen nueva en el proyecto"
             : `${imgs.length} imágenes nuevas en el proyecto`
           : isDispatch(e)
-            ? `Lienzo asignó a ${agentLabel(e.to ?? "")} ${e.text.replace(/^📌 Despacho:?\s*/, "")}`
+            ? `Prometeo asignó a ${agentLabel(e.to ?? "")} ${e.text.replace(/^📌 Despacho:?\s*/, "")}`
             : e.agent === "tú"
               ? `Tú: ${e.text}`
               : e.text;

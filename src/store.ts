@@ -112,7 +112,7 @@ export function removePanel(id: string) {
 }
 
 /**
- * Orden con la que se reabre la terminal de un agente cuya sesión ya no existe (lienzo se
+ * Orden con la que se reabre la terminal de un agente cuya sesión ya no existe (Prometeo se
  * reinició): el centro de mando la registra para retomar la conversación del chat actual.
  */
 let respawnResolver: ((panel: Panel) => string | null) | null = null;

@@ -313,7 +313,7 @@ function General({ state, info, autoStart, shoot, chatsMin, say, onAutoStart, on
     <>
       <Group
         title="Carpeta del proyecto"
-        desc="Donde trabajan los agentes. Al conectarlos, lienzo escribe aquí su configuración MCP y las normas del equipo."
+        desc="Donde trabajan los agentes. Al conectarlos, Prometeo escribe aquí su configuración MCP y las normas del equipo."
       >
         <div className="st-pad">
           <div className="st-input-row">
@@ -463,7 +463,7 @@ function Agents({ state, detect, catalogs, prefs, opening, onPref, onConnect, on
   return (
     <>
       <p className="st-lead">
-        Los agentes que lienzo encontró en este equipo. El modelo y el esfuerzo que elijas aquí se usan cada vez que
+        Los agentes que Prometeo encontró en este equipo. El modelo y el esfuerzo que elijas aquí se usan cada vez que
         se abren; para cambiarlos en uno que ya está en marcha, usa el panel Equipo.
       </p>
       <div className="st-agents">
@@ -690,7 +690,7 @@ function Director({ state, say }: Pick<Props, "state" | "say">) {
       </Row>
       <Row
         label="Contexto limpio entre misiones"
-        hint="Al cerrarse todas las tareas, si Claude dirige y su conversación pesa más de 30k tokens, lienzo la limpia (/clear) cuando está libre. Lo hecho queda en el tablero y la memoria; cada revisión cuesta mucho menos."
+        hint="Al cerrarse todas las tareas, si Claude dirige y su conversación pesa más de 30k tokens, Prometeo la limpia (/clear) cuando está libre. Lo hecho queda en el tablero y la memoria; cada revisión cuesta mucho menos."
       >
         <Switch
           label="Contexto limpio entre misiones"
@@ -903,7 +903,7 @@ function Usage({ state, detect, say, onConnect }: Props) {
           <small>{fmtTokens(all.cache_read)} a precio reducido</small>
         </div>
         <div className="st-stat" data-tone={all.saved_ctx > 0 ? "ok" : undefined}>
-          <span>Ahorro de lienzo</span>
+          <span>Ahorro de Prometeo</span>
           <b>~{fmtTokens(all.saved_ctx)}</b>
           <small>contexto del equipo no repetido</small>
         </div>
@@ -951,7 +951,7 @@ function Usage({ state, detect, say, onConnect }: Props) {
                   <th>Entrada</th>
                   <th>Salida</th>
                   <th>Caché</th>
-                  <th title="Contexto del equipo que lienzo no repitió (estimado)">Ahorro</th>
+                  <th title="Contexto del equipo que Prometeo no repitió (estimado)">Ahorro</th>
                   <th title="Contexto liberado al compactar o empezar una conversación nueva">Liberado</th>
                 </tr>
               </thead>
@@ -984,7 +984,7 @@ function Usage({ state, detect, say, onConnect }: Props) {
 
       <TaskCosts state={state} />
 
-      <Group title="Qué hace lienzo para que duren más">
+      <Group title="Qué hace Prometeo para que duren más">
         <Row
           label="Contexto del equipo sin repetir"
           hint="En cada mensaje solo inyecto lo que cambió desde el anterior (tareas, reservas, actividad), no el resumen entero."
@@ -1001,7 +1001,7 @@ function Usage({ state, detect, say, onConnect }: Props) {
           label="Skills del equipo"
           hint={
             <>
-              Las de lienzo (equipo, ahorro, relevo, revisión) y caveman, de la comunidad, para respuestas breves cuando
+              Las de Prometeo (equipo, ahorro, relevo, revisión) y caveman, de la comunidad, para respuestas breves cuando
               se piden. Van en <code>.claude/skills</code> y{" "}
               <code>.agents/skills</code> del proyecto. {skillsMissing ?? "Se instalan o actualizan al conectar."}
             </>
@@ -1045,7 +1045,7 @@ function Dispatch({ dispatchOn, dispatchState, onDispatch, onDispatchClear }: Pr
 
   return (
     <>
-      <Group title="Despacho automático" desc="Cuando una tarea del chat abierto queda lista y hay un agente libre, lienzo le pide que la tome.">
+      <Group title="Despacho automático" desc="Cuando una tarea del chat abierto queda lista y hay un agente libre, Prometeo le pide que la tome.">
         <Row label="Repartir tareas solo" hint="Se puede cambiar también desde el panel del chat (Auto).">
           <Switch on={dispatchOn} onChange={onDispatch} label="Despacho automático" />
         </Row>
@@ -1119,7 +1119,7 @@ function Notify({ notifyOn, onNotify, say }: Props) {
     <>
       <Group
         title="Avisos"
-        desc="Si estás mirando lienzo, salen arriba a la derecha; si estás en otra ventana, en la esquina de la pantalla."
+        desc="Si estás mirando Prometeo, salen arriba a la derecha; si estás en otra ventana, en la esquina de la pantalla."
       >
         <Row label="Activar avisos" hint="También con la campana de la barra superior.">
           <Switch on={notifyOn} onChange={onNotify} label="Avisos" />
@@ -1128,8 +1128,8 @@ function Notify({ notifyOn, onNotify, say }: Props) {
           label="Aspecto fuera de lienzo"
           hint={
             n.style === "lienzo"
-              ? "Con el diseño de lienzo. No quedan en el centro de notificaciones de Windows."
-              : "Los de Windows: sin el diseño de lienzo, pero quedan en el centro de notificaciones."
+              ? "Con el diseño de Prometeo. No quedan en el centro de notificaciones de Windows."
+              : "Los de Windows: sin el diseño de Prometeo, pero quedan en el centro de notificaciones."
           }
           disabled={off}
         >
@@ -1139,13 +1139,13 @@ function Notify({ notifyOn, onNotify, say }: Props) {
             disabled={off}
             onChange={(style) => set({ style })}
             options={[
-              { v: "lienzo", l: "lienzo" },
+              { v: "lienzo", l: "Prometeo" },
               { v: "windows", l: "Windows" },
             ]}
           />
         </Row>
-        <Row label="Avisar también en la esquina de la pantalla aunque lienzo esté delante" hint="Dentro de la app se avisa siempre." disabled={off}>
-          <Switch on={n.whenFocused} disabled={off} onChange={(whenFocused) => set({ whenFocused })} label="Avisar aunque lienzo esté delante" />
+        <Row label="Avisar también en la esquina de la pantalla aunque Prometeo esté delante" hint="Dentro de la app se avisa siempre." disabled={off}>
+          <Switch on={n.whenFocused} disabled={off} onChange={(whenFocused) => set({ whenFocused })} label="Avisar aunque Prometeo esté delante" />
         </Row>
         <div className="st-status">
           <span className="st-row-h">Mira cómo se ve un aviso en la esquina de la pantalla.</span>

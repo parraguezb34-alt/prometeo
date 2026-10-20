@@ -5,7 +5,7 @@ import type { DispatchConfig } from "./dispatcher";
 /**
  * Ajustes de la interfaz que no son del hub: cómo reparte tareas el despacho, qué
  * avisos de Windows quieres y qué agentes quedan fuera del equipo. Viven en el
- * navegador, como el resto de preferencias de lienzo.
+ * navegador, como el resto de preferencias de Prometeo.
  */
 export type LeaderMode = "last" | "never" | "any";
 /** on = siempre · system = como diga Windows («Efectos de animación») · off = reducidas. */
@@ -31,9 +31,9 @@ export type Settings = {
     reply: boolean;
     /** Minutos sin respuesta a tu mensaje antes de avisar (0 = nunca). */
     lateMin: number;
-    /** Avisar también fuera cuando lienzo está delante (dentro de la app se avisa siempre). */
+    /** Avisar también fuera cuando Prometeo está delante (dentro de la app se avisa siempre). */
     whenFocused: boolean;
-    /** Cómo se ven los avisos fuera de lienzo: con su diseño o como avisos de Windows. */
+    /** Cómo se ven los avisos fuera de Prometeo: con su diseño o como avisos de Windows. */
     style: "lienzo" | "windows";
   };
   team: {
@@ -116,7 +116,7 @@ export function updateSettings(patch: {
   try {
     localStorage.setItem(KEY, JSON.stringify(current));
   } catch {
-    /* sin almacenamiento: duran hasta cerrar lienzo */
+    /* sin almacenamiento: duran hasta cerrar Prometeo */
   }
   for (const l of listeners) l();
 }

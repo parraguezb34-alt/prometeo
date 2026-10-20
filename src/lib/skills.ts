@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-/** Una skill de la biblioteca de lienzo (ver src-tauri/src/skills.rs). */
+/** Una skill de la biblioteca de Prometeo (ver src-tauri/src/skills.rs). */
 export type Skill = {
   name: string;
   description: string;

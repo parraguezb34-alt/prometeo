@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-// «App en vivo»: el proyecto arrancado (npm run dev, o sus .html servidos) para verlo en lienzo.
+// «App en vivo»: el proyecto arrancado (npm run dev, o sus .html servidos) para verlo en Prometeo.
 
 export type AppDetect = { kind: "npm" | "static" | "none"; cmd: string; install: boolean };
 

@@ -43,7 +43,7 @@ export function kindOf(path: string): AttKind {
   return "file";
 }
 
-/** Nombre a mostrar: sin carpeta y sin la marca de hora que pone lienzo al guardarlo. */
+/** Nombre a mostrar: sin carpeta y sin la marca de hora que pone Prometeo al guardarlo. */
 export function displayName(path: string): string {
   const base = path.trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? path;
   if (PASTED_RE.test(path)) return "Texto pegado";

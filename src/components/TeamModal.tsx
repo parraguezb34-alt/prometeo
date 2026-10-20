@@ -472,7 +472,7 @@ export function TeamModal({
                       <button
                         className={ctx && ctx.pct >= 75 ? "cc-btn hot" : "cc-btn sec"}
                         onClick={() => onCmd(name, `${HANDOVER_SAVE_PROMPT}\r`, "relevo con memoria")}
-                        title="Guarda su resumen pegado a la tarea y lienzo compacta su contexto (sin amnesia)"
+                        title="Guarda su resumen pegado a la tarea y Prometeo compacta su contexto (sin amnesia)"
                       >
                         <Icon name="refresh" size={14} />
                         {ctx && ctx.pct >= 75 ? "Relevo recomendado" : "Relevo"}
@@ -496,7 +496,7 @@ export function TeamModal({
         )}
 
         <div className="cc-modal-foot">
-          <label className="cc-autostart" title="Al abrir lienzo, conecta los agentes instalados y abre los que no estén en marcha">
+          <label className="cc-autostart" title="Al abrir Prometeo, conecta los agentes instalados y abre los que no estén en marcha">
             <input
               type="checkbox"
               className="cc-check"

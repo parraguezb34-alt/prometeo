@@ -56,7 +56,7 @@ export function AgentQuickCmds({
       <button
         className="cc-mini-btn"
         onClick={() => onCmd(`${HANDOVER_SAVE_PROMPT}\r`, "relevo con memoria")}
-        title="Relevo con memoria: guarda su resumen pegado a la tarea y lienzo compacta su contexto (sin amnesia)."
+        title="Relevo con memoria: guarda su resumen pegado a la tarea y Prometeo compacta su contexto (sin amnesia)."
       >
         <Icon name="refresh" size={13} />
       </button>

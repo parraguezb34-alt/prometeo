@@ -113,7 +113,7 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
       );
 
       let sid = sessionRef.current;
-      // Tenía sesión y ya no existe: lienzo se reinició y la terminal se vuelve a abrir.
+      // Tenía sesión y ya no existe: Prometeo se reinició y la terminal se vuelve a abrir.
       const hadSession = !!sid;
       let reattached = false;
       if (sid) {

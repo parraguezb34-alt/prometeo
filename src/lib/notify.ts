@@ -3,8 +3,8 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
 import { getSettings } from "./settings";
 
 /**
- * Avisos del equipo. Si estás mirando lienzo, salen dentro de la app (arriba a la derecha).
- * Si estás en otra ventana, salen en la esquina de la pantalla: con el diseño de lienzo (una
+ * Avisos del equipo. Si estás mirando Prometeo, salen dentro de la app (arriba a la derecha).
+ * Si estás en otra ventana, salen en la esquina de la pantalla: con el diseño de Prometeo (una
  * ventanita propia, ver aviso.rs) o como aviso de Windows, según Ajustes → Avisos.
  */
 
@@ -88,10 +88,10 @@ export function notify(title: string, body: string, meta: { agent?: string; kind
   void outside(a);
 }
 
-/** Aviso de prueba desde Ajustes: sale fuera al momento aunque lienzo esté delante. */
+/** Aviso de prueba desde Ajustes: sale fuera al momento aunque Prometeo esté delante. */
 export async function testNotify(): Promise<boolean> {
   return outside(
-    make("Aviso de prueba de lienzo", "Así te avisaré cuando un agente te necesite o termine algo.", {
+    make("Aviso de prueba de Prometeo", "Así te avisaré cuando un agente te necesite o termine algo.", {
       agent: "claude",
       kind: "done",
     }),
