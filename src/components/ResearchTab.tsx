@@ -5,6 +5,7 @@ import type { TeamTask } from "../lib/team";
 import {
   bestFile,
   coverage,
+  fileOrder,
   kindCount,
   fileLabel,
   overall,
@@ -343,15 +344,15 @@ export function ResearchTab({
 
             {cur.files.length > 0 && (
               <div className="rs-files" role="tablist">
-                {cur.files.map((f) => (
+                {fileOrder(cur.files.map((f) => f.name)).map((name) => (
                   <button
-                    key={f.name}
+                    key={name}
                     role="tab"
-                    aria-selected={f.name === shown}
-                    data-on={f.name === shown ? "1" : "0"}
-                    onClick={() => setFile(f.name)}
+                    aria-selected={name === shown}
+                    data-on={name === shown ? "1" : "0"}
+                    onClick={() => setFile(name)}
                   >
-                    {fileLabel(f.name)}
+                    {fileLabel(name)}
                   </button>
                 ))}
               </div>

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { bestFile, coverage, fileLabel, overall, phasesOf } from "./lib/research.js";
+import { bestFile, coverage, fileLabel, fileOrder, overall, phasesOf } from "./lib/research.js";
 
 let n = 0;
 function test(name, fn) {
@@ -74,6 +74,7 @@ test("qué archivo mostrar y cómo se llama", () => {
   assert.equal(bestFile({ ...deep, files: [] }), null);
   assert.equal(fileLabel("hallazgos-opencode.md"), "Hallazgos · opencode");
   assert.equal(fileLabel("verificacion.md"), "Verificación");
+  assert.deepEqual(fileOrder(["informe.md", "verificacion.md", "plan.md", "hallazgos-b.md", "hallazgos-a.md"]), ["plan.md", "hallazgos-a.md", "hallazgos-b.md", "verificacion.md", "informe.md"]);
 });
 
 console.log(`${n} pruebas de investigación OK`);

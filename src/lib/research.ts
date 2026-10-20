@@ -142,6 +142,13 @@ export function bestFile(r: Research): string | null {
   return names.find((n) => n.startsWith("hallazgos-")) ?? null;
 }
 
+/** Los archivos en el orden en que se hacen: plan, hallazgos, fuentes, verificación, informe. */
+export function fileOrder(names: string[]): string[] {
+  const rank = (n: string) =>
+    n === "plan.md" ? 0 : n.startsWith("hallazgos-") ? 1 : n === "fuentes.md" ? 2 : n === "verificacion.md" ? 3 : n === "informe.md" ? 4 : 5;
+  return names.slice().sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
 const FILE_ES: Record<string, string> = {
   "informe.md": "Informe",
   "verificacion.md": "Verificación",
