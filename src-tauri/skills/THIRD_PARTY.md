@@ -6,10 +6,11 @@ lienzo instala estas skills en el proyecto al conectar un agente, junto a las su
 |---|---|---|
 | caveman | [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman/tree/main/skills/caveman) | Apache-2.0 |
 
-Copiada el 18 oct 2026 de la rama `main`. El texto del `SKILL.md` está sin cambios; lienzo solo añade al final un comentario con el origen y su marca de archivo gestionado.
+Copiada el 18 oct 2026 de la rama `main`. **Modificada** el 20 oct 2026: traducida al español, sin
+las referencias a `ultracave`, `megacave` y `/caveman-compress` (no se instalan) y con
+`/caveman status` simplificado. lienzo añade al final un comentario con el origen y su marca de
+archivo gestionado.
 Texto de la licencia: https://www.apache.org/licenses/LICENSE-2.0
-
-`caveman` menciona `ultracave`, `megacave` y `caveman-compress`, que no se instalan.
 
 ## Retiradas
 `investigate-first`, `surgical-patch`, `verify-and-stop` y `lean-build` (del mismo repositorio) se probaron en un banco A/B

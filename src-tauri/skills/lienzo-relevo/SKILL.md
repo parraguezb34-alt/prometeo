@@ -23,7 +23,17 @@ Ojo: <trampas, comandos que fallan, supuestos sin comprobar>
 - Rutas y nombres exactos; nada de pegar código.
 - Pon `task_id` si tienes tarea y `files` con lo que tocaste.
 
+### Ejemplo
+```
+Objetivo: Mejorar skill lienzo-equipo con pautas de buzón y reservas.
+Hecho: Creado propuestas/lienzo-equipo/SKILL.md con reglas de concurrencia.
+Decisiones: Mantener description enfocada en cuándo usarla para el selector de skills.
+Falta: Validar formato con bash y cerrar tarea #44 con team_task_done.
+Ojo: No tocar las skills originales de .claude/ ni dejar marcas automáticas.
+```
+
 ## Después
+- Al retomar tras compactar: lee tu relevo con team_task_claim antes de nada.
 - Si lo que decidiste vale para todo el equipo, propónlo también con `team_memory_propose`.
 - Libera las reservas que ya no necesites.
 

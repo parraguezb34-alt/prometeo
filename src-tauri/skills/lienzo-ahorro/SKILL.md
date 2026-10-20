@@ -10,6 +10,7 @@ Cada token que entra en tu contexto se vuelve a pagar en todos los mensajes sigu
 ## Leer
 - Busca antes de leer: `grep`/`glob` para dar con el archivo y la línea, y lee solo ese tramo (offset y límite).
 - No releas un archivo que ya tienes en contexto salvo que haya cambiado.
+- Llamadas independientes en un mismo turno (varias lecturas o búsquedas a la vez).
 - Para explorar mucho código, usa un subagente si tu CLI lo tiene: te devuelve la conclusión, no los archivos.
 - Mira primero la entrega de la tarea previa (`team_task_claim` te la da) antes de investigar por tu cuenta.
 
@@ -26,11 +27,11 @@ Cada token que entra en tu contexto se vuelve a pagar en todos los mensajes sigu
 - Hacia el 70 % de contexto, guarda tu relevo (skill `lienzo-relevo`) y deja que lienzo compacte. Mejor un relevo a tiempo que perder el hilo al 95 %.
 - Al acabar una tarea y antes de empezar otra que no tiene que ver, también es buen momento para el relevo.
 
-## Si el usuario pide brevedad
-- La skill `caveman` da respuestas telegráficas, en el idioma del usuario.
-
 ## Equipo
 - Reparte lo independiente: dos agentes con contextos pequeños gastan menos que uno con todo.
 - No contestes mensajes que no lo necesitan (agradecimientos, «ok»).
+- No esperes en bucle ni hagas polling: acaba tu turno, lienzo te despierta.
+
+Si el usuario pide brevedad: usa la skill `caveman` (respuestas telegráficas en su idioma).
 
 <!-- lienzo:gestionado — lienzo actualiza este archivo al conectar. Quita esta línea para conservar tus cambios. -->

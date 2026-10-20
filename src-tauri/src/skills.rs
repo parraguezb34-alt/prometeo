@@ -72,7 +72,35 @@ const BUILTINS: &[Builtin] = &[
         short: "dirigir como líder",
         locked: false,
     },
-    // De la comunidad (JuliusBrussee/caveman, Apache-2.0; ver skills/THIRD_PARTY.md).
+    Builtin {
+        name: "lienzo-plan",
+        body: include_str!("../skills/lienzo-plan/SKILL.md"),
+        category: "equipo",
+        short: "modo plan: analizar, preguntar y proponer",
+        locked: false,
+    },
+    Builtin {
+        name: "lienzo-trabajador",
+        body: include_str!("../skills/lienzo-trabajador/SKILL.md"),
+        category: "equipo",
+        short: "hacer encargos del modo director",
+        locked: false,
+    },
+    Builtin {
+        name: "lienzo-memoria",
+        body: include_str!("../skills/lienzo-memoria/SKILL.md"),
+        category: "equipo",
+        short: "memoria del equipo",
+        locked: false,
+    },
+    Builtin {
+        name: "prometeo-guia",
+        body: include_str!("../skills/prometeo-guia/SKILL.md"),
+        category: "docs",
+        short: "ayudarte a usar Prometeo",
+        locked: false,
+    },
+    // De la comunidad (JuliusBrussee/caveman, Apache-2.0), traducida; ver skills/THIRD_PARTY.md.
     Builtin {
         name: "caveman",
         body: include_str!("../skills/caveman/SKILL.md"),
@@ -825,6 +853,28 @@ pub async fn skills_install(source: String) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Las skills de la app: `name` igual al de la carpeta, la marca una vez y al final, y sin
+    /// citar skills que no existen (una guía que remite a otra inexistente confunde al agente).
+    #[test]
+    fn biblioteca_coherente() {
+        let names: Vec<&str> = BUILTINS.iter().map(|b| b.name).collect();
+        for b in BUILTINS {
+            let body = b.body.replace("\r\n", "\n");
+            assert!(body.starts_with("---\n"), "{}: sin frontmatter", b.name);
+            assert!(body.contains(&format!("\nname: {}\n", b.name)), "{}: name distinto", b.name);
+            assert!(body.contains("\ndescription: "), "{}: sin description", b.name);
+            assert_eq!(body.matches(SKILL_MARK).count(), 1, "{}: la marca debe ir una sola vez", b.name);
+            assert!(body.trim_end().lines().last().unwrap().contains(SKILL_MARK), "{}: la marca va al final", b.name);
+            for cited in body.split('`').skip(1).step_by(2) {
+                let looks_like_skill = (cited.starts_with("lienzo-") || cited.starts_with("prometeo-"))
+                    && cited.chars().all(|c| c.is_ascii_lowercase() || c == '-');
+                if looks_like_skill && cited != "lienzo-team" {
+                    assert!(names.contains(&cited), "{} cita «{cited}», que no existe", b.name);
+                }
+            }
+        }
+    }
 
     fn tmp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lienzo-skills-{tag}-{}", std::process::id()));

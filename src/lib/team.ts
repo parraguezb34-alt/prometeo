@@ -357,14 +357,10 @@ export function buildPlanPrompt(text: string, leader: string): string {
     text +
     "». " +
     (leader ? `Líder del equipo: ${leader}; reparte tú. ` : "") +
-    "Analiza el proyecto (team_context, team_feed, los archivos) y NO edites ni reserves archivos " +
-    "todavía. Descompón el trabajo en tareas claras con team_task_create (una por parte, con título " +
-    "accionable) y publica tu plan con team_update: qué tarea, qué agente debería llevarla y en qué " +
-    "orden. Si la petición nombra una carpeta o archivos, escribe en cada tarea la ruta completa " +
-    "(absoluta) para que todos trabajen en el mismo sitio. ANTES de proponer nada, si la petición deja " +
-    "decisiones abiertas (alcance, estilo, tecnología, prioridades, qué incluir), pregúntaselas al " +
-    "usuario con team_ask_user: varias preguntas con opciones concretas, para no trabajar a ciegas. " +
-    "Espera la aprobación del usuario para empezar."
+    // El flujo completo está en la skill lienzo-plan; aquí, solo lo que no puede faltar.
+    "Sigue la skill lienzo-plan: NO edites ni reserves archivos; si quedan decisiones abiertas, " +
+    "pregunta antes con team_ask_user; crea las tareas (rutas absolutas) y publica el plan con " +
+    "team_update; espera la aprobación."
   );
 }
 

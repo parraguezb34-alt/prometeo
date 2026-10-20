@@ -10,7 +10,7 @@ Trabajas con otros agentes de IA en el mismo proyecto. lienzo os coordina con la
 ## Al empezar
 1. `team_context`: quién está, qué tareas hay, quién lidera y qué archivos están reservados.
 2. Si tienes una tarea asignada, reclámala con `team_task_claim`: recibes las entregas de las tareas de las que depende. Léelas antes de tocar nada.
-3. Reserva con `team_claim_files` lo que vayas a editar. Si alguien ya lo tiene, no lo edites: escríbele.
+3. Reserva con `team_claim_files` lo que vayas a editar. Si alguien ya lo tiene, mira «Si un archivo está reservado».
 
 ## Buzón (📬)
 - Los mensajes que te mandan otros agentes van a tu buzón. Cuando una herramienta te diga «📬 tienes N mensajes», léelos con `team_inbox`.
@@ -24,7 +24,8 @@ Trabajas con otros agentes de IA en el mismo proyecto. lienzo os coordina con la
 | Avisar de un avance (1 línea) | `team_update` |
 | Preguntar o pedir algo a un agente | `team_message` con `to` |
 | Datos o decisiones sobre una tarea concreta | `team_task_comment` (queda en su tablón para quien la lleve) |
-| Algo que todos deban recordar siempre | `team_memory_propose` (el líder decide) |
+| Algo que todos deban recordar siempre | `team_memory_propose` (el líder decide; guía: `lienzo-memoria`) |
+| Planificar antes de ejecutar (modo plan) | skill `lienzo-plan`; acuerda el plan y pregunta con `team_ask_user` |
 | Repartir trabajo | `team_task_create` con `parents` para el orden |
 
 ## Pedir trabajo a otro
@@ -43,12 +44,12 @@ Después libera tus reservas con `team_release_files`.
 - **Líder**: parte la misión en tareas pequeñas e independientes, reparte, revisa entregas (skill `lienzo-revision`) y cura la memoria. Programa poco. En modo director, sigue la skill `lienzo-director`.
 - **Resto**: ejecuta su parte, avisa pronto si se bloquea y no compite por el mando.
 
-## Si hay director (modo director)
-Tu entrega no se cierra sola: el líder la revisa y la aprueba o te la devuelve.
-- El encargo completo te llega al reclamar la tarea. Cúmplelo al pie de la letra: rutas, nombres y formatos exactos, y nada fuera de lo pedido.
-- Antes de entregar, ejecuta el comando de «Comprueba con» y pega su salida (acotada) en `evidence`. No entregues sin haberlo ejecutado.
-- Si algo del encargo es ambiguo o imposible, pregunta al líder (`to: "líder"`) antes de improvisar.
-- Si te llega 🔧 con correcciones, aplica cada punto, vuelve a comprobar y cierra otra vez con `team_task_done`.
+Si recibes encargos en modo director, sigue la skill `lienzo-trabajador`.
+
+## Si un archivo está reservado
+- No lo edites ni lo sobrescribas, aunque creas que tu cambio es mejor.
+- Escribe a su dueño con `team_message` (`to` = dueño): qué necesitas y para qué. Mientras tanto, sigue con otra parte de tu tarea.
+- Si es urgente y no contesta, avisa al líder (`to: "líder"`). No esperes en bucle.
 
 ## Si te bloqueas
 Escribe al líder (`to: "líder"`) con qué te falta, en una frase, y sigue con otra parte mientras tanto.
@@ -63,5 +64,6 @@ Cuando una decisión depende de su gusto o de algo que no sabes (estilo, alcance
 
 ## Skills
 Si al equipo le vendría bien una guía que no tiene (diseño, pruebas, un framework), mira `team_skill_list` y propón una con `team_skill_propose` (nombre de la biblioteca o enlace de GitHub). La instala el usuario.
+- Guías: `lienzo-ahorro` (gastar menos), `lienzo-relevo` (pasar el testigo), `lienzo-memoria` (qué recordar y cómo proponerlo), `lienzo-plan` (acordar el plan antes de tocar nada), `lienzo-revision`, `lienzo-director`, `lienzo-trabajador` (cumplir encargos), `prometeo-guia` (ayudar al usuario con la app) y `caveman` (respuestas breves).
 
 <!-- lienzo:gestionado — lienzo actualiza este archivo al conectar. Quita esta línea para conservar tus cambios. -->
