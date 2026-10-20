@@ -1012,10 +1012,11 @@ fn cmd_connect(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     }
     let (files, notes) = crate::hub::connectors::connect_agent(&agent, &path)?;
 
-    // Remember the project so new terminals and the UI follow it.
+    // Solo si aún no hay proyecto: conectar un agente no debe cambiar el proyecto abierto (y si
+    // hay que cambiarlo, con switch_project, que guarda lo del anterior y trae lo del nuevo).
     let changed = hub::with_inner(app, |inner| {
-        if inner.project.as_deref() != Some(project.as_str()) {
-            inner.project = Some(project.clone());
+        if inner.project.is_none() {
+            hub::switch_project(inner, Some(project.clone()));
             hub::persist(inner);
             true
         } else {
