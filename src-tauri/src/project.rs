@@ -103,10 +103,15 @@ fn join_rel(root: &Path, rel: &str) -> Result<PathBuf, String> {
 }
 
 fn git(path: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(args)
+    let mut c = Command::new("git");
+    c.arg("-C").arg(path).args(args);
+    // Sin ventana de consola: se llama a menudo y en la app instalada parpadearía cada vez.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    let out = c
         .output()
         .map_err(|e| format!("no pude ejecutar git: {e}"))?;
     if !out.status.success() {

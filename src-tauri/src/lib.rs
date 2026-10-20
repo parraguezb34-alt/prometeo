@@ -113,3 +113,48 @@ pub fn run() {
             }
         });
 }
+
+#[cfg(test)]
+mod no_console_tests {
+    /// La app instalada no tiene consola: cada programa que lance sin `CREATE_NO_WINDOW` abre una
+    /// ventana negra que parpadea. Todo `Command::new` del código de la app debe ocultarla (cerca
+    /// de él tiene que aparecer `creation_flags`, `no_window` o `hidden`).
+    #[test]
+    fn ningun_proceso_abre_ventana_de_consola() {
+        let mut missing = vec![];
+        let mut stack = vec![std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))];
+        while let Some(dir) = stack.pop() {
+            for e in std::fs::read_dir(&dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    // El puente lo lanzan los agentes desde su terminal, no la app.
+                    if p.file_name().is_some_and(|n| n != "bin") {
+                        stack.push(p);
+                    }
+                    continue;
+                }
+                if p.extension().is_none_or(|x| x != "rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&p).unwrap();
+                let lines: Vec<&str> = text.lines().collect();
+                for (i, l) in lines.iter().enumerate() {
+                    if !l.contains("Command::new(") || l.trim_start().starts_with("//") || l.contains("contains(\"Command::new(\")") {
+                        continue;
+                    }
+                    let near = lines[i.saturating_sub(3)..(i + 20).min(lines.len())].join("\n");
+                    // `sh` solo existe fuera de Windows; `run(` de skills.rs ya pasa por `hidden`.
+                    let prev = if i > 0 { lines[i - 1] } else { "" };
+                    let via_run = (l.contains("run(") || prev.trim_end().ends_with("run(")) && text.contains("hidden(cmd).output()");
+                    let ok = ["creation_flags", "no_window(", "hidden("].iter().any(|k| near.contains(k))
+                        || l.contains("\"sh\"")
+                        || via_run;
+                    if !ok {
+                        missing.push(format!("{}:{}", p.display(), i + 1));
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "Procesos que abrirían una ventana de consola: {missing:?}");
+    }
+}

@@ -782,6 +782,13 @@ pub async fn team_open(
         if let Some(project) = project_of(&app).filter(|p| !p.trim().is_empty()) {
             cmd.arg(project);
         }
+        // Si el lanzador fuera de consola, que no deje una ventana negra (a una app con
+        // ventana propia no le afecta).
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
         cmd.spawn()
             .map_err(|e| format!("no se pudo abrir {}: {e}", exe))?;
         Ok(json!({ "kind": "app" }))
@@ -797,9 +804,14 @@ pub async fn team_open(
                     .unwrap_or_default();
                 let cli = local.join(r"Programs\@opencode-aidesktop\resources\opencode-cli.exe");
                 if cli.exists() {
-                    if let Ok(mut child) = Command::new(cli)
-                        .arg("reload")
-                        .current_dir(&dir)
+                    let mut reload = Command::new(cli);
+                    reload.arg("reload").current_dir(&dir);
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        reload.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                    }
+                    if let Ok(mut child) = reload
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
                         .spawn()

@@ -58,11 +58,17 @@ fn next_id() -> String {
 }
 
 fn which(program: &str) -> bool {
-    std::process::Command::new("cmd")
-        .args(["/C", "where", program])
+    let mut c = std::process::Command::new("cmd");
+    c.args(["/C", "where", program])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
+        .stderr(std::process::Stdio::null());
+    // Sin ventana de consola: en la app instalada (sin consola propia) saldría un parpadeo.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    c.status()
         .map(|s| s.success())
         .unwrap_or(false)
 }
