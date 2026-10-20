@@ -77,6 +77,7 @@ import { ChatsSidebar } from "./ChatsSidebar";
 import { DestPicker } from "./DestPicker";
 import { HistoryTab } from "./HistoryTab";
 import { ResearchTab } from "./ResearchTab";
+import { WindowControls } from "./WindowControls";
 import { SlidingPill } from "./SlidingPill";
 import { BrandIcon, BrandWordmark } from "./Brand";
 import { LimitsChip } from "./LimitsChip";
@@ -113,6 +114,8 @@ type Overlay = "team" | "tasks" | "newchat" | "settings" | null;
 const SHOOT_KEY = "lienzo.shoot.v1";
 const CHATS_MIN_KEY = "lienzo.chatsmin.v1";
 const DISPATCH_KEY = "lienzo.dispatch.v1";
+/** Ya se avisó de que cerrar la ventana deja Prometeo en la bandeja. */
+const TRAY_KEY = "lienzo.bandeja.v1";
 const NOTIFY_KEY = "lienzo.notify.v1";
 /**
  * Cuándo se abrió Prometeo: lo de antes no se vio (ni el silencio ni el trabajo de los agentes).
@@ -323,6 +326,22 @@ export function CommandCenter() {
   const openAviso = useCallback(() => {
     setOverlay(null);
     setView("feed");
+  }, []);
+  // La primera vez que cierras la ventana: avisa de que Prometeo sigue en la bandeja.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const un = listen("app://bandeja", () => {
+      if (loadFlag(TRAY_KEY, false)) return;
+      saveFlag(TRAY_KEY, true);
+      notify(
+        "Prometeo sigue en segundo plano",
+        "Los agentes siguen trabajando. Ábrelo con su icono junto al reloj; para salir, clic derecho → Salir.",
+        { kind: "info" },
+      );
+    });
+    return () => {
+      void un.then((f) => f()).catch(() => {});
+    };
   }, []);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -2530,7 +2549,7 @@ export function CommandCenter() {
 
   return (
     <div className="cc">
-      <header className="cc-top">
+      <header className="cc-top" data-tauri-drag-region>
         <div
           className="cc-projwrap"
           onClick={() => openSettings("general")}
@@ -2574,7 +2593,7 @@ export function CommandCenter() {
           </button>
         )}
 
-        <div className="cc-top-r">
+        <div className="cc-top-r" data-tauri-drag-region>
           <button
             className="cc-hub"
             data-on={hubOk ? "1" : "0"}
@@ -2615,6 +2634,7 @@ export function CommandCenter() {
               {unseenErrors > 0 && <span className="cc-gear-dot" aria-hidden="true" />}
             </button>
           </div>
+          <WindowControls />
         </div>
       </header>
 

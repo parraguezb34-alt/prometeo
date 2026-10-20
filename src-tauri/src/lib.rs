@@ -9,6 +9,7 @@ mod pty;
 mod rename;
 mod research;
 pub mod skills;
+mod tray;
 
 // Los tests también necesitan el manifiesto de Windows que tauri-build solo
 // enlaza en los binarios (ver build.rs); sin él no llegan a arrancar.
@@ -19,6 +20,8 @@ unsafe extern "C" {}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Una sola Prometeo: abrirla otra vez (p. ej. con ella en la bandeja) trae la que ya está.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -28,8 +31,12 @@ pub fn run() {
             if let Err(e) = hub::init(app.handle().clone()) {
                 errlog::log("hub", "No se pudo iniciar el hub del equipo", &e);
             }
+            if let Err(e) = tray::init(app.handle()) {
+                errlog::log("bandeja", "No se pudo crear el icono de la bandeja", &e.to_string());
+            }
             Ok(())
         })
+        .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
             pty::term_spawn,
             pty::term_write,

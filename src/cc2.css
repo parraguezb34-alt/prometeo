@@ -2311,3 +2311,53 @@ button.cc-lead {
   display: inline-flex;
   gap: 6px;
 }
+
+/* La barra de arriba es también la de la ventana: se arrastra desde cualquier hueco y lleva
+   minimizar, maximizar y cerrar (la ventana no tiene la barra blanca de Windows). */
+.cc-top {
+  user-select: none;
+  -webkit-user-select: none;
+  padding-right: 8px;
+}
+.wc {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+  height: 28px;
+}
+.wc-btn {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  width: 38px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--muted);
+  transition: background var(--d-fast, 0.15s), color var(--d-fast, 0.15s);
+}
+.wc-btn svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.1;
+  shape-rendering: crispEdges;
+}
+.wc-close svg {
+  shape-rendering: geometricPrecision;
+}
+.wc-btn:hover {
+  background: var(--raised-2);
+  color: var(--text-strong);
+}
+.wc-close:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.wc-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
