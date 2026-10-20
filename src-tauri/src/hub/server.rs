@@ -310,7 +310,9 @@ fn cmd_limits(app: &AppHandle, payload: &Value) -> Result<Value, String> {
 fn cmd_ask_status(app: &AppHandle, query: &std::collections::HashMap<String, String>) -> Result<Value, String> {
     let id: u64 = query.get("id").and_then(|s| s.parse().ok()).ok_or("falta id")?;
     hub::with_inner(app, |inner| {
-        let q = inner.questions.iter().find(|q| q.id == id)?;
+        let q = inner.questions.iter_mut().find(|q| q.id == id)?;
+        // Sigue esperando: si deja de preguntar, la respuesta irá a su terminal.
+        q.polled_ms = hub::now_ms();
         let done = q.answers.is_some() || q.dismissed;
         Some(json!({ "done": done, "text": if done { hub::format_answers(q) } else { String::new() } }))
     })

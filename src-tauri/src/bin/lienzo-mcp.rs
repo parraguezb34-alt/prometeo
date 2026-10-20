@@ -381,7 +381,12 @@ fn render_feed(feed: &Value) -> String {
                 ago(e["ts_ms"].as_u64().unwrap_or(0)),
                 e["seq"].as_u64().unwrap_or(0),
                 e["agent"].as_str().unwrap_or("?"),
-                trunc(&e["text"].as_str().unwrap_or("").replace('\n', " "), 160),
+                // Tus respuestas van enteras: recortadas, el agente se quedaría con la primera.
+                if e["kind"].as_str() == Some("answer") {
+                    trunc(&e["text"].as_str().unwrap_or("").replace('\n', " · "), 1500)
+                } else {
+                    trunc(&e["text"].as_str().unwrap_or("").replace('\n', " "), 160)
+                },
                 extra
             )
         })

@@ -697,12 +697,17 @@ pub struct Question {
     /// La herramienta del agente dejó de esperar: la respuesta se le escribe en su terminal.
     #[serde(default)]
     pub detached: bool,
+    /// Última vez que su herramienta preguntó por la respuesta (cada 1,5 s mientras espera).
+    #[serde(default)]
+    pub polled_ms: u64,
     /// Preferiste no contestar.
     #[serde(default)]
     pub dismissed: bool,
 }
 
 pub const MAX_QUESTIONS: usize = 40;
+/// Sin preguntar por la respuesta en este tiempo, la herramienta del agente ya no la espera.
+pub const ASK_GONE_MS: u64 = 10_000;
 
 const DISMISSED_NOTE: &str = "decide tú con criterio y explica qué elegiste en tu resumen.";
 
@@ -765,6 +770,7 @@ pub fn ask_user(inner: &mut HubInner, agent: &str, session_id: &str, context: &s
         answers: None,
         answered_ms: 0,
         detached: false,
+        polled_ms: 0,
         dismissed: false,
     });
     while inner.questions.len() > MAX_QUESTIONS {
@@ -817,6 +823,11 @@ pub fn answer_question(inner: &mut HubInner, id: u64, answers: Option<Vec<QAnswe
         None => q.dismissed = true,
     }
     q.answered_ms = now_ms();
+    // Si su herramienta ya no pregunta (el agente o Prometeo se reiniciaron mientras esperaba),
+    // nadie se llevaría la respuesta: va a su terminal, entera.
+    if q.answered_ms.saturating_sub(q.polled_ms.max(q.ts_ms)) > ASK_GONE_MS {
+        q.detached = true;
+    }
     let text = format_answers(q);
     let agent = q.agent.clone();
     let late = q.detached.then(|| text.clone());
@@ -2626,6 +2637,28 @@ mod inbox_tests {
         assert_eq!(detach_question(&mut h, id2), None);
         let (_, late) = answer_question(&mut h, id2, None).unwrap();
         assert!(late.unwrap().contains("prefirió no contestar"));
+
+        // Su herramienta murió esperando (p. ej. se reinició Prometeo): ya no pregunta, así que
+        // la respuesta, entera, va a la terminal aunque nadie la soltara.
+        let two = clean_questions(&serde_json::json!([
+            { "question": "¿Uno?", "options": ["A", "B"] }, { "question": "¿Dos?", "options": ["C", "D"] }
+        ]))
+        .unwrap();
+        let id3 = ask_user(&mut h, "claude", "s3", "", two);
+        let q = h.questions.iter_mut().find(|q| q.id == id3).unwrap();
+        q.ts_ms -= ASK_GONE_MS + 5_000;
+        q.polled_ms = q.ts_ms;
+        let (_, late) = answer_question(
+            &mut h,
+            id3,
+            Some(vec![
+                QAnswer { question: "¿Uno?".into(), choices: vec!["A".into()], other: String::new() },
+                QAnswer { question: "¿Dos?".into(), choices: vec!["D".into()], other: String::new() },
+            ]),
+        )
+        .unwrap();
+        let late = late.expect("debe ir a la terminal");
+        assert!(late.contains("1. ¿Uno? → A") && late.contains("2. ¿Dos? → D"), "{late}");
     }
 
     #[test]
