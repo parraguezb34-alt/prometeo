@@ -72,8 +72,10 @@ import type { LiveAgent } from "./ChatView";
 import { ChatsSidebar } from "./ChatsSidebar";
 import { DestPicker } from "./DestPicker";
 import { HistoryTab } from "./HistoryTab";
+import { SlidingPill } from "./SlidingPill";
 import { taskPaths } from "../lib/history";
 import { appStop } from "../lib/devapp";
+import { reportError, useUnseenErrors } from "../lib/errors";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import { NewChatMenu } from "./NewChatMenu";
@@ -236,8 +238,11 @@ export function CommandCenter() {
     el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
   }, [draft]);
 
+  const unseenErrors = useUnseenErrors();
   const say = useCallback((text: string, err = false) => {
     setFlash({ text, err });
+    // Los avisos de error quedan también en Ajustes → Errores.
+    if (err) reportError("accion", text);
     if (flashTimer.current !== undefined) window.clearTimeout(flashTimer.current);
     flashTimer.current = window.setTimeout(() => setFlash(null), 8000);
   }, []);
@@ -2015,7 +2020,8 @@ export function CommandCenter() {
           {tasksBtn}
         </div>
       </div>
-      <div className="cc-vtabs" role="tablist">
+      <div className="cc-vtabs" role="tablist" data-pill="1">
+        <SlidingPill active={view} />
         {VIEWS.map((v) => (
           <button
             key={v.id}
@@ -2311,11 +2317,13 @@ export function CommandCenter() {
               <Icon name={notifyOn ? "bell" : "belloff"} size={15} />
             </button>
             <button
-              onClick={() => openSettings("general")}
-              title="Ajustes (Ctrl+,)"
+              onClick={() => openSettings(unseenErrors > 0 ? "errors" : "general")}
+              title={unseenErrors > 0 ? `Ajustes · ${unseenErrors} error${unseenErrors === 1 ? "" : "es"} nuevo${unseenErrors === 1 ? "" : "s"}` : "Ajustes (Ctrl+,)"}
               aria-label="Ajustes"
+              className="cc-gear"
             >
               <Icon name="settings" size={15} />
+              {unseenErrors > 0 && <span className="cc-gear-dot" aria-hidden="true" />}
             </button>
           </div>
         </div>
@@ -2347,6 +2355,8 @@ export function CommandCenter() {
         <section className="cc-conv">
           {stageHead}
 
+          {/* Cada pestaña entra con un leve deslizamiento (motion.css). */}
+          <div className="cc-view" key={view}>
           {view === "feed" && (
             <ChatView
               events={msgs}
@@ -2491,6 +2501,7 @@ export function CommandCenter() {
                 )}
               </div>
             ))}
+          </div>
 
           {closedBar}
           {composer}

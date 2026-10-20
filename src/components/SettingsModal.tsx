@@ -13,10 +13,12 @@ import { fmtTokens } from "./AgentCard";
 import type { DetectResult, ModelCatalog, TeamDetails, TeamState } from "../lib/team";
 import { Icon } from "./Icon";
 import { SkillsPanel } from "./SkillsPanel";
+import { ErrorsPanel } from "./ErrorsPanel";
+import { useUnseenErrors } from "../lib/errors";
 import type { IconName } from "./Icon";
 import { EFFORT_LABEL } from "./TeamModal";
 
-export type SettingsSection = "general" | "agents" | "team" | "skills" | "usage" | "dispatch" | "notify" | "hub";
+export type SettingsSection = "general" | "agents" | "team" | "skills" | "usage" | "dispatch" | "notify" | "hub" | "errors";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: IconName; hint: string }[] = [
   { id: "general", label: "General", icon: "settings", hint: "Proyecto y arranque" },
@@ -27,6 +29,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: IconName; hint: stri
   { id: "dispatch", label: "Despacho", icon: "zap", hint: "Reparto de tareas" },
   { id: "notify", label: "Avisos", icon: "bell", hint: "Notificaciones" },
   { id: "hub", label: "Conexión", icon: "plug", hint: "Hub y diagnóstico" },
+  { id: "errors", label: "Errores", icon: "warn", hint: "Registro de fallos" },
 ];
 
 /** Frases listas para las normas: se añaden al final si aún no están. */
@@ -85,6 +88,7 @@ export function SettingsModal(props: Props) {
   const [section, setSection] = useState<SettingsSection>(props.initial);
   useEffect(() => setSection(props.initial), [props.initial]);
   const cur = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
+  const unseen = useUnseenErrors();
 
   return (
     <>
@@ -104,6 +108,7 @@ export function SettingsModal(props: Props) {
                 <b>{s.label}</b>
                 <small>{s.hint}</small>
               </span>
+              {s.id === "errors" && unseen > 0 && <i className="st-nav-badge">{unseen}</i>}
             </button>
           ))}
           <div className="st-nav-foot">
@@ -129,6 +134,7 @@ export function SettingsModal(props: Props) {
             {section === "dispatch" && <Dispatch {...props} />}
             {section === "notify" && <Notify {...props} />}
             {section === "hub" && <Hub {...props} />}
+            {section === "errors" && <ErrorsPanel say={props.say} />}
           </div>
         </div>
       </section>

@@ -3,6 +3,9 @@ import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { installErrorCapture } from "./lib/errors";
+
+installErrorCapture();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <App />,

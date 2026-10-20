@@ -361,8 +361,18 @@ pub fn start(project: &str) -> Result<Status, String> {
             match ch.try_wait() {
                 Ok(Some(st)) => {
                     a.status.running = false;
-                    a.status.exit = Some(st.code().unwrap_or(-1));
+                    let code = st.code().unwrap_or(-1);
+                    a.status.exit = Some(code);
                     a.child = None;
+                    if code != 0 {
+                        let from = a.status.log.len().saturating_sub(30);
+                        let tail = a.status.log[from..].join("\n");
+                        let cmd = a.status.cmd.clone();
+                        // Fuera del candado: el registro avisa a la interfaz.
+                        std::thread::spawn(move || {
+                            crate::errlog::log("app", &format!("La app se paró con un error (código {code}) al ejecutar «{cmd}»"), &tail)
+                        });
+                    }
                     true
                 }
                 Ok(None) => false,

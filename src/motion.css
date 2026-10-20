@@ -1,0 +1,280 @@
+/* Movimiento: una sola forma de moverse en toda la app, al estilo Apple. Salidas suaves que
+   frenan al final (ease-out), un pequeño rebote en lo que aparece encima (paneles, menús) y
+   respuesta al pulsar. Va después del resto del CSS, así que manda sobre sus animaciones.
+   Ajustes → General → Animaciones «Reducidas» lo apaga (ver el final). */
+
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.32, 1.28, 0.6, 1);
+  --ease-io: cubic-bezier(0.65, 0, 0.35, 1);
+  --d-fast: 0.14s;
+  --d-base: 0.26s;
+  --d-slow: 0.42s;
+}
+
+/* ---- capas: fondo, ventanas, panel lateral y menús ---- */
+
+.cc-scrim {
+  animation: mo-fade var(--d-base) var(--ease-out);
+}
+.cc-modal {
+  animation: mo-sheet var(--d-slow) var(--ease-spring);
+}
+.cc-tdrawer {
+  animation: mo-drawer var(--d-slow) var(--ease-out);
+}
+.cc-menu,
+.ps-menu {
+  transform-origin: top left;
+  animation: mo-menu var(--d-base) var(--ease-spring);
+}
+
+@keyframes mo-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes mo-sheet {
+  from {
+    opacity: 0;
+    transform: translateX(var(--tx, -50%)) translateY(14px) scale(0.965);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(var(--tx, -50%));
+  }
+}
+@keyframes mo-drawer {
+  from {
+    opacity: 0.4;
+    transform: translateX(48px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes mo-menu {
+  from {
+    opacity: 0;
+    transform: translateX(var(--tx, -50%)) translateY(-6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(var(--tx, -50%));
+  }
+}
+
+/* ---- cambiar de pestaña o de sección: el contenido entra deslizándose un poco ---- */
+
+.cc-view,
+.st-body,
+.ap-body,
+.hs-detail > * {
+  animation: mo-rise var(--d-base) var(--ease-out) both;
+}
+.cc-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+@keyframes mo-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Listas que aparecen: cada fila un instante después de la anterior. */
+.hs-item,
+.er-row,
+.sk-row {
+  animation: mo-rise var(--d-base) var(--ease-out) both;
+}
+.hs-item:nth-child(2),
+.er-row:nth-child(2) {
+  animation-delay: 30ms;
+}
+.hs-item:nth-child(3),
+.er-row:nth-child(3) {
+  animation-delay: 60ms;
+}
+.hs-item:nth-child(4),
+.er-row:nth-child(4) {
+  animation-delay: 90ms;
+}
+.hs-item:nth-child(5),
+.er-row:nth-child(5) {
+  animation-delay: 120ms;
+}
+.hs-item:nth-child(n + 6),
+.er-row:nth-child(n + 6) {
+  animation-delay: 150ms;
+}
+
+/* ---- control segmentado: la pastilla se desliza a la pestaña elegida ---- */
+
+.cc-vtabs {
+  position: relative;
+  isolation: isolate;
+}
+.cc-vtabs-pill {
+  position: absolute;
+  z-index: -1;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  border-radius: 7px;
+  background: #47474b;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  transition: transform var(--d-slow) var(--ease-spring), width var(--d-slow) var(--ease-spring);
+}
+.cc-vtabs-pill[data-ready="0"] {
+  transition: none;
+}
+/* Con la pastilla, el botón elegido no lleva fondo propio. */
+.cc-vtabs[data-pill="1"] button[aria-selected="true"] {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ---- respuesta al pulsar y al pasar por encima ---- */
+
+.cc-btn,
+.hs-btn,
+.cc-newchat,
+.cc-send,
+.cc-send-mini,
+.cc-icon-btn,
+.ap-icon,
+.cc-vtabs button,
+.cc-modes button,
+.cc-tasks-btn,
+.cv-btn,
+.qa-send,
+.tp-opt,
+.st-switch {
+  transition:
+    background-color var(--d-fast) var(--ease-out),
+    color var(--d-fast) var(--ease-out),
+    border-color var(--d-fast) var(--ease-out),
+    box-shadow var(--d-fast) var(--ease-out),
+    opacity var(--d-fast) var(--ease-out),
+    transform var(--d-fast) var(--ease-out);
+}
+.cc-btn:active:not(:disabled),
+.hs-btn:active:not(:disabled),
+.cc-newchat:active,
+.cc-send:active:not(:disabled),
+.cc-send-mini:active:not(:disabled),
+.cc-icon-btn:active,
+.ap-icon:active,
+.cc-vtabs button:active,
+.cc-modes button:active,
+.cc-tasks-btn:active,
+.cv-btn:active:not(:disabled),
+.qa-send:active:not(:disabled),
+.tp-opt:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.hs-item,
+.st-nav-item,
+.cc-mi,
+.er-head {
+  transition:
+    background-color var(--d-fast) var(--ease-out),
+    color var(--d-fast) var(--ease-out);
+}
+.hs-item:active,
+.st-nav-item:active,
+.er-head:active {
+  transform: scale(0.985);
+}
+
+/* El icono de la sección elegida en Ajustes da un pequeño salto al elegirla. */
+.st-nav-item[aria-current="page"] .ic {
+  animation: mo-pop var(--d-slow) var(--ease-spring);
+}
+@keyframes mo-pop {
+  from {
+    transform: scale(0.7);
+  }
+}
+
+/* Punto rojo de errores nuevos en el engranaje: aparece con un rebote y late despacio. */
+.cc-gear {
+  position: relative;
+}
+.cc-gear-dot {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface);
+  animation:
+    mo-pop var(--d-slow) var(--ease-spring),
+    mo-beat 2.4s 0.5s var(--ease-io) infinite;
+}
+@keyframes mo-beat {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px var(--surface), 0 0 0 2px color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--surface), 0 0 0 5px color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+}
+
+/* La app en vivo aparece con un fundido al cargar. */
+.ap-frame {
+  animation: mo-fade var(--d-slow) var(--ease-out);
+}
+
+/* ---- Animaciones reducidas: nada se mueve (los cambios siguen siendo instantáneos) ---- */
+
+:root[data-motion="off"] .cc-scrim,
+:root[data-motion="off"] .cc-modal,
+:root[data-motion="off"] .cc-tdrawer,
+:root[data-motion="off"] .cc-menu,
+:root[data-motion="off"] .ps-menu,
+:root[data-motion="off"] .cc-view,
+:root[data-motion="off"] .st-body,
+:root[data-motion="off"] .ap-body,
+:root[data-motion="off"] .hs-detail > *,
+:root[data-motion="off"] .hs-item,
+:root[data-motion="off"] .er-row,
+:root[data-motion="off"] .sk-row,
+:root[data-motion="off"] .st-nav-item .ic,
+:root[data-motion="off"] .cc-gear-dot,
+:root[data-motion="off"] .ap-frame {
+  animation: none;
+}
+:root[data-motion="off"] .cc-vtabs-pill {
+  transition: none;
+}
+:root[data-motion="off"] .cc-btn:active,
+:root[data-motion="off"] .hs-btn:active,
+:root[data-motion="off"] .cc-newchat:active,
+:root[data-motion="off"] .cc-send:active,
+:root[data-motion="off"] .cc-send-mini:active,
+:root[data-motion="off"] .cc-icon-btn:active,
+:root[data-motion="off"] .ap-icon:active,
+:root[data-motion="off"] .cc-vtabs button:active,
+:root[data-motion="off"] .cc-modes button:active,
+:root[data-motion="off"] .cc-tasks-btn:active,
+:root[data-motion="off"] .cv-btn:active,
+:root[data-motion="off"] .qa-send:active,
+:root[data-motion="off"] .tp-opt:active,
+:root[data-motion="off"] .hs-item:active,
+:root[data-motion="off"] .st-nav-item:active,
+:root[data-motion="off"] .er-head:active {
+  transform: none;
+}

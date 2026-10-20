@@ -23,7 +23,7 @@ pub fn serve(server: tiny_http::Server, app: AppHandle) {
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(request, &app)));
         if result.is_err() {
-            eprintln!("[hub] una petición terminó en pánico");
+            crate::errlog::log("hub", "Una petición de un agente hizo fallar al hub (se recuperó)", "");
         }
     }
 }
@@ -776,7 +776,7 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                         let (tid, by, files) = (task.id, agent.clone(), files_in.clone());
                         std::thread::spawn(move || {
                             if let Err(e) = crate::history::record(&project, tid, &title, &by, &files) {
-                                eprintln!("[historial] #{tid}: {e}");
+                                crate::errlog::log("historial", &format!("No se guardó la entrega de #{tid} en el historial"), &e);
                             }
                         });
                     }

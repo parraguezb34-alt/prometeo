@@ -1,4 +1,5 @@
 mod devapp;
+pub mod errlog;
 pub mod history;
 pub mod hub;
 mod project;
@@ -19,8 +20,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(pty::PtyManager::default())
         .setup(|app| {
+            errlog::install_panic_hook();
             if let Err(e) = hub::init(app.handle().clone()) {
-                eprintln!("[hub] no se pudo iniciar el hub de equipo: {e}");
+                errlog::log("hub", "No se pudo iniciar el hub del equipo", &e);
             }
             Ok(())
         })
@@ -81,6 +83,10 @@ pub fn run() {
             devapp::app_start,
             devapp::app_stop,
             devapp::app_status,
+            errlog::errors_list,
+            errlog::errors_clear,
+            errlog::errors_file,
+            errlog::errors_report,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

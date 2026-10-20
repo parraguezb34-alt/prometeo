@@ -1104,6 +1104,13 @@ pub fn notify_ui() {
     }
 }
 
+/// Avisa a la interfaz de cualquier evento propio (p. ej. un error nuevo en el registro).
+pub fn emit_ui<S: serde::Serialize + Clone>(event: &str, payload: S) {
+    if let Some(app) = APP.get() {
+        let _ = app.emit(event, payload);
+    }
+}
+
 /// Push an event into the feed. Caller is responsible for persist/notify.
 pub fn push_event(
     inner: &mut HubInner,
@@ -1669,7 +1676,7 @@ pub fn team_project_set(hub: tauri::State<'_, Hub>, path: Option<String>) -> Res
     if let Some(p) = path.clone().filter(|p| !p.trim().is_empty()) {
         std::thread::spawn(move || {
             if let Err(e) = crate::history::ensure(&p) {
-                eprintln!("[historial] {e}");
+                crate::errlog::log("historial", "No se pudo preparar el historial del proyecto", &e);
             }
         });
     }
@@ -1991,7 +1998,7 @@ pub fn init(app: AppHandle) -> Result<(), String> {
     if let Some(p) = persisted.project.clone().filter(|p| !p.trim().is_empty()) {
         std::thread::spawn(move || {
             if let Err(e) = crate::history::ensure(&p) {
-                eprintln!("[historial] {e}");
+                crate::errlog::log("historial", "No se pudo preparar el historial del proyecto", &e);
             }
         });
     }

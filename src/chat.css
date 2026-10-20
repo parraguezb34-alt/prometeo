@@ -88,7 +88,7 @@
   }
 }
 [data-new="1"] {
-  animation: cv-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-in 0.28s var(--ease-out) both;
 }
 
 /* ---- separador de día ---------------------------------------------------------- */
@@ -620,7 +620,7 @@ ol.md-list li::marker {
 }
 /* un mensaje recién llegado se «escribe»: cada bloque entra tras el anterior */
 .md[data-reveal="1"] > .md-r {
-  animation: md-write 0.42s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: md-write 0.42s var(--ease-out) both;
   animation-delay: calc(var(--i, 0) * 90ms);
 }
 @keyframes md-write {
@@ -948,7 +948,7 @@ ol.md-list li::marker {
   border-radius: 12px;
   background: var(--surface);
   border: 1px solid var(--line-soft);
-  animation: cv-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-in 0.22s var(--ease-out) both;
 }
 .cv-notice-body .md {
   font-size: 13.5px;
@@ -1116,7 +1116,7 @@ ol.md-list li::marker {
 .cv-work-chev {
   display: grid;
   color: var(--faint);
-  transition: transform 0.2s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition: transform 0.2s var(--ease-out);
 }
 .cv-work[data-open="1"] .cv-work-chev {
   transform: rotate(180deg);
@@ -1138,7 +1138,7 @@ ol.md-list li::marker {
   padding: 3px 6px;
   border-radius: 7px;
   font-size: 12.5px;
-  animation: cv-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-in 0.22s var(--ease-out) both;
   animation-delay: calc(var(--i, 0) * 22ms);
 }
 .cv-step:hover {
@@ -1150,7 +1150,7 @@ ol.md-list li::marker {
 }
 .cv-steps[data-live="1"] .cv-step {
   opacity: calc(1 - var(--age, 0) * 0.28);
-  animation: cv-step-in 0.35s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-step-in 0.35s var(--ease-out) both;
   transition: opacity 0.4s;
 }
 .cv-steps[data-live="1"] .cv-step:last-child .cv-step-ic {
@@ -1281,7 +1281,7 @@ ol.md-list li::marker {
   text-overflow: ellipsis;
   animation:
     cv-shine 2.4s linear infinite,
-    cv-phrase 0.35s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    cv-phrase 0.35s var(--ease-out) both;
 }
 @keyframes cv-phrase {
   from {
@@ -1407,7 +1407,7 @@ ol.md-list li::marker {
   max-height: 100%;
   border-radius: 10px;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
-  animation: cv-zoom 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-zoom 0.22s var(--ease-out) both;
 }
 @keyframes cv-zoom {
   from {
@@ -1535,7 +1535,7 @@ ol.md-list li::marker {
   color: var(--accent-ink);
   background: var(--accent);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  animation: cv-jump-in 0.25s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-jump-in 0.25s var(--ease-out) both;
 }
 @keyframes cv-jump-in {
   from {
@@ -1699,7 +1699,7 @@ ol.md-list li::marker {
   flex-direction: column;
   gap: 2px;
   transform-origin: bottom left;
-  animation: dp-in 0.16s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: dp-in 0.16s var(--ease-out) both;
 }
 @keyframes dp-in {
   from {
@@ -1790,7 +1790,7 @@ ol.md-list li::marker {
   overflow: hidden;
   border: 1px solid var(--line);
   background: var(--bg);
-  animation: cv-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-in 0.22s var(--ease-out) both;
 }
 .cc-shot img {
   display: block;
@@ -1831,7 +1831,7 @@ ol.md-list li::marker {
   border-radius: 10px;
   border: 1px solid var(--line);
   background: var(--bg);
-  animation: cv-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-in 0.22s var(--ease-out) both;
 }
 .cc-att[data-kind="text"] {
   width: 240px;
@@ -1979,7 +1979,7 @@ ol.md-list li::marker {
   border: 1px solid var(--line-soft);
   font-size: 12.5px;
   color: var(--muted);
-  animation: cv-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-in 0.22s var(--ease-out) both;
 }
 .cc-closed > .ic {
   color: var(--faint);
@@ -2103,7 +2103,7 @@ ol.md-list li::marker {
   border-radius: 12px;
   background: var(--bg);
   border: 1px solid var(--line);
-  animation: cv-in 0.3s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-in 0.3s var(--ease-out) both;
   transition:
     border-color 0.15s,
     background 0.15s,
@@ -2451,7 +2451,7 @@ ol.md-list li::marker {
   color: var(--text);
   background: var(--raised-2);
   border: 1px solid var(--line);
-  animation: cv-in 0.25s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: cv-in 0.25s var(--ease-out) both;
   transition:
     background 0.15s,
     transform 0.15s;
