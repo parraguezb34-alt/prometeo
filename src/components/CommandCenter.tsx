@@ -75,7 +75,7 @@ import { HistoryTab } from "./HistoryTab";
 import { SlidingPill } from "./SlidingPill";
 import { BrandIcon, BrandWordmark } from "./Brand";
 import { LimitsChip } from "./LimitsChip";
-import { fmtReset, level as limitLevel, opencodeGoUsage, parseUsagePanel, teamLimitsSet } from "../lib/limits";
+import { fmtReset, level as limitLevel, opencodeGoUsage, parseUsagePanel, teamLimitsSet, windowLabel } from "../lib/limits";
 import { InAppAvisos, Toast } from "./Avisos";
 import { listen } from "@tauri-apps/api/event";
 import { taskPaths } from "../lib/history";
@@ -1816,20 +1816,25 @@ export function CommandCenter() {
 
   // Aviso al pasar del 70 % y del 90 % en cualquier ventana (una vez por nivel).
   const limitLevels = useRef<Map<string, string>>(new Map());
+  const limitSeen = useRef<Map<string, number>>(new Map());
   useEffect(() => {
     for (const [agent, l] of Object.entries(state?.limits ?? {})) {
-      for (const w of l.windows) {
-        const k = `${agent}|${w.key}`;
+      // Solo una lectura nueva puede avisar (el estado llega una y otra vez con la misma).
+      if (limitSeen.current.get(agent) === l.ts_ms) continue;
+      limitSeen.current.set(agent, l.ts_ms);
+      l.windows.forEach((w, i) => {
+        // Por posición: dos ventanas con el mismo nombre no se pisan.
+        const k = `${agent}|${i}|${w.key}`;
         const lv = limitLevel(w.used_pct);
         const before = limitLevels.current.get(k);
         limitLevels.current.set(k, lv);
-        if (before === undefined || lv === "ok" || lv === before || (before === "crit" && lv === "warn")) continue;
+        if (before === undefined || lv === "ok" || lv === before || (before === "crit" && lv === "warn")) return;
         notify(
-          `${agentLabel(agent)}: ${w.label} al ${Math.round(w.used_pct)}%`,
+          `${agentLabel(agent)}: ${windowLabel(w, i)} al ${Math.round(w.used_pct)}%`,
           w.resets_at ? `Se reinicia ${fmtReset(w.resets_at)}. Reparte lo que queda entre los demás.` : "Reparte lo que queda entre los demás.",
           { agent, kind: lv === "crit" ? "ask" : "late" },
         );
-      }
+      });
     }
   }, [state?.limits]);
 

@@ -79,8 +79,16 @@ function outside(a: Aviso): Promise<boolean> {
   );
 }
 
+const recent = new Map<string, number>();
+
 /** Avisa de algo del equipo: dentro de la app si la estás mirando; fuera si no. */
 export function notify(title: string, body: string, meta: { agent?: string; kind?: AvisoKind } = {}) {
+  // El mismo aviso no se repite en 10 min (si algo lo dispara en bucle, sale una vez).
+  const sig = `${meta.agent ?? ""}|${title}|${body}`;
+  const now = Date.now();
+  if (now - (recent.get(sig) ?? 0) < 10 * 60_000) return;
+  recent.set(sig, now);
+  if (recent.size > 200) for (const [k, t] of recent) if (now - t > 10 * 60_000) recent.delete(k);
   const a = make(title, body, meta);
   const focused = document.hasFocus();
   if (focused) listeners.forEach((fn) => fn(a));

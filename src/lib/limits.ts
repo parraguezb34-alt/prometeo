@@ -33,6 +33,11 @@ export function fmtReset(at: number | null | undefined, now = Date.now()): strin
   return `en ${Math.max(1, m)} min`;
 }
 
+/** Nombre para mostrar de una ventana: si no trae palabras (p. ej. «[ ]»), «Límite N». */
+export function windowLabel(w: LimitWindow, i: number): string {
+  return /[a-záéíóúñ]{2,}/i.test(w.label) ? w.label : `Límite ${i + 1}`;
+}
+
 /** La ventana más llena de un agente (la que marca cuánto le queda). */
 export function worst(l: AgentLimits | undefined): LimitWindow | null {
   if (!l || l.windows.length === 0) return null;
@@ -101,8 +106,11 @@ export function parseUsagePanel(lines: string[] | null, now = Date.now()): Limit
     }
     if (!hasWords(label)) label = "";
     label = label.slice(0, 40) || `Límite ${out.length + 1}`;
+    let key = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || `w${out.length}`;
+    // Claves únicas: dos ventanas con el mismo nombre no se pisan.
+    if (out.some((o) => o.key === key)) key = `${key}-${out.length}`;
     out.push({
-      key: label.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24) || `w${out.length}`,
+      key,
       label,
       used_pct: Math.round(pct * 10) / 10,
       // El reinicio suele ir en la misma línea o justo debajo.

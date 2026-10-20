@@ -1156,7 +1156,14 @@ pub fn team_limits_set(
     note: Option<String>,
 ) -> Result<(), String> {
     let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
-    if set_limits(&mut inner, &agent, &windows, exact, note.as_deref().unwrap_or("")) {
+    // Sin ventanas se borra su lectura (p. ej. una mal leída).
+    let empty = windows.as_array().is_none_or(|a| a.is_empty());
+    let changed = if empty {
+        inner.limits.remove(&agent.trim().to_lowercase()).is_some()
+    } else {
+        set_limits(&mut inner, &agent, &windows, exact, note.as_deref().unwrap_or(""))
+    };
+    if changed {
         persist(&inner);
         drop(inner);
         notify_ui();

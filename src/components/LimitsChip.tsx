@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { agentColor, agentLabel, ago } from "../lib/team";
-import { fmtReset, level, worst } from "../lib/limits";
+import { fmtReset, level, windowLabel, worst } from "../lib/limits";
 import type { AgentLimits } from "../lib/limits";
 import { Icon } from "./Icon";
 
@@ -64,7 +64,7 @@ export function LimitsChip({
           entries.map(([agent, l]) => {
             const w = worst(l);
             return (
-              <span key={agent} className="lm-mini" title={`${agentLabel(agent)}: ${w?.label} ${w?.used_pct}%`}>
+              <span key={agent} className="lm-mini" title={w ? `${agentLabel(agent)}: ${windowLabel(w, l.windows.indexOf(w))} ${Math.round(w.used_pct)}%` : agentLabel(agent)}>
                 <i style={{ background: agentColor(agent) }} />
                 <span className="lm-bar" data-level={level(w?.used_pct ?? 0)}>
                   <b style={{ width: `${Math.min(100, w?.used_pct ?? 0)}%` }} />
@@ -96,10 +96,10 @@ export function LimitsChip({
                     </button>
                   )}
                 </div>
-                {l.windows.map((w) => (
-                  <div key={w.key} className="lm-win">
+                {l.windows.map((w, i) => (
+                  <div key={`${i}-${w.key}`} className="lm-win">
                     <div className="lm-win-top">
-                      <span>{w.label}</span>
+                      <span>{windowLabel(w, i)}</span>
                       <b data-level={level(w.used_pct)}>{Math.round(w.used_pct)}%</b>
                     </div>
                     <span className="lm-bar lm-bar-big" data-level={level(w.used_pct)}>

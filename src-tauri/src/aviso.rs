@@ -45,9 +45,10 @@ fn place(win: &tauri::WebviewWindow, height: f64) {
     let _ = win.set_position(PhysicalPosition::new(x, y));
 }
 
-/// Muestra un aviso en la esquina (abre la ventanita si no estaba).
+/// Muestra un aviso en la esquina (abre la ventanita si no estaba). Asíncrono a propósito: en
+/// Windows, crear una ventana desde un comando síncrono bloquea la app entera.
 #[tauri::command]
-pub fn aviso_push(app: AppHandle, item: Aviso) -> Result<(), String> {
+pub async fn aviso_push(app: AppHandle, item: Aviso) -> Result<(), String> {
     PENDING.lock().map_err(|e| e.to_string())?.push(item);
     if app.get_webview_window(LABEL).is_some() {
         let _ = app.emit_to(LABEL, "aviso://poke", ());
@@ -72,20 +73,20 @@ pub fn aviso_push(app: AppHandle, item: Aviso) -> Result<(), String> {
 
 /// La ventanita recoge los avisos pendientes.
 #[tauri::command]
-pub fn aviso_take() -> Vec<Aviso> {
+pub async fn aviso_take() -> Vec<Aviso> {
     PENDING.lock().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default()
 }
 
 /// La ventanita mide lo que ocupa: se ajusta y se queda pegada a la esquina.
 #[tauri::command]
-pub fn aviso_resize(app: AppHandle, height: f64) {
+pub async fn aviso_resize(app: AppHandle, height: f64) {
     if let Some(w) = app.get_webview_window(LABEL) {
         place(&w, height);
     }
 }
 
 #[tauri::command]
-pub fn aviso_close(app: AppHandle) {
+pub async fn aviso_close(app: AppHandle) {
     if let Some(w) = app.get_webview_window(LABEL) {
         let _ = w.close();
     }
@@ -93,7 +94,7 @@ pub fn aviso_close(app: AppHandle) {
 
 /// Pulsaste un aviso: lienzo se pone delante y abre lo que avisaba.
 #[tauri::command]
-pub fn aviso_open(app: AppHandle, item: Aviso) {
+pub async fn aviso_open(app: AppHandle, item: Aviso) {
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.unminimize();
         let _ = main.show();

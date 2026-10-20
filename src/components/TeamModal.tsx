@@ -6,7 +6,7 @@ import type { AgentPref } from "../lib/agentPrefs";
 import { confirmChoice } from "../lib/pty";
 import { ctxLevel, ctxOf, fmtTokens, shortModel } from "./AgentCard";
 import { Icon } from "./Icon";
-import { fmtReset, level, worst } from "../lib/limits";
+import { fmtReset, level, windowLabel, worst } from "../lib/limits";
 import type { AgentLimits } from "../lib/limits";
 
 /** work = con tarea · idle = libre · blocked = espera tu respuesta · login = su terminal pide iniciar sesión · starting = terminal abierta, aún sin conectar · off = sin sesión */
@@ -113,7 +113,7 @@ function UsageBar({ name, limits, onRead }: { name: string; limits?: AgentLimits
     <div className="cc-ctxbig cc-usebig" data-lvl={w ? (level(w.used_pct) === "crit" ? "err" : level(w.used_pct)) : "none"}>
       <div className="cc-ctxbig-row">
         <span>
-          Uso{w ? ` · ${w.label}` : ""}
+          Uso{w && limits ? ` · ${windowLabel(w, limits.windows.indexOf(w))}` : ""}
           {canRead && (
             <button className="cc-use-read" onClick={onRead} title="Leer su /usage ahora" aria-label="Leer su límite">
               <Icon name="refresh" size={11} />
