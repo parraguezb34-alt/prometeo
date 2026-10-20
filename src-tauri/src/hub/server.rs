@@ -112,6 +112,7 @@ fn handle(mut request: tiny_http::Request, app: &AppHandle) {
         ("POST", "/inbox/ack") => cmd_inbox_ack(app, &payload),
         ("POST", "/usage") => cmd_usage(app, &payload),
         ("POST", "/ask") => cmd_ask(app, &payload),
+        ("POST", "/limits") => cmd_limits(app, &payload),
         ("GET", "/ask") => cmd_ask_status(app, &query),
         ("POST", "/ask/detach") => cmd_ask_detach(app, &payload),
         ("GET", "/skills") => Ok(json!({ "skills": crate::skills::catalog() })),
@@ -285,6 +286,24 @@ fn cmd_ask(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     .ok_or("hub no inicializado")?;
     hub::notify_ui();
     Ok(json!({ "id": id }))
+}
+
+/// Límites de uso que manda el puente (la «status line» de Claude Code).
+fn cmd_limits(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let agent = payload["agent"].as_str().unwrap_or("").to_string();
+    let exact = payload["exact"].as_bool().unwrap_or(false);
+    let changed = hub::with_inner(app, |inner| {
+        let changed = hub::set_limits(inner, &agent, &payload["windows"], exact, "");
+        if changed {
+            hub::persist(inner);
+        }
+        changed
+    })
+    .ok_or("hub no inicializado")?;
+    if changed {
+        hub::notify_ui();
+    }
+    Ok(json!({ "ok": true }))
 }
 
 /// ¿Ya contestó? (la herramienta del agente lo consulta mientras espera)

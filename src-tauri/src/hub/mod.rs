@@ -963,6 +963,9 @@ pub struct PersistedState {
     /// Lo de los otros proyectos (carpetas), guardado mientras trabajas en este.
     #[serde(default)]
     pub projects: HashMap<String, ProjectSlot>,
+    /// Último límite de uso visto de cada agente (ver `set_limits`).
+    #[serde(default)]
+    pub limits: HashMap<String, serde_json::Value>,
 }
 
 pub struct HubInner {
@@ -1003,6 +1006,8 @@ pub struct HubInner {
     pub question_seq: u64,
     /// Lo de los otros proyectos, por carpeta (ver `switch_project`).
     pub projects: HashMap<String, ProjectSlot>,
+    /// Límites de uso de cada agente: sesión, semana… (ver `set_limits`).
+    pub limits: HashMap<String, serde_json::Value>,
     pub seq: u64,
     pub task_seq: u64,
 }
@@ -1091,6 +1096,7 @@ pub fn persist(inner: &HubInner) {
         questions: inner.questions.clone(),
         question_seq: inner.question_seq,
         projects: inner.projects.clone(),
+        limits: inner.limits.clone(),
     };
     if let Ok(raw) = serde_json::to_string(&state) {
         let _ = std::fs::write(state_file(), raw);
@@ -1102,6 +1108,60 @@ pub fn notify_ui() {
     if let Some(app) = APP.get() {
         let _ = app.emit("team://update", ());
     }
+}
+
+/// Guarda el límite de uso de un agente: ventanas `{key, label, used_pct, resets_at}`.
+/// `exact` = lo dijo el propio CLI (Claude); si no, es una estimación o una lectura de pantalla.
+/// Devuelve si cambió algo que se vea (para no avisar a la interfaz a cada línea de estado).
+pub fn set_limits(inner: &mut HubInner, agent: &str, windows: &serde_json::Value, exact: bool, note: &str) -> bool {
+    let agent = agent.trim().to_lowercase();
+    if agent.is_empty() || agent.len() > 40 {
+        return false;
+    }
+    let clean: Vec<serde_json::Value> = windows
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .take(6)
+                .filter_map(|w| {
+                    let pct = w["used_pct"].as_f64()?.clamp(0.0, 100.0);
+                    Some(serde_json::json!({
+                        "key": clean_text(w["key"].as_str().unwrap_or(""), 24),
+                        "label": clean_text(w["label"].as_str().unwrap_or(""), 40),
+                        "used_pct": (pct * 10.0).round() / 10.0,
+                        "resets_at": w["resets_at"].as_u64(),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if clean.is_empty() {
+        return false;
+    }
+    let changed = inner.limits.get(&agent).map(|old| old["windows"] != serde_json::json!(clean)).unwrap_or(true);
+    inner.limits.insert(
+        agent,
+        serde_json::json!({ "windows": clean, "exact": exact, "note": clean_text(note, 200), "ts_ms": now_ms() }),
+    );
+    changed
+}
+
+/// Límites que la interfaz calcula o lee (OpenCode Go estimado, Antigravity por su /usage).
+#[tauri::command]
+pub fn team_limits_set(
+    hub: tauri::State<'_, Hub>,
+    agent: String,
+    windows: serde_json::Value,
+    exact: bool,
+    note: Option<String>,
+) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    if set_limits(&mut inner, &agent, &windows, exact, note.as_deref().unwrap_or("")) {
+        persist(&inner);
+        drop(inner);
+        notify_ui();
+    }
+    Ok(())
 }
 
 /// Avisa a la interfaz de cualquier evento propio (p. ej. un error nuevo en el registro).
@@ -1250,6 +1310,7 @@ pub fn snapshot(inner: &HubInner, limit: usize) -> serde_json::Value {
         "strengths": inner.strengths,
         "questions": inner.questions.iter().rev().take(20).collect::<Vec<_>>(),
         "projects": project_list(inner),
+        "limits": inner.limits,
         "now_ms": now,
     })
 }
@@ -2034,6 +2095,7 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         questions: persisted.questions,
         question_seq: persisted.question_seq,
         projects: persisted.projects,
+        limits: persisted.limits,
         seq: persisted.seq,
         task_seq: persisted.task_seq,
         memory: persisted.memory,
@@ -2155,6 +2217,7 @@ mod inbox_tests {
             questions: Vec::new(),
             question_seq: 0,
             projects: HashMap::new(),
+            limits: HashMap::new(),
             seq: 0,
             task_seq: 0,
         }

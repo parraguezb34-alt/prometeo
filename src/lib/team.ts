@@ -124,6 +124,8 @@ export type TeamState = {
   questions?: TeamQuestion[];
   /** Los otros proyectos (carpetas) con lo suyo guardado, del más reciente al más antiguo. */
   projects?: ProjectEntry[];
+  /** Límites de uso de cada agente (sesión de 5 h, semana…), ver lib/limits.ts. */
+  limits?: Record<string, import("./limits").AgentLimits>;
   now_ms: number;
 };
 

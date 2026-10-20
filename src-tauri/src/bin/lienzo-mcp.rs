@@ -17,6 +17,8 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(|a| a == "hook").unwrap_or(false) {
         hook_mode(&args[1..]);
+    } else if args.first().map(|a| a == "statusline").unwrap_or(false) {
+        statusline_mode();
     } else if args.first().map(|a| a == "mirror-dump").unwrap_or(false) {
         // Diagnóstico del espejo de OpenCode/Antigravity: lienzo-mcp mirror-dump <carpeta> [pasos]
         let project = args.get(1).cloned().unwrap_or_default();
@@ -1418,6 +1420,55 @@ fn mcp_mode() {
 // ---------------------------------------------------------------------------
 // Modo hook
 // ---------------------------------------------------------------------------
+
+/// Una ventana de límite de la «status line» de Claude Code (`rate_limits.five_hour`…):
+/// porcentaje usado y cuándo se reinicia (en ms).
+fn rate_window(v: &Value) -> Option<(f64, Option<u64>)> {
+    let pct = v["used_percentage"].as_f64()?;
+    let reset = v["resets_at"]
+        .as_f64()
+        .or_else(|| v["reset_at"].as_f64())
+        .or_else(|| v["resets_at"].as_str().and_then(|s| s.parse().ok()))
+        // Llega en segundos; si ya viene en milisegundos se deja.
+        .map(|t| if t < 1e12 { (t * 1000.0) as u64 } else { t as u64 });
+    Some((pct, reset))
+}
+
+/// `lienzo-mcp statusline`: Claude Code nos pasa su estado (modelo, contexto y los límites de
+/// la suscripción). Mandamos los límites al hub y devolvemos la línea que pinta abajo.
+fn statusline_mode() {
+    let mut raw = String::new();
+    let _ = std::io::stdin().read_to_string(&mut raw);
+    let p: Value = serde_json::from_str(raw.trim()).unwrap_or_else(|_| json!({}));
+    let rl = &p["rate_limits"];
+    let five = rate_window(&rl["five_hour"]);
+    let week = rate_window(&rl["seven_day"]);
+
+    if (five.is_some() || week.is_some()) && !outside_lienzo() {
+        if let Some(client) = HubClient::discover() {
+            let mut windows = vec![];
+            if let Some((pct, reset)) = five {
+                windows.push(json!({ "key": "session", "label": "Sesión (5 h)", "used_pct": pct, "resets_at": reset }));
+            }
+            if let Some((pct, reset)) = week {
+                windows.push(json!({ "key": "week", "label": "Semana", "used_pct": pct, "resets_at": reset }));
+            }
+            let _ = client.post("/limits", &json!({ "agent": "claude", "windows": windows, "exact": true }));
+        }
+    }
+
+    let mut parts: Vec<String> = vec![];
+    if let Some(m) = p["model"]["display_name"].as_str().filter(|s| !s.is_empty()) {
+        parts.push(m.to_string());
+    }
+    if let Some((pct, _)) = five {
+        parts.push(format!("sesión {pct:.0}%"));
+    }
+    if let Some((pct, _)) = week {
+        parts.push(format!("semana {pct:.0}%"));
+    }
+    println!("{}", parts.join(" · "));
+}
 
 fn hook_mode(args: &[String]) {
     let mut agent = "agente".to_string();

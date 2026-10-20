@@ -284,3 +284,175 @@
 :root[data-motion="off"] .cc-toast[data-leaving="1"] {
   animation-name: toast-out;
 }
+
+/* ---- Límites de uso (LimitsChip) ---- */
+
+.lm {
+  position: relative;
+}
+.lm-chip {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 99px;
+  font-size: 12px;
+  color: var(--muted);
+  box-shadow: inset 0 0 0 0.5px var(--line-strong);
+  transition: background-color 0.14s, color 0.14s;
+}
+.lm-chip:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+.lm-chip[data-level="warn"] {
+  color: var(--warn);
+}
+.lm-chip[data-level="crit"] {
+  color: var(--accent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.lm-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.lm-mini > i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.lm-bar {
+  position: relative;
+  display: block;
+  width: 34px;
+  height: 4px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--raised-2);
+}
+.lm-bar > b {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 4px;
+  background: var(--ok);
+  transition: width 0.6s var(--ease-out, ease-out);
+}
+.lm-bar[data-level="warn"] > b {
+  background: var(--warn);
+}
+.lm-bar[data-level="crit"] > b {
+  background: var(--accent);
+}
+.lm-bar-big {
+  width: 100%;
+  height: 6px;
+}
+
+.lm-pop {
+  position: absolute;
+  z-index: 51;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  max-height: 70vh;
+  overflow: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow:
+    inset 0 0 0 0.5px var(--line-strong),
+    0 18px 50px rgba(0, 0, 0, 0.5);
+  --tx: 0;
+  transform-origin: top right;
+  animation: mo-menu var(--d-base, 0.26s) var(--ease-spring, ease-out);
+}
+.lm-pop-head b {
+  display: block;
+  font-size: 14px;
+  color: var(--text);
+}
+.lm-pop-head small {
+  font-size: 12px;
+  color: var(--dim);
+}
+.lm-agent {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--line);
+}
+.lm-agent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lm-agent-head b {
+  font-size: 13px;
+  color: var(--text);
+}
+.lm-agent-head small {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--faint);
+}
+.lm-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.lm-read {
+  all: unset;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.lm-read:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+.lm-win {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.lm-win-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+.lm-win-top b {
+  font-weight: 600;
+  color: var(--ok);
+}
+.lm-win-top b[data-level="warn"] {
+  color: var(--warn);
+}
+.lm-win-top b[data-level="crit"] {
+  color: var(--accent);
+}
+.lm-win small {
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.lm-foot {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--faint);
+}
+:root[data-motion="off"] .lm-pop {
+  animation: none;
+}

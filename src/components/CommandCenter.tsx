@@ -74,6 +74,8 @@ import { DestPicker } from "./DestPicker";
 import { HistoryTab } from "./HistoryTab";
 import { SlidingPill } from "./SlidingPill";
 import { BrandIcon, BrandWordmark } from "./Brand";
+import { LimitsChip } from "./LimitsChip";
+import { fmtReset, level as limitLevel, opencodeGoUsage, parseUsagePanel, teamLimitsSet } from "../lib/limits";
 import { InAppAvisos, Toast } from "./Avisos";
 import { listen } from "@tauri-apps/api/event";
 import { taskPaths } from "../lib/history";
@@ -1768,6 +1770,65 @@ export function CommandCenter() {
   const lateWarned = useRef<Set<number>>(new Set());
   const liveRef = useRef(live);
   liveRef.current = live;
+
+  // ---- Límites de uso: Claude los manda solo (su barra de estado); aquí OpenCode Go y Antigravity.
+  const hasOpenCode = roster.some((a) => a.name.toLowerCase().includes("opencode"));
+  useEffect(() => {
+    if (!hasOpenCode || !("__TAURI_INTERNALS__" in window)) return;
+    const check = () =>
+      void opencodeGoUsage()
+        .then((u) => {
+          if (u.active) void teamLimitsSet("opencode", u.windows, false, "estimado (Go)").catch(() => {});
+        })
+        .catch(() => {});
+    check();
+    const id = window.setInterval(check, 60_000);
+    return () => window.clearInterval(id);
+  }, [hasOpenCode]);
+
+  /** Antigravity solo lo dice con /usage: se le pide, se lee de su pantalla y se cierra el panel. */
+  const readUsage = async (agent: string) => {
+    const p = panelForAgent(getLayout().panels, agent);
+    if (!p?.sessionId) {
+      say(`Abre la terminal de ${agentLabel(agent)} para leer su límite.`, true);
+      return;
+    }
+    if (liveRef.current.some((l) => l.name === agent && l.busy)) {
+      say(`${agentLabel(agent)} está trabajando: lee su límite cuando termine.`, true);
+      return;
+    }
+    const sid = p.sessionId;
+    await termWrite(sid, "/usage\r").catch(() => {});
+    await new Promise((r) => window.setTimeout(r, 2500));
+    const windows = parseUsagePanel(readScreen(sid));
+    await termWrite(sid, "\x1b").catch(() => {});
+    if (windows.length === 0) {
+      say(`No encontré porcentajes en el /usage de ${agentLabel(agent)}. Míralo en su terminal.`, true);
+      return;
+    }
+    await teamLimitsSet(agent, windows, false, "leído de /usage").catch((e) => say(errMsg(e), true));
+    say(`Límite de ${agentLabel(agent)} actualizado.`);
+  };
+
+  // Aviso al pasar del 70 % y del 90 % en cualquier ventana (una vez por nivel).
+  const limitLevels = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    for (const [agent, l] of Object.entries(state?.limits ?? {})) {
+      for (const w of l.windows) {
+        const k = `${agent}|${w.key}`;
+        const lv = limitLevel(w.used_pct);
+        const before = limitLevels.current.get(k);
+        limitLevels.current.set(k, lv);
+        if (before === undefined || lv === "ok" || lv === before || (before === "crit" && lv === "warn")) continue;
+        notify(
+          `${agentLabel(agent)}: ${w.label} al ${Math.round(w.used_pct)}%`,
+          w.resets_at ? `Se reinicia ${fmtReset(w.resets_at)}. Reparte lo que queda entre los demás.` : "Reparte lo que queda entre los demás.",
+          { agent, kind: lv === "crit" ? "ask" : "late" },
+        );
+      }
+    }
+  }, [state?.limits]);
+
   const setNotify = (on: boolean) => {
     setNotifyOn(on);
     saveFlag(NOTIFY_KEY, on);
@@ -2328,6 +2389,13 @@ export function CommandCenter() {
             <span className="cc-dot" />
             {hubOk ? "Hub conectado" : "Hub sin conexión"}
           </button>
+          <LimitsChip
+            limits={state?.limits}
+            canRead={roster
+              .map((a) => a.name)
+              .filter((n) => /antigravity|agy/i.test(n) && !!panelForAgent(layout.panels, n)?.sessionId)}
+            onRead={(a) => void readUsage(a)}
+          />
           <div className="cc-modes">
             <button
               onClick={toggleNotify}

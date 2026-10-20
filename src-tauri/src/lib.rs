@@ -3,6 +3,7 @@ mod devapp;
 pub mod errlog;
 pub mod history;
 pub mod hub;
+mod limits;
 mod project;
 mod pty;
 pub mod skills;
@@ -45,6 +46,8 @@ pub fn run() {
             hub::team_memory_forget,
             hub::team_dm,
             hub::team_answer,
+            hub::team_limits_set,
+            limits::opencode_go_usage,
             hub::team_leader,
             hub::team_usage_reset,
             hub::team_director,

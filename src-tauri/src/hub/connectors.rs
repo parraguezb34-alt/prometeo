@@ -315,6 +315,15 @@ fn connect_claude(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>
         .unwrap()
         .insert("enableAllProjectMcpServers".into(), json!(true));
     merge_hooks(&mut settings, exe, "claude");
+    // La «status line» trae el uso de la suscripción (sesión de 5 h y semana): la leemos con el
+    // puente. Si el proyecto ya tenía una propia, se respeta.
+    let ours = settings["statusLine"].is_null() || settings["statusLine"].to_string().contains("lienzo-mcp");
+    if ours {
+        settings.as_object_mut().unwrap().insert(
+            "statusLine".into(),
+            json!({ "type": "command", "command": format!("\"{exe}\" statusline"), "padding": 0 }),
+        );
+    }
     write_json_pretty(&settings_path, &settings)?;
     files.push(settings_path.display().to_string());
     notes.push("Los hooks inyectan la actividad del equipo en cada prompt.".into());
