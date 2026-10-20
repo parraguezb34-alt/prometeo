@@ -400,10 +400,23 @@ pub fn term_resize(
     Ok(())
 }
 
+/// Asíncrono: `taskkill` tarda un momento y no debe frenar la ventana.
 #[tauri::command]
-pub fn term_kill(state: State<'_, PtyManager>, id: String) -> Result<(), String> {
-    let mut map = state.0.lock().map_err(|e| e.to_string())?;
-    if let Some(mut session) = map.remove(&id) {
+pub async fn term_kill(state: State<'_, PtyManager>, id: String) -> Result<(), String> {
+    let session = state.0.lock().map_err(|e| e.to_string())?.remove(&id);
+    if let Some(mut session) = session {
+        // Con todo lo que cuelga de la terminal (el agente y sus puentes): si quedara algo vivo,
+        // seguiría usando la carpeta y Windows no dejaría, por ejemplo, renombrarla.
+        #[cfg(windows)]
+        if let Some(pid) = session.child.process_id() {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .creation_flags(0x0800_0000)
+                .status();
+        }
         let _ = session.child.kill();
     }
     Ok(())

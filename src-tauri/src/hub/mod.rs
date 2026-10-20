@@ -164,6 +164,10 @@ pub struct Task {
     /// Tokens gastados en esta tarea por cada agente (quien la hace y quien la revisa).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cost: HashMap<String, Usage>,
+    /// Investigación a la que pertenece (`.lienzo/investigaciones/<id>`). Sus entregas no pasan
+    /// por la revisión del director: la investigación profunda ya tiene su propio verificador.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub research: String,
 }
 
 impl Task {
@@ -183,6 +187,7 @@ impl Task {
             assign: String::new(),
             fix_rounds: 0,
             cost: HashMap::new(),
+            research: String::new(),
         }
     }
 }
@@ -899,6 +904,29 @@ pub fn switch_project(inner: &mut HubInner, path: Option<String>) -> bool {
     inner.focus.clear();
     inner.project = path;
     true
+}
+
+/// La carpeta de un proyecto cambió de nombre en el disco: lo suyo (el abierto o su estante)
+/// pasa a la ruta nueva. Devuelve si había algo que mover.
+pub fn rename_project(inner: &mut HubInner, old: &str, new: &str) -> bool {
+    let new = new.trim().trim_end_matches(['\\', '/']).to_string();
+    let (ko, kn) = (project_key(old), project_key(&new));
+    if inner.project.as_deref().map(project_key).as_deref() == Some(ko.as_str()) {
+        inner.project = Some(new);
+        // Si quedaba un estante viejo con el nombre nuevo, ya no corresponde a nada.
+        if ko != kn {
+            inner.projects.remove(&kn);
+        }
+        return true;
+    }
+    match inner.projects.remove(&ko) {
+        Some(mut slot) => {
+            slot.path = new;
+            inner.projects.insert(kn, slot);
+            true
+        }
+        None => false,
+    }
 }
 
 /// Los otros proyectos (con carpeta), del usado más recientemente al más antiguo.
@@ -2228,6 +2256,24 @@ mod inbox_tests {
             seq: 0,
             task_seq: 0,
         }
+    }
+
+    #[test]
+    fn renombrar_proyecto_abierto_y_guardado() {
+        let mut h = hub();
+        h.project = Some(r"C:\x\Viejo".into());
+        h.tasks.push(Task::new(1, "t".into(), String::new(), vec![]));
+        assert!(rename_project(&mut h, r"C:\x\viejo\", r"C:\x\Nuevo"));
+        assert_eq!(h.project.as_deref(), Some(r"C:\x\Nuevo"));
+        assert_eq!(h.tasks.len(), 1);
+        // Uno guardado (no abierto) cambia de estante con sus tareas.
+        switch_project(&mut h, Some(r"C:\x\Otro".into()));
+        assert!(rename_project(&mut h, r"C:\x\Nuevo", r"C:\x\Final"));
+        assert!(!h.projects.contains_key("c:/x/nuevo"));
+        let slot = &h.projects["c:/x/final"];
+        assert_eq!(slot.path, r"C:\x\Final");
+        assert_eq!(slot.tasks.len(), 1);
+        assert!(!rename_project(&mut h, r"C:\x\NoExiste", r"C:\x\Y"));
     }
 
     fn msg(h: &mut HubInner, from: &str, to: Option<&str>, text: &str) -> u64 {

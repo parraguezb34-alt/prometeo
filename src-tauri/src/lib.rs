@@ -6,6 +6,8 @@ pub mod hub;
 mod limits;
 mod project;
 mod pty;
+mod rename;
+mod research;
 pub mod skills;
 
 // Los tests también necesitan el manifiesto de Windows que tauri-build solo
@@ -86,6 +88,11 @@ pub fn run() {
             devapp::app_detect,
             devapp::app_start,
             devapp::app_stop,
+            rename::project_rename,
+            research::research_start,
+            research::research_list,
+            research::research_read,
+            research::research_remove,
             devapp::app_status,
             errlog::errors_list,
             errlog::errors_clear,

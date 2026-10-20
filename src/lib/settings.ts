@@ -175,3 +175,10 @@ if (typeof document !== "undefined") {
     /* sin matchMedia: se queda como esté */
   }
 }
+
+/** Una carpeta reciente cambió de nombre: la ruta vieja ya no existe. */
+export function renameRecentProject(from: string, to: string) {
+  const f = from.trim().toLowerCase();
+  const list = current.recentProjects.map((x) => (x.trim().toLowerCase() === f ? to : x));
+  updateSettings({ recentProjects: list.filter((x, i) => list.findIndex((y) => y.toLowerCase() === x.toLowerCase()) === i) });
+}

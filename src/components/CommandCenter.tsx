@@ -50,6 +50,7 @@ import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, save
 import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { cleanFolderName, copyProjectStorage, dropProjectStorage, projectRename } from "../lib/project";
 import { parentDir, projectCreateDir, projectKey, projectName } from "../lib/project";
 import { projectAttachPath, projectInfo, projectRecent, projectSaveAttachment, projectSaveImage } from "../lib/project";
 import { dropOwner } from "../lib/dropzone";
@@ -64,7 +65,7 @@ import { LATEST, resetCommand, withResume } from "../lib/resume";
 import { useTermActivity } from "../lib/activity";
 import { askPhrase, eventImages, isDispatch, isImagePath, isNotice, parseTask, samePath } from "../lib/timeline";
 import { notify } from "../lib/notify";
-import { dispatchConfig, getSettings, rememberProject, useSettings } from "../lib/settings";
+import { dispatchConfig, getSettings, rememberProject, renameRecentProject, useSettings } from "../lib/settings";
 import type { Chat } from "../lib/chats";
 import { AgentQuickCmds, fmtTokens } from "./AgentCard";
 import { ChatView } from "./ChatView";
@@ -72,6 +73,7 @@ import type { LiveAgent } from "./ChatView";
 import { ChatsSidebar } from "./ChatsSidebar";
 import { DestPicker } from "./DestPicker";
 import { HistoryTab } from "./HistoryTab";
+import { ResearchTab } from "./ResearchTab";
 import { SlidingPill } from "./SlidingPill";
 import { BrandIcon, BrandWordmark } from "./Brand";
 import { LimitsChip } from "./LimitsChip";
@@ -97,7 +99,7 @@ import { TerminalPanel } from "./TerminalPanel";
 type Sel = { kind: "team" } | { kind: "agent"; name: string };
 
 /** What the stage shows for the team destination. */
-type CenterView = "feed" | "history" | "app" | "term";
+type CenterView = "feed" | "research" | "history" | "app" | "term";
 
 /** Mission trigger mode: plan-first or straight to execution. */
 type Shoot = "plan" | "exec";
@@ -1567,6 +1569,70 @@ export function CommandCenter() {
     }
   };
 
+  /**
+   * Renombra la carpeta del proyecto abierto en el disco. Windows no deja renombrar una carpeta
+   * en uso, así que se cierran sus terminales y la app en vivo; después cada agente se vuelve a
+   * conectar en la ruta nueva y se reabre retomando su conversación.
+   */
+  const renameProject = async (name: string) => {
+    const old = project;
+    const clean = cleanFolderName(name);
+    if (!old || !clean || switching || clean === projectName(old)) return;
+    setSwitching(true);
+    setOverlay(null);
+    say(`📁 Renombrando «${projectName(old)}» a «${clean}»…`);
+    const sessions = currentTeamChat(chats.current())?.sessions ?? {};
+    const running = getLayout()
+      .panels.filter((p) => p.kind === "terminal" && !!p.cmd)
+      .map((p) => ({ panel: p, name: agentKeyFromCmd(p.cmd ?? "") }));
+    // Los chats ya en la ruta nueva antes de que el hub avise del cambio (si no, se verían vacíos).
+    const guess = `${parentDir(old)}\\${clean}`;
+    copyProjectStorage(old, guess, false);
+    let target = old;
+    try {
+      for (const { panel } of running) {
+        if (panel.sessionId) await termKill(panel.sessionId).catch(() => {});
+        removePanel(panel.id);
+      }
+      await appStop().catch(() => {});
+      setPreviewRel(null);
+      // Las terminales tardan un momento en soltar la carpeta.
+      await new Promise((r) => window.setTimeout(r, 600));
+      target = await projectRename(old, clean);
+      if (projectKey(target) !== projectKey(guess)) {
+        copyProjectStorage(old, target, false);
+        dropProjectStorage(guess);
+      }
+      copyProjectStorage(old, target, true);
+      renameRecentProject(old, target);
+      rememberProject(target);
+      say(`📁 La carpeta ahora se llama «${projectName(target)}».`);
+    } catch (e) {
+      if (projectKey(guess) !== projectKey(old)) dropProjectStorage(guess);
+      say(errMsg(e), true);
+    }
+    // Con el nombre nuevo (o el de siempre si falló), cada agente vuelve a su terminal.
+    let reopened = 0;
+    for (const { panel, name: agent } of running) {
+      try {
+        await teamConnect(agent, target);
+        const pref = prefs[agent] ?? {};
+        const mode: Shoot = /(?:--mode|--permission-mode)[ =]plan/.test(panel.cmd ?? "") ? "plan" : "exec";
+        const r = await teamOpen(agent, mode, { model: pref.model, effort: pref.effort });
+        if (r.kind === "pty") {
+          addAgentTerminal(agentLabel(agent), withResume(r.cmd, sessions[agent]));
+          reopened++;
+        }
+      } catch (e) {
+        say(`${agentLabel(agent)}: ${errMsg(e)}`, true);
+      }
+    }
+    if (reopened > 0) say(`📁 ${reopened === 1 ? "1 agente reabierto" : `${reopened} agentes reabiertos`} en «${projectName(target)}».`);
+    refresh();
+    refreshDetect();
+    setSwitching(false);
+  };
+
   /** (Re)escribe la configuración de un agente en la carpeta del proyecto. */
   const connectAgent = async (id: string) => {
     try {
@@ -2027,6 +2093,7 @@ export function CommandCenter() {
 
   const VIEWS: { id: CenterView; label: string; icon: IconName; title: string }[] = [
     { id: "feed", label: "Comando", icon: "msg", title: "Chat y actividad del equipo" },
+    { id: "research", label: "Investigar", icon: "search", title: "Investigación en la web con el equipo, con fuentes" },
     { id: "history", label: "Historial", icon: "history", title: "Qué cambió cada tarea, para verlo y deshacerlo" },
     { id: "app", label: "App", icon: "app", title: "Tu proyecto arrancado y a la vista" },
     { id: "term", label: "Terminal", icon: "term", title: "Terminal de cada agente a pantalla completa" },
@@ -2443,6 +2510,7 @@ export function CommandCenter() {
           onNew={() => setOverlay("newchat")}
           onSelect={activateChat}
           onRemove={(c) => chats.remove(c.id)}
+          onRename={(c, t) => chats.rename(c.id, t)}
           project={project}
           otherProjects={otherProjects}
           switching={switching}
@@ -2453,6 +2521,7 @@ export function CommandCenter() {
             })
           }
           onCreateProject={(n) => void createProject(n)}
+          onRenameProject={(n) => void renameProject(n)}
         />
 
         <section className="cc-conv">
@@ -2516,6 +2585,22 @@ export function CommandCenter() {
                   </div>
                 )
               }
+            />
+          )}
+
+          {view === "research" && (
+            <ResearchTab
+              project={project}
+              tasks={tasks}
+              online={online.filter((a) => !!panelForAgent(layout.panels, a.name)?.sessionId).map((a) => a.name)}
+              leader={leader}
+              dispatchOn={dispatchOn}
+              onDispatchOn={() => toggleDispatch(true)}
+              onSay={say}
+              onAsk={(text) => {
+                setDraft(text);
+                setView("feed");
+              }}
             />
           )}
 
@@ -2607,7 +2692,7 @@ export function CommandCenter() {
           </div>
 
           {closedBar}
-          {composer}
+          {view !== "research" && composer}
         </section>
       </div>
 

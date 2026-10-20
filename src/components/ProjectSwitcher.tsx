@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { parentDir, projectName } from "../lib/project";
+import { cleanFolderName, parentDir, projectName } from "../lib/project";
 import { Icon } from "./Icon";
 
 export type ProjectItem = { path: string; openTasks?: number };
@@ -15,6 +15,7 @@ export function ProjectSwitcher({
   onSwitch,
   onOpenFolder,
   onCreate,
+  onRename,
 }: {
   project: string | null;
   others: ProjectItem[];
@@ -22,15 +23,22 @@ export function ProjectSwitcher({
   onSwitch: (path: string) => void;
   onOpenFolder: () => void;
   onCreate: (name: string) => void;
+  /** Renombra la carpeta del proyecto abierto (en el disco). */
+  onRename: (name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [newName, setNewName] = useState("");
   const close = () => {
     setOpen(false);
     setNaming(false);
     setName("");
+    setRenaming(false);
   };
+  const cur = project ? projectName(project) : "";
+  const nextName = cleanFolderName(newName);
 
   return (
     <div className="ps">
@@ -66,6 +74,53 @@ export function ProjectSwitcher({
                 </span>
               </div>
             )}
+            {project &&
+              (renaming ? (
+                <form
+                  className="ps-new"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!nextName || nextName === cur) return;
+                    onRename(nextName);
+                    close();
+                  }}
+                >
+                  <input
+                    autoFocus
+                    value={newName}
+                    maxLength={120}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onFocus={(e) => e.target.select()}
+                    placeholder="Nombre nuevo de la carpeta"
+                    onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
+                    aria-label="Nombre nuevo de la carpeta"
+                  />
+                  <button className="cc-btn" type="submit" disabled={!nextName || nextName === cur}>
+                    Renombrar
+                  </button>
+                  <small>
+                    Cambia el nombre de la carpeta en el disco. Las terminales se cierran un momento y los agentes
+                    vuelven solos; chats, tareas, historial y memoria siguen igual.
+                  </small>
+                </form>
+              ) : (
+                <button
+                  className="cc-mi"
+                  role="menuitem"
+                  onClick={() => {
+                    setNewName(cur);
+                    setRenaming(true);
+                  }}
+                >
+                  <span className="cc-mi-ic">
+                    <Icon name="pencil" />
+                  </span>
+                  <span>
+                    <b>Renombrar carpeta…</b>
+                    <small>Cambia su nombre en el disco</small>
+                  </span>
+                </button>
+              ))}
             {others.length > 0 && <div className="cc-menu-sep">Cambiar a…</div>}
             {others.map((p) => (
               <button

@@ -2257,3 +2257,26 @@ button.cc-lead {
   display: block;
   overflow: visible;
 }
+
+/* Renombrar en el sitio (chats y proyectos) */
+.cc-chat-ren {
+  right: 32px;
+}
+.rn-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 3px 7px;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.cc-chat-item:hover .cc-chat-item-t {
+  padding-right: 48px;
+}

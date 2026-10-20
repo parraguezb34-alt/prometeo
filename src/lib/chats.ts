@@ -237,6 +237,16 @@ export function useChats(project: string | null) {
     [update],
   );
 
+  /** Le pone tú el nombre a un chat (ya no se sustituye con el primer mensaje). */
+  const rename = useCallback(
+    (id: string, title: string) => {
+      const clean = title.replace(/\s+/g, " ").trim().slice(0, 80);
+      if (!clean) return;
+      update((prev) => prev.map((c) => (c.id === id ? { ...c, title: clean, autoTitle: false } : c)));
+    },
+    [update],
+  );
+
   /** Recuerda con qué conversación trabaja un agente en un chat. */
   const setSession = useCallback(
     (id: string, agent: string, ref: string) => {
@@ -260,7 +270,7 @@ export function useChats(project: string | null) {
     [update],
   );
 
-  return { chats, active, create, openScope, select, autoTitle, remove, setSession, current };
+  return { chats, active, create, openScope, select, autoTitle, rename, remove, setSession, current };
 }
 
 /** "Hoy", "Ayer", "Esta semana" o "Antes". */

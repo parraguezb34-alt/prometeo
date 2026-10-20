@@ -725,7 +725,12 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 }
 
                 // Modo director: la entrega de un trabajador espera la revisión del líder.
-                let reviewer = if op == "done" { hub::reviewer_for(inner, &agent) } else { None };
+                // Las de una investigación no: ya tienen su verificación (y gastaría cuota del líder).
+                let reviewer = if op == "done" && inner.tasks[pos].research.is_empty() {
+                    hub::reviewer_for(inner, &agent)
+                } else {
+                    None
+                };
                 // Lo que verá el líder: los cambios frente a la copia de cada archivo al reservarlo.
                 let diff = if reviewer.is_some() { hub::delivery_diff(inner, &files_in) } else { String::new() };
                 if op == "done" && reviewer.is_none() {

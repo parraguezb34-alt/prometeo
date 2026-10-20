@@ -8,6 +8,7 @@ import { ProjectSwitcher } from "./ProjectSwitcher";
 import type { ProjectItem } from "./ProjectSwitcher";
 import type { Chat } from "../lib/chats";
 import { Icon } from "./Icon";
+import { InlineRename } from "./InlineRename";
 
 const GROUPS = ["Hoy", "Ayer", "Esta semana", "Antes"];
 
@@ -33,12 +34,14 @@ export function ChatsSidebar({
   onNew,
   onSelect,
   onRemove,
+  onRename,
   project,
   otherProjects,
   switching,
   onSwitchProject,
   onOpenFolder,
   onCreateProject,
+  onRenameProject,
 }: {
   chats: Chat[];
   activeId: string;
@@ -49,6 +52,7 @@ export function ChatsSidebar({
   onNew: () => void;
   onSelect: (chat: Chat) => void;
   onRemove: (chat: Chat) => void;
+  onRename: (chat: Chat, title: string) => void;
   project: string | null;
   otherProjects: ProjectItem[];
   switching: boolean;
@@ -56,9 +60,11 @@ export function ChatsSidebar({
   onSwitchProject: (path: string, chatId?: string) => void;
   onOpenFolder: () => void;
   onCreateProject: (name: string) => void;
+  onRenameProject: (name: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [openProj, setOpenProj] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
 
   const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -121,6 +127,7 @@ export function ChatsSidebar({
           onSwitch={(p) => onSwitchProject(p)}
           onOpenFolder={onOpenFolder}
           onCreate={onCreateProject}
+          onRename={onRenameProject}
         />
         <button className="cc-icon-btn" onClick={onToggle} title="Plegar chats" aria-label="Plegar chats">
           <Icon name="panel" />
@@ -156,9 +163,30 @@ export function ChatsSidebar({
                   tabIndex={0}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") onSelect(c);
+                    if (e.key === "F2") setEditing(c.id);
                   }}
                 >
-                  <div className="cc-chat-item-t">{c.title}</div>
+                  {editing === c.id ? (
+                    <InlineRename
+                      value={c.title}
+                      label="Nombre del chat"
+                      onDone={(t) => {
+                        setEditing(null);
+                        if (t) onRename(c, t);
+                      }}
+                    />
+                  ) : (
+                    <div
+                      className="cc-chat-item-t"
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setEditing(c.id);
+                      }}
+                      title="Doble clic para renombrar"
+                    >
+                      {c.title}
+                    </div>
+                  )}
                   <div className="cc-chat-item-m">
                     <span className="cc-minis">
                       {who.map((n) => (
@@ -171,6 +199,17 @@ export function ChatsSidebar({
                     {c.endMs == null && <span className="cc-live" title="Chat abierto" />}
                     <time>{stampLabel(c.createdMs)}</time>
                   </div>
+                  <button
+                    className="cc-chat-del cc-chat-ren"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditing(c.id);
+                    }}
+                    title="Renombrar (F2)"
+                    aria-label="Renombrar chat"
+                  >
+                    <Icon name="pencil" size={12} />
+                  </button>
                   <button
                     className="cc-chat-del"
                     onClick={(e) => {
