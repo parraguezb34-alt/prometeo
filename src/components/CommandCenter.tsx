@@ -1786,6 +1786,7 @@ export function CommandCenter() {
     return () => window.clearInterval(id);
   }, [hasOpenCode]);
 
+  const [usageScreens, setUsageScreens] = useState<Record<string, string>>({});
   /** Antigravity solo lo dice con /usage: se le pide, se lee de su pantalla y se cierra el panel. */
   const readUsage = async (agent: string) => {
     const p = panelForAgent(getLayout().panels, agent);
@@ -1800,8 +1801,11 @@ export function CommandCenter() {
     const sid = p.sessionId;
     await termWrite(sid, "/usage\r").catch(() => {});
     await new Promise((r) => window.setTimeout(r, 2500));
-    const windows = parseUsagePanel(readScreen(sid));
+    const screen = readScreen(sid);
+    const windows = parseUsagePanel(screen);
     await termWrite(sid, "\x1b").catch(() => {});
+    // Lo leído tal cual, para comprobarlo en el panel de límites.
+    setUsageScreens((cur) => ({ ...cur, [agent]: (screen ?? []).map((l) => l.trimEnd()).filter(Boolean).join("\n") }));
     if (windows.length === 0) {
       say(`No encontré porcentajes en el /usage de ${agentLabel(agent)}. Míralo en su terminal.`, true);
       return;
@@ -2395,6 +2399,7 @@ export function CommandCenter() {
               .map((a) => a.name)
               .filter((n) => /antigravity|agy/i.test(n) && !!panelForAgent(layout.panels, n)?.sessionId)}
             onRead={(a) => void readUsage(a)}
+            screens={usageScreens}
           />
           <div className="cc-modes">
             <button
@@ -2654,6 +2659,8 @@ export function CommandCenter() {
           usage={state?.usage}
           inbox={state?.inbox}
           onUsage={() => openSettings("usage")}
+          limits={state?.limits}
+          onReadUsage={(n) => void readUsage(n)}
         />
       )}
 

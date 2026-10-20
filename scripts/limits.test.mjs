@@ -49,6 +49,31 @@ test("panel de /usage: usado y restante, con reinicio", () => {
   assert.equal(w[1].resets_at, NOW + 4 * 86400 * 1000);
 });
 
+test("panel con barra entre corchetes y nombre arriba; el panel dice lo que queda", () => {
+  const w = parseUsagePanel(
+    [
+      "Model quota (remaining)",
+      "Gemini 3.8 Flash",
+      "[████████░░] 86%",
+      "Resets in 3d",
+      "Gemini 3.1 Pro",
+      "[██████████] 100%",
+      "Claude Sonnet",
+      "[██████████] 100%",
+    ],
+    NOW,
+  );
+  assert.deepEqual(
+    w.map((x) => [x.label, x.used_pct]),
+    [
+      ["Gemini 3.8 Flash", 14],
+      ["Gemini 3.1 Pro", 0],
+      ["Claude Sonnet", 0],
+    ],
+  );
+  assert.equal(w[0].resets_at, NOW + 3 * 86400 * 1000);
+});
+
 test("sin porcentajes no hay ventanas", () => {
   assert.deepEqual(parseUsagePanel(["> hola", "nada que ver"], NOW), []);
   assert.deepEqual(parseUsagePanel(null, NOW), []);

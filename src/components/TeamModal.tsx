@@ -6,6 +6,8 @@ import type { AgentPref } from "../lib/agentPrefs";
 import { confirmChoice } from "../lib/pty";
 import { ctxLevel, ctxOf, fmtTokens, shortModel } from "./AgentCard";
 import { Icon } from "./Icon";
+import { fmtReset, level, worst } from "../lib/limits";
+import type { AgentLimits } from "../lib/limits";
 
 /** work = con tarea · idle = libre · blocked = espera tu respuesta · login = su terminal pide iniciar sesión · starting = terminal abierta, aún sin conectar · off = sin sesión */
 export type AgentState = "work" | "idle" | "blocked" | "login" | "starting" | "off";
@@ -95,6 +97,48 @@ export function TeamStrip({
   );
 }
 
+/** Segunda barra de la tarjeta: cuánto lleva del límite de uso de su plan (la ventana más llena). */
+function UsageBar({ name, limits, onRead }: { name: string; limits?: AgentLimits; onRead: () => void }) {
+  const w = worst(limits);
+  const others = (limits?.windows ?? []).filter((x) => x !== w);
+  const canRead = /antigravity|agy/i.test(name);
+  const empty = /claude/i.test(name)
+    ? "llega tras su primera respuesta"
+    : /opencode/i.test(name)
+      ? "sin límite (modelos gratis)"
+      : canRead
+        ? "aún sin leer"
+        : "no disponible";
+  return (
+    <div className="cc-ctxbig cc-usebig" data-lvl={w ? (level(w.used_pct) === "crit" ? "err" : level(w.used_pct)) : "none"}>
+      <div className="cc-ctxbig-row">
+        <span>
+          Uso{w ? ` · ${w.label}` : ""}
+          {canRead && (
+            <button className="cc-use-read" onClick={onRead} title="Leer su /usage ahora" aria-label="Leer su límite">
+              <Icon name="refresh" size={11} />
+            </button>
+          )}
+        </span>
+        <b>{w ? `${Math.round(w.used_pct)}%${w.resets_at ? ` · ${fmtReset(w.resets_at)}` : ""}` : empty}</b>
+      </div>
+      <div className="cc-ctxbar">
+        <i style={{ width: `${w ? Math.min(100, w.used_pct) : 0}%` }} />
+      </div>
+      {others.length > 0 && (
+        <div className="cc-use-more">
+          {others.map((x) => (
+            <span key={x.key} data-lvl={level(x.used_pct)}>
+              {x.label} {Math.round(x.used_pct)}%
+            </span>
+          ))}
+          {!limits?.exact && <span>{limits?.note || "estimado"}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TeamModal({
   agents,
   states,
@@ -123,6 +167,8 @@ export function TeamModal({
   usage,
   inbox,
   onUsage,
+  limits,
+  onReadUsage,
 }: {
   agents: TeamAgent[];
   states: Map<string, AgentState>;
@@ -156,6 +202,10 @@ export function TeamModal({
   usage?: Record<string, AgentUsage>;
   inbox?: Record<string, InboxInfo>;
   onUsage: () => void;
+  /** Límites de uso de cada agente (sesión de 5 h, semana…). */
+  limits?: Record<string, AgentLimits>;
+  /** Lee el límite de un agente que solo lo dice con /usage (Antigravity). */
+  onReadUsage: (name: string) => void;
 }) {
   const online = agents.filter((a) => a.online).length;
   const teamUsage = sumUsage(Object.keys(usage ?? {}).map((n) => usageOf(usage, n)!));
@@ -376,6 +426,7 @@ export function TeamModal({
                     </div>
                   </div>
                   )}
+                  {a.online && <UsageBar name={name} limits={limits?.[name]} onRead={() => onReadUsage(name)} />}
 
                   {spent && spent.turns > 0 && (
                     <button

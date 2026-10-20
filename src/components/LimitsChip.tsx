@@ -21,11 +21,14 @@ export function LimitsChip({
   limits,
   canRead,
   onRead,
+  screens,
 }: {
   limits: Record<string, AgentLimits> | undefined;
   /** Agentes cuyo límite se puede leer de su pantalla ahora (Antigravity con /usage). */
   canRead: string[];
   onRead: (agent: string) => void;
+  /** Lo que se leyó de la pantalla de cada agente con /usage (para comprobarlo). */
+  screens?: Record<string, string>;
 }) {
   const [open, setOpen] = useState(false);
   const [, tick] = useState(0);
@@ -105,6 +108,12 @@ export function LimitsChip({
                     {w.resets_at ? <small>Se reinicia {fmtReset(w.resets_at)}</small> : null}
                   </div>
                 ))}
+                {screens?.[agent] && (
+                  <details className="lm-raw">
+                    <summary>Ver lo que se leyó de su pantalla</summary>
+                    <pre>{screens[agent]}</pre>
+                  </details>
+                )}
               </section>
             ))}
             {readable.map((agent) => (

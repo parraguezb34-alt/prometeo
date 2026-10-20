@@ -63,22 +63,43 @@ function parseIn(text: string, now: number): number | null {
  * Lee el panel de `/usage` de un CLI (Antigravity) de su pantalla: cada línea con un «NN%» es
  * una ventana. Si dice «remaining/left/restante», el número es lo que queda.
  */
+const PCT = /(\d{1,3}(?:[.,]\d+)?)\s*%/;
+const REMAIN = /remaining|left|restante|disponible|available|quota remaining|cuota restante/i;
+const USED = /\bused\b|usado|consumed|consumido/i;
+const hasWords = (s: string) => /[a-záéíóúñ]{2,}/i.test(s);
+const tidy = (s: string) =>
+  s
+    .replace(/[[\]()]/g, " ")
+    .replace(/(used|usado|remaining|left|restante|quota|cuota)\s*:?\s*$/i, "")
+    .replace(/[:\-–·•]+\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
 export function parseUsagePanel(lines: string[] | null, now = Date.now()): LimitWindow[] {
   if (!lines) return [];
   const rows = lines.map(clean).filter(Boolean);
+  // Si el panel habla de lo que queda (y no de lo usado), todos sus números son «lo que queda».
+  const panelRemains = rows.some((r) => REMAIN.test(r)) && !rows.some((r) => USED.test(r));
   const out: LimitWindow[] = [];
   rows.forEach((row, i) => {
-    const m = /(\d{1,3}(?:[.,]\d+)?)\s*%/.exec(row);
+    const m = PCT.exec(row);
     if (!m) return;
     let pct = Number(m[1].replace(",", "."));
     if (!(pct >= 0 && pct <= 100)) return;
-    if (/remaining|left|restante|disponible|available/i.test(row)) pct = 100 - pct;
-    let label = row
-      .slice(0, m.index)
-      .replace(/(used|usado|remaining|left|restante|quota|cuota)\s*:?\s*$/i, "")
-      .replace(/[:\-–·•]+\s*$/, "")
-      .trim();
-    if (!label) label = (rows[i - 1] ?? "").replace(/[:\-–·•]+\s*$/, "").trim();
+    const remains = REMAIN.test(row) || (!USED.test(row) && panelRemains);
+    if (remains) pct = 100 - pct;
+    // El nombre va delante del número o, si ahí solo hay la barra, en la línea de arriba.
+    let label = tidy(row.slice(0, m.index));
+    if (!hasWords(label)) {
+      for (let j = i - 1; j >= Math.max(0, i - 3); j--) {
+        if (PCT.test(rows[j])) break;
+        if (hasWords(rows[j]) && !/reset|restabl/i.test(rows[j])) {
+          label = tidy(rows[j]);
+          break;
+        }
+      }
+    }
+    if (!hasWords(label)) label = "";
     label = label.slice(0, 40) || `Límite ${out.length + 1}`;
     out.push({
       key: label.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24) || `w${out.length}`,
