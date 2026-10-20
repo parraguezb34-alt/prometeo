@@ -1098,10 +1098,113 @@ pub fn default_terminal_dir() -> Option<String> {
 }
 
 pub fn load_persisted() -> PersistedState {
-    std::fs::read_to_string(state_file())
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+    let (state, warning) = load_state_from(&state_file());
+    if let Some((message, detail)) = warning {
+        crate::errlog::log("hub", &message, &detail);
+    }
+    state
+}
+
+/// Copia de la última versión buena del estado, al lado del principal (`team-state.json.bak`).
+fn backup_path(main: &std::path::Path) -> std::path::PathBuf {
+    let mut name = main.file_name().unwrap_or_default().to_os_string();
+    name.push(".bak");
+    main.with_file_name(name)
+}
+
+/// Lee un archivo de estado: `Ok(None)` si no existe, `Err` si existe pero no sirve.
+fn read_state(path: &std::path::Path) -> Result<Option<PersistedState>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => serde_json::from_str(&raw).map(Some).map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Aparta un archivo de estado roto (`team-state.corrupt-<ts>.json`) para que nadie lo pise.
+fn set_aside(path: &std::path::Path, ts: u64) -> String {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let (base, ext) = match name.strip_suffix(".json.bak") {
+        Some(b) => (b.to_string(), "bak.json"),
+        None => (name.trim_end_matches(".json").to_string(), "json"),
+    };
+    let dest = path.with_file_name(format!("{base}.corrupt-{ts}.{ext}"));
+    match std::fs::rename(path, &dest) {
+        Ok(()) => format!("apartado en {}", dest.display()),
+        Err(e) => format!("no se pudo apartar ({e})"),
+    }
+}
+
+/// Carga el estado de `main`, con `.bak` de respaldo. Un archivo roto nunca se deja donde la
+/// siguiente escritura lo pisaría: se aparta. Devuelve además el aviso para el registro de
+/// errores (mensaje, detalle) si hubo que recuperar o apartar algo.
+fn load_state_from(main: &std::path::Path) -> (PersistedState, Option<(String, String)>) {
+    let bak = backup_path(main);
+    let main_err = match read_state(main) {
+        Ok(Some(state)) => return (state, None),
+        Ok(None) => None,
+        Err(e) => Some(e),
+    };
+    let ts = now_ms();
+    let bak_err = match read_state(&bak) {
+        Ok(Some(state)) => {
+            let detail = match main_err {
+                Some(e) => format!("{}: {e}; {}", main.display(), set_aside(main, ts)),
+                None => format!("{} no existe", main.display()),
+            };
+            let msg = "El estado del equipo estaba dañado; se recuperó de la copia .bak";
+            return (state, Some((msg.into(), detail)));
+        }
+        Ok(None) => None,
+        Err(e) => Some(e),
+    };
+    let mut detail = Vec::new();
+    if let Some(e) = main_err {
+        detail.push(format!("{}: {e}; {}", main.display(), set_aside(main, ts)));
+    }
+    if let Some(e) = bak_err {
+        detail.push(format!("{}: {e}; {}", bak.display(), set_aside(&bak, ts)));
+    }
+    if detail.is_empty() {
+        return (PersistedState::default(), None); // primera vez: no hay nada que cargar
+    }
+    let msg = "El estado del equipo no se pudo leer; se empieza de cero y el archivo roto se ha apartado";
+    (PersistedState::default(), Some((msg.into(), detail.join("\n"))))
+}
+
+/// Escribe el estado sin dejarlo nunca a medias: primero a un temporal en la misma carpeta,
+/// luego copia el actual a `.bak` y renombra el temporal encima. En Windows `rename` ya
+/// reemplaza un destino existente, pero puede fallar un momento si otro proceso (antivirus,
+/// indexador) lo tiene abierto, así que se reintenta.
+fn write_state_to(main: &std::path::Path, raw: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut name = main.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".tmp{}", std::process::id()));
+    let tmp = main.with_file_name(name);
+    let written = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(raw.as_bytes())?;
+        f.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if main.exists() {
+        let _ = std::fs::copy(main, backup_path(main));
+    }
+    let mut result = std::fs::rename(&tmp, main);
+    for _ in 0..5 {
+        if result.is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        result = std::fs::rename(&tmp, main);
+    }
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 pub fn persist(inner: &HubInner) {
@@ -1127,7 +1230,9 @@ pub fn persist(inner: &HubInner) {
         limits: inner.limits.clone(),
     };
     if let Ok(raw) = serde_json::to_string(&state) {
-        let _ = std::fs::write(state_file(), raw);
+        if let Err(e) = write_state_to(&state_file(), &raw) {
+            crate::errlog::log("hub", "No se pudo guardar el estado del equipo", &e.to_string());
+        }
     }
 }
 
@@ -2549,5 +2654,98 @@ mod inbox_tests {
         assert!(!switch_project(&mut h, Some("C:\\Users\\yo\\juego".into())));
         assert!(switch_project(&mut h, Some("C:\\Users\\yo\\revisiones".into())));
         assert_eq!(h.tasks[0].title, "Revisar");
+    }
+}
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("lienzo-state-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn state(seq: u64) -> String {
+        let s = PersistedState { leader: Some("claude".into()), seq, ..Default::default() };
+        serde_json::to_string(&s).unwrap()
+    }
+
+    fn corrupt_files(d: &Path) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(d)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.to_string_lossy().contains(".corrupt-"))
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn writes_atomically_and_keeps_backup() {
+        let d = dir("write");
+        let main = d.join("team-state.json");
+        let (s, warn) = load_state_from(&main);
+        assert!(s.leader.is_none() && warn.is_none(), "la primera vez no hay nada ni se avisa");
+        write_state_to(&main, &state(1)).unwrap();
+        write_state_to(&main, &state(2)).unwrap();
+        assert_eq!(load_state_from(&main).0.seq, 2);
+        assert_eq!(read_state(&backup_path(&main)).unwrap().unwrap().seq, 1);
+        let names: Vec<String> =
+            std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into()).collect();
+        assert!(names.iter().all(|n| !n.contains(".tmp")), "no quedan temporales: {names:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn truncated_state_recovers_from_backup() {
+        let d = dir("trunc");
+        let main = d.join("team-state.json");
+        write_state_to(&main, &state(1)).unwrap();
+        write_state_to(&main, &state(2)).unwrap();
+        // Cierre a mitad de escritura: el principal se queda a medias.
+        let raw = std::fs::read_to_string(&main).unwrap();
+        std::fs::write(&main, &raw[..raw.len() / 2]).unwrap();
+
+        let (s, warn) = load_state_from(&main);
+        assert_eq!(s.seq, 1);
+        assert_eq!(s.leader.as_deref(), Some("claude"));
+        assert!(warn.unwrap().0.contains(".bak"));
+        // El roto se aparta, así que la siguiente escritura no copia basura al .bak.
+        assert!(!main.exists());
+        assert_eq!(corrupt_files(&d).len(), 1);
+        write_state_to(&main, &state(3)).unwrap();
+        assert_eq!(load_state_from(&main).0.seq, 3);
+        assert_eq!(read_state(&backup_path(&main)).unwrap().unwrap().seq, 1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn both_broken_sets_them_aside_without_losing_them() {
+        let d = dir("both");
+        let main = d.join("team-state.json");
+        let broken_main = r#"{"tasks":[{"id":1,"title":"importante""#;
+        std::fs::write(&main, broken_main).unwrap();
+        std::fs::write(backup_path(&main), "").unwrap();
+
+        let (s, warn) = load_state_from(&main);
+        assert!(s.tasks.is_empty() && s.leader.is_none());
+        let (msg, detail) = warn.unwrap();
+        assert!(msg.contains("apartado"), "{msg}");
+        assert!(detail.contains("corrupt-"), "{detail}");
+        assert!(!main.exists() && !backup_path(&main).exists());
+
+        // La siguiente escritura crea un estado nuevo pero no toca lo apartado.
+        write_state_to(&main, &state(7)).unwrap();
+        let aside = corrupt_files(&d);
+        assert_eq!(aside.len(), 2, "{aside:?}");
+        let kept = aside.iter().find(|p| !p.to_string_lossy().ends_with(".bak.json")).unwrap();
+        assert!(kept.file_name().unwrap().to_string_lossy().starts_with("team-state.corrupt-"));
+        assert_eq!(std::fs::read_to_string(kept).unwrap(), broken_main);
+        assert_eq!(load_state_from(&main).0.seq, 7);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
