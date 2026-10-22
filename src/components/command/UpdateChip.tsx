@@ -5,18 +5,22 @@ import type { UpdateInfo } from "../../lib/update";
 import { Icon } from "../Icon";
 
 /**
- * «Actualizar» arriba a la derecha: aparece cuando hay una versión compilada nueva (se mira cada
- * pocos minutos). Al aceptar, Prometeo se cierra, se instala solo y se vuelve a abrir.
+ * «Actualizar» arriba a la derecha: aparece cuando hay una versión compilada nueva. Al aceptar, Prometeo se cierra, se instala solo y se vuelve a abrir.
  */
 export function UpdateChip({ working, onError }: { working: number; onError: (text: string) => void }) {
   const [upd, setUpd] = useState<UpdateInfo | null>(null);
   const [updAsk, setUpdAsk] = useState(false);
   const [updBusy, setUpdBusy] = useState(false);
+  // Se mira al abrir, cada 45 s y al volver a la ventana (es solo comparar fechas de archivos).
   useEffect(() => {
     const check = () => void updateCheck().then(setUpd).catch(() => {});
     check();
-    const id = window.setInterval(check, 3 * 60_000);
-    return () => window.clearInterval(id);
+    const id = window.setInterval(check, 45_000);
+    window.addEventListener("focus", check);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", check);
+    };
   }, []);
   const applyUpdate = async () => {
     setUpdBusy(true);

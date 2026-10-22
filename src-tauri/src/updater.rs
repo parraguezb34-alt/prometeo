@@ -176,19 +176,38 @@ fn ps_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-/// El script que actualiza: espera a que Prometeo se cierre, cierra los puentes MCP de esta
-/// instalación (si no, el instalador no puede reemplazarlos), instala en silencio y vuelve a abrir.
-pub fn script(pid: u32, setup: &str, exe: &str, install_dir: &str) -> String {
+/// El script que actualiza: espera a que Prometeo se cierre, cierra lo que quede de Prometeo (la
+/// app y sus puentes MCP, estén donde estén: si no, el instalador no puede reemplazarlos), instala en
+/// silencio, comprueba que quedó la versión `want` (si no, lo vuelve a intentar una vez) y lo abre de
+/// nuevo. Cada paso queda en `%APPDATA%\lienzo\actualizar.log`, y un fallo, en Ajustes › Errores.
+pub fn script(pid: u32, setup: &str, exe: &str, want: &str) -> String {
     format!(
         "$ErrorActionPreference = 'SilentlyContinue'\r\n\
+         $log = Join-Path $env:APPDATA 'lienzo\\actualizar.log'\r\n\
+         function Say($m) {{ Add-Content -Path $log -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '  ' + $m) -Encoding UTF8 }}\r\n\
+         function Installed {{ (Get-Item -LiteralPath {exe}).VersionInfo.ProductVersion }}\r\n\
+         function CloseAll {{ Get-Process lienzo, lienzo-mcp -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '*\\Prometeo\\*' }} | Stop-Process -Force }}\r\n\
+         Say ('Actualizar a ' + {want} + ' desde ' + (Installed) + ' con ' + {setup})\r\n\
          Wait-Process -Id {pid} -Timeout 30\r\n\
-         Get-Process lienzo -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq {exe} }} | Stop-Process -Force\r\n\
-         Get-Process lienzo-mcp -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like ({dir} + '\\*') }} | Stop-Process -Force\r\n\
+         CloseAll\r\n\
          Start-Sleep -Milliseconds 800\r\n\
-         $p = Start-Process -FilePath {setup} -ArgumentList '/S' -Wait -PassThru\r\n\
+         $ok = $false\r\n\
+         foreach ($n in 1..2) {{\r\n\
+         \x20 $p = Start-Process -FilePath {setup} -ArgumentList '/S' -Wait -PassThru\r\n\
+         \x20 $now = Installed\r\n\
+         \x20 Say ('Intento ' + $n + ': el instalador terminó con código ' + $p.ExitCode + '; instalada ' + $now)\r\n\
+         \x20 if ($p.ExitCode -eq 0 -and ({want} -eq '' -or $now -eq {want})) {{ $ok = $true; break }}\r\n\
+         \x20 CloseAll\r\n\
+         \x20 Start-Sleep -Seconds 2\r\n\
+         }}\r\n\
+         if (-not $ok) {{\r\n\
+         \x20 $e = @{{ ts_ms = [DateTimeOffset]::Now.ToUnixTimeMilliseconds(); source = 'update'; message = 'La actualización no se instaló'; detail = ('Sigue la ' + (Installed) + '. Mira ' + $log) }} | ConvertTo-Json -Compress\r\n\
+         \x20 Add-Content -Path (Join-Path $env:APPDATA 'lienzo\\errores.jsonl') -Value $e -Encoding UTF8\r\n\
+         }}\r\n\
+         Say ('Listo: ' + $(if ($ok) {{ 'instalada' }} else {{ 'NO se instaló' }}) + '; abro Prometeo')\r\n\
          Start-Process -FilePath {exe}\r\n",
         exe = ps_quote(exe),
-        dir = ps_quote(install_dir),
+        want = ps_quote(want),
         setup = ps_quote(setup),
     )
 }
@@ -202,10 +221,10 @@ pub async fn update_apply(app: tauri::AppHandle) -> Result<(), String> {
     if !info.available {
         return Err(if info.reason.is_empty() { "No hay ninguna versión nueva.".into() } else { info.reason });
     }
-    let dir = cur.parent().ok_or("no sé dónde está instalado Prometeo")?;
-    let body = script(std::process::id(), &info.setup, &cur.display().to_string(), &dir.display().to_string());
+    let body = script(std::process::id(), &info.setup, &cur.display().to_string(), &info.version);
     let path = std::env::temp_dir().join(format!("prometeo-actualizar-{}.ps1", std::process::id()));
-    std::fs::write(&path, body).map_err(|e| format!("No se pudo preparar la actualización: {e}"))?;
+    // Con BOM: PowerShell 5.1 lee como ANSI un .ps1 sin él y estropea las tildes.
+    std::fs::write(&path, format!("\u{feff}{body}")).map_err(|e| format!("No se pudo preparar la actualización: {e}"))?;
     // Sin DETACHED_PROCESS: PowerShell sin consola se cierra sin hacer nada. Con CREATE_NO_WINDOW
     // tiene consola (oculta) y sigue vivo cuando Prometeo se cierra.
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
@@ -272,12 +291,16 @@ mod tests {
 
     #[test]
     fn el_script_espera_instala_y_reabre() {
-        let s = script(42, r"C:\src\Prometeo_1.0.0_x64-setup.exe", r"C:\Users\x\AppData\Local\Prometeo\lienzo.exe", r"C:\Users\x\AppData\Local\Prometeo");
+        let s = script(42, r"C:\src\Prometeo_1.0.104_x64-setup.exe", r"C:\Users\x\AppData\Local\Prometeo\lienzo.exe", "1.0.104");
         assert!(s.contains("Wait-Process -Id 42"));
-        assert!(s.contains(r"-FilePath 'C:\src\Prometeo_1.0.0_x64-setup.exe' -ArgumentList '/S' -Wait"));
+        assert!(s.contains(r"-FilePath 'C:\src\Prometeo_1.0.104_x64-setup.exe' -ArgumentList '/S' -Wait"));
         assert!(s.contains(r"Start-Process -FilePath 'C:\Users\x\AppData\Local\Prometeo\lienzo.exe'"));
-        assert!(s.contains(r"-like ('C:\Users\x\AppData\Local\Prometeo' + '\*')"));
+        // Cierra lo de Prometeo esté donde esté, comprueba la versión y reintenta.
+        assert!(s.contains(r"$_.Path -like '*\Prometeo\*'"));
+        assert!(s.contains("$now -eq '1.0.104'"));
+        assert!(s.contains("foreach ($n in 1..2)"));
+        assert!(s.contains("actualizar.log"));
+        assert!(!s.contains(r"\x20"), "sin escapes sueltos");
         assert_eq!(ps_quote("it's"), "'it''s'");
     }
 }
-
