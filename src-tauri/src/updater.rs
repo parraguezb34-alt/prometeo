@@ -47,14 +47,30 @@ fn newest_setup(nsis: &Path) -> Option<PathBuf> {
         .max_by_key(|p| mtime_ms(p))
 }
 
-/// ¿Dos ejecutables son el mismo? (primero el tamaño; si coincide, el contenido).
+/// Al empaquetar, Tauri marca dentro del ejecutable con qué instalador va
+/// (`__TAURI_BUNDLE_TYPE_VAR_UNK` → `…_NSS`): esos 3 bytes no cuentan al comparar.
+const BUNDLE_MARK: &[u8] = b"__TAURI_BUNDLE_TYPE_VAR_";
+
+fn unmark(mut b: Vec<u8>) -> Vec<u8> {
+    let mut i = 0;
+    while let Some(at) = b[i..].windows(BUNDLE_MARK.len()).position(|w| w == BUNDLE_MARK) {
+        let end = i + at + BUNDLE_MARK.len();
+        for x in b.iter_mut().skip(end).take(3) {
+            *x = b'_';
+        }
+        i = end;
+    }
+    b
+}
+
+/// ¿Dos ejecutables son el mismo programa? (primero el tamaño; si coincide, el contenido).
 fn same_file(a: &Path, b: &Path) -> bool {
     let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else { return false };
     if ma.len() != mb.len() {
         return false;
     }
     match (std::fs::read(a), std::fs::read(b)) {
-        (Ok(x), Ok(y)) => x == y,
+        (Ok(x), Ok(y)) => x == y || unmark(x) == unmark(y),
         _ => false,
     }
 }
@@ -138,13 +154,14 @@ pub async fn update_apply(app: tauri::AppHandle) -> Result<(), String> {
     let body = script(std::process::id(), &info.setup, &cur.display().to_string(), &dir.display().to_string());
     let path = std::env::temp_dir().join(format!("prometeo-actualizar-{}.ps1", std::process::id()));
     std::fs::write(&path, body).map_err(|e| format!("No se pudo preparar la actualización: {e}"))?;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    // Sin DETACHED_PROCESS: PowerShell sin consola se cierra sin hacer nada. Con CREATE_NO_WINDOW
+    // tiene consola (oculta) y sigue vivo cuando Prometeo se cierra.
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
         .arg(&path)
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| format!("No se pudo lanzar la actualización: {e}"))?;
     crate::errlog::log("update", "Actualizando Prometeo", &info.setup);
@@ -168,18 +185,18 @@ mod tests {
         let inst = base.join("inst");
         std::fs::create_dir_all(&inst).unwrap();
         let cur = inst.join("lienzo.exe");
-        std::fs::write(&cur, b"version-1").unwrap();
+        std::fs::write(&cur, b"version-1 __TAURI_BUNDLE_TYPE_VAR_NSS").unwrap();
 
         // Sin instalador compilado.
         assert!(!check_in(&src, &cur).available);
-        std::fs::write(src.join("target/release/lienzo.exe"), b"version-1").unwrap();
+        std::fs::write(src.join("target/release/lienzo.exe"), b"version-1 __TAURI_BUNDLE_TYPE_VAR_UNK").unwrap();
         std::fs::write(nsis.join("Prometeo_1.0.0_x64-setup.exe"), b"setup-1").unwrap();
-        // El mismo programa que corre: nada que hacer.
+        // El mismo programa que corre (solo cambia la marca del instalador): nada que hacer.
         let i = check_in(&src, &cur);
         assert!(!i.available, "{}", i.reason);
         // Compilado otro distinto (y otro instalador): hay versión nueva.
         std::thread::sleep(std::time::Duration::from_millis(30));
-        std::fs::write(src.join("target/release/lienzo.exe"), b"version-2").unwrap();
+        std::fs::write(src.join("target/release/lienzo.exe"), b"version-2 __TAURI_BUNDLE_TYPE_VAR_UNK").unwrap();
         std::fs::write(nsis.join("Prometeo_1.0.0_x64-setup.exe"), b"setup-2!").unwrap();
         let i = check_in(&src, &cur);
         assert!(i.available);
@@ -199,3 +216,4 @@ mod tests {
         assert_eq!(ps_quote("it's"), "'it''s'");
     }
 }
+
