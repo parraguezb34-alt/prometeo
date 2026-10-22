@@ -4,7 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 // propias herramientas web. Aquí: llamadas al backend, la fase de cada investigación y la
 // cobertura de fuentes (para no dar por bueno un informe con una sola fuente secundaria).
 
-export type ResearchMode = "rapida" | "profunda";
+export type ResearchMode = "rapida" | "profunda" | "exhaustiva";
+
+export const MODE_LABEL: Record<ResearchMode, string> = { rapida: "Rápida", profunda: "Profunda", exhaustiva: "Exhaustiva" };
 export type ResearchFile = { name: string; size: number; mtime_ms: number };
 export type Research = {
   id: string;
@@ -37,6 +39,7 @@ const DONE: Record<string, string> = {
   plan: "Plan listo",
   parte: "Partes investigadas",
   verificar: "Fuentes verificadas",
+  redactar: "Capítulos escritos",
   informe: "Informe listo",
 };
 
@@ -45,6 +48,7 @@ const LABEL: Record<string, string> = {
   plan: "Planeando",
   parte: "Investigando",
   verificar: "Verificando fuentes",
+  redactar: "Escribiendo capítulos",
   informe: "Escribiendo el informe",
 };
 
@@ -142,10 +146,22 @@ export function bestFile(r: Research): string | null {
   return names.find((n) => n.startsWith("hallazgos-")) ?? null;
 }
 
-/** Los archivos en el orden en que se hacen: plan, hallazgos, fuentes, verificación, informe. */
+/** Los archivos en el orden en que se hacen: plan, hallazgos, fuentes, verificación, capítulos, informe. */
 export function fileOrder(names: string[]): string[] {
   const rank = (n: string) =>
-    n === "plan.md" ? 0 : n.startsWith("hallazgos-") ? 1 : n === "fuentes.md" ? 2 : n === "verificacion.md" ? 3 : n === "informe.md" ? 4 : 5;
+    n === "plan.md"
+      ? 0
+      : n.startsWith("hallazgos-")
+        ? 1
+        : n === "fuentes.md"
+          ? 2
+          : n === "verificacion.md"
+            ? 3
+            : n.startsWith("capitulo-")
+              ? 4
+              : n === "informe.md"
+                ? 5
+                : 6;
   return names.slice().sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
@@ -158,5 +174,7 @@ const FILE_ES: Record<string, string> = {
 export function fileLabel(name: string): string {
   if (FILE_ES[name]) return FILE_ES[name];
   const m = /^hallazgos-(.+)\.md$/.exec(name);
-  return m ? `Hallazgos · ${m[1]}` : name.replace(/\.md$/, "");
+  if (m) return `Hallazgos · ${m[1]}`;
+  const c = /^capitulo-(.+)\.md$/.exec(name);
+  return c ? `Capítulo · ${c[1]}` : name.replace(/\.md$/, "");
 }

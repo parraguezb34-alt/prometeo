@@ -77,4 +77,21 @@ test("qué archivo mostrar y cómo se llama", () => {
   assert.deepEqual(fileOrder(["informe.md", "verificacion.md", "plan.md", "hallazgos-b.md", "hallazgos-a.md"]), ["plan.md", "hallazgos-a.md", "hallazgos-b.md", "verificacion.md", "informe.md"]);
 });
 
+test("exhaustiva: capítulos como fase y archivos en su sitio", () => {
+  const ex = { ...deep, mode: "exhaustiva", tasks: [1, 2, 3, 4, 5, 6, 7], roles: ["plan", "parte", "parte", "verificar", "redactar", "redactar", "informe"], agents: ["claude", "opencode", "antigravity", "opencode", "opencode", "antigravity", "claude"] };
+  const ph = phasesOf(ex, [
+    { id: 1, status: "done" },
+    { id: 2, status: "done" },
+    { id: 3, status: "done" },
+    { id: 4, status: "done" },
+    { id: 5, status: "done" },
+    { id: 6, status: "claimed" },
+    { id: 7, status: "open" },
+  ]);
+  assert.deepEqual(ph.map((p) => p.label), ["Plan listo", "Partes investigadas", "Fuentes verificadas", "Escribiendo capítulos 1/2", "Escribiendo el informe"]);
+  assert.equal(ph[3].state, "now");
+  assert.equal(fileLabel("capitulo-opencode.md"), "Capítulo · opencode");
+  assert.deepEqual(fileOrder(["informe.md", "capitulo-b.md", "fuentes.md", "verificacion.md", "plan.md", "hallazgos-a.md"]), ["plan.md", "hallazgos-a.md", "fuentes.md", "verificacion.md", "capitulo-b.md", "informe.md"]);
+});
+
 console.log(`${n} pruebas de investigación OK`);

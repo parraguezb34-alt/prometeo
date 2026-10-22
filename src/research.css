@@ -53,7 +53,7 @@
 
 .rs-seg {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 2px;
   padding: 2px;
   background: var(--raised);
@@ -183,6 +183,11 @@
   background: var(--raised);
   border-radius: 5px;
   padding: 1px 6px;
+}
+
+.rs-chip[data-mode="exhaustiva"] {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .rs-chip[data-mode="profunda"] {

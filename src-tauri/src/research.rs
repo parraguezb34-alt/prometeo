@@ -109,6 +109,9 @@ pub fn plan(dir: &str, question: &str, mode: &str, leader: &str, workers: &[Stri
     let q = question.trim();
     let short: String = q.chars().take(70).collect();
     let short = if q.chars().count() > 70 { format!("{short}…") } else { short };
+    if mode == "exhaustiva" {
+        return exhaustive(dir, q, &short, leader, workers);
+    }
     if mode != "profunda" {
         let who = workers.first().cloned().unwrap_or_else(|| leader.to_string());
         let notes = format!(
@@ -129,10 +132,7 @@ pub fn plan(dir: &str, question: &str, mode: &str, leader: &str, workers: &[Stri
     }
 
     // Profunda: el líder planifica y escribe; cada trabajador investiga su parte; otro verifica.
-    let mut team: Vec<String> = workers.iter().filter(|w| !w.eq_ignore_ascii_case(leader)).cloned().collect();
-    if team.is_empty() {
-        team.push(leader.to_string());
-    }
+    let team = team_of(leader, workers);
     let parts = team.len().clamp(2, 4);
     let names = team.join(", ");
     let mut specs = vec![Spec {
@@ -171,8 +171,7 @@ pub fn plan(dir: &str, question: &str, mode: &str, leader: &str, workers: &[Stri
         });
     }
     let part_ids: Vec<usize> = (1..specs.len()).collect();
-    // Revisa alguien que no sea quien escribe el informe (si hay con quién).
-    let verifier = team.iter().find(|w| !w.eq_ignore_ascii_case(leader)).cloned().unwrap_or_else(|| leader.to_string());
+    let verifier = verifier_of(&team, leader);
     specs.push(Spec {
         title: format!("✅ Verificar fuentes: {short}"),
         notes: format!(
@@ -208,6 +207,167 @@ pub fn plan(dir: &str, question: &str, mode: &str, leader: &str, workers: &[Stri
     specs
 }
 
+/// Quienes investigan: los trabajadores que no son el líder (o el líder solo, si no hay nadie más).
+fn team_of(leader: &str, workers: &[String]) -> Vec<String> {
+    let mut team: Vec<String> = workers.iter().filter(|w| !w.eq_ignore_ascii_case(leader)).cloned().collect();
+    if team.is_empty() {
+        team.push(leader.to_string());
+    }
+    team
+}
+
+/// Revisa alguien que no sea quien escribe el informe (si hay con quién).
+fn verifier_of(team: &[String], leader: &str) -> String {
+    team.iter().find(|w| !w.eq_ignore_ascii_case(leader)).cloned().unwrap_or_else(|| leader.to_string())
+}
+
+/// Exhaustiva: como la profunda pero con mucho más margen (rondas, páginas, fuentes) y el informe
+/// escrito por capítulos. Cada agente redacta los de sus partes y el líder los une con
+/// `{{incluir: …}}`, así nadie reescribe miles de palabras ni tiene que caberle todo en el contexto.
+fn exhaustive(dir: &str, q: &str, short: &str, leader: &str, workers: &[String]) -> Vec<Spec> {
+    let team = team_of(leader, workers);
+    let parts = (team.len() * 2).clamp(4, 6);
+    let names = team.join(", ");
+    let long = "Es una tarea larga a propósito: no la cortes por ir rápido. Publica con team_update en qué ronda vas \
+                («ronda 3/10: …»).";
+    let mut specs = vec![Spec {
+        title: format!("🧭 Plan de investigación exhaustiva: {short}"),
+        notes: format!(
+            "Investigación exhaustiva. Pregunta: «{q}»\nCarpeta: {dir}/\n\n\
+             Eres quien la planifica. Como mucho 5 búsquedas para orientarte y escribe {dir}/plan.md:\n\
+             - Qué hay que responder exactamente, para quién y con qué límites (país, fecha, presupuesto…), y qué \
+             contaría como fuente oficial o primaria para este tema.\n\
+             - {parts} partes que no se pisen, cada una con 4-6 preguntas concretas (datos, cifras, fechas, \
+             comparaciones, riesgos, casos reales). Reparte las partes entre: {names}; cada agente al menos una y, si \
+             hay más partes que agentes, alguno lleva dos (cada parte con su título así: «## Parte N — <agente>: <tema>»).\n\
+             - El índice del informe final: un capítulo por parte, en el orden en que se leerán mejor.\n\
+             - Qué no hace falta investigar (para no gastar de más).\n\n\
+             En cuanto lo entregues, cada agente empieza con sus partes.\n{}",
+            done_line(&format!("{dir}/plan.md"))
+        ),
+        assign: leader.to_string(),
+        parents: vec![],
+        role: "plan",
+    }];
+    for w in &team {
+        let file = format!("{dir}/hallazgos-{}.md", slug(w));
+        specs.push(Spec {
+            title: format!("🔎 Investigar a fondo (partes de {w}): {short}"),
+            notes: format!(
+                "Investigación exhaustiva. Pregunta: «{q}»\nCarpeta: {dir}/\n\n\
+                 Lee {dir}/plan.md y haz todas las partes con tu nombre ({w}).\n\
+                 Método por rondas (máximo 10 rondas, máximo 5 páginas leídas por ronda): piensa qué falta → busca → lee \
+                 → anota → decide si sigues. Lee las páginas enteras, no solo el resultado de la búsqueda.\n\
+                 Escribe {file} con, por cada pregunta de tus partes: lo encontrado con detalle (cifras, fechas, versiones, \
+                 precios, ejemplos, matices y en qué se contradicen las fuentes), cada dato con su cita [n], y lo que no se \
+                 pudo confirmar; si comparas opciones, una tabla. Al final la lista «Fuentes». {SOURCE_LINE}\n\
+                 Puerta de evidencia (no termines antes): al menos 12 fuentes distintas en tus partes, 3 o más oficiales o \
+                 primarias, y cada pregunta respondida con 2 fuentes o más (o explicado por qué no se puede). Si no llegas y \
+                 te quedan rondas, haz otra.\n{long}\n\n{SOURCES}\n\n{RULES}\n{}",
+                done_line(&file)
+            ),
+            assign: w.clone(),
+            parents: vec![0],
+            role: "parte",
+        });
+    }
+    let part_ids: Vec<usize> = (1..specs.len()).collect();
+    let verifier = verifier_of(&team, leader);
+    specs.push(Spec {
+        title: format!("✅ Verificar y completar: {short}"),
+        notes: format!(
+            "Investigación exhaustiva. Pregunta: «{q}»\nCarpeta: {dir}/\n\n\
+             Eres quien verifica. Lee {dir}/plan.md y todos los {dir}/hallazgos-*.md y escribe {dir}/verificacion.md:\n\
+             - Las afirmaciones importantes que se contradicen entre partes, y cuál tiene mejor fuente.\n\
+             - Las que solo tienen fuentes secundarias, de comunidad o comerciales: búscales una oficial o primaria.\n\
+             - Las preguntas del plan sin responder y las partes flojas (poco detalle o pocas fuentes): complétalas tú.\n\
+             - Cobertura: cuántas fuentes de cada tipo.\n\
+             Para todo eso tienes hasta 5 rondas de 5 páginas.\n\
+             Escribe además {dir}/fuentes.md: la lista de fuentes unida y sin repetir, numerada de nuevo desde [1]. \
+             {SOURCE_LINE} Es la numeración que usarán los capítulos y el informe.\n{long}\n\n{SOURCES}\n\n{RULES}\n{}",
+            done_line(&format!("{dir}/verificacion.md, {dir}/fuentes.md"))
+        ),
+        assign: verifier,
+        parents: part_ids,
+        role: "verificar",
+    });
+    let verify = specs.len() - 1;
+    for w in &team {
+        let file = format!("{dir}/capitulo-{}.md", slug(w));
+        specs.push(Spec {
+            title: format!("✍️ Capítulos de {w}: {short}"),
+            notes: format!(
+                "Investigación exhaustiva. Pregunta: «{q}»\nCarpeta: {dir}/\n\n\
+                 Escribe {file}: un capítulo por cada parte del plan con tu nombre ({w}), con título «## <tema de la \
+                 parte>» y una subsección por pregunta. Usa tus hallazgos y lo corregido o añadido en {dir}/verificacion.md \
+                 (si se contradicen, manda la verificación).\n\
+                 Con detalle: cifras, fechas, ejemplos, pros y contras, riesgos y una tabla cuando compares opciones. Unas \
+                 1500-3000 palabras por parte. Cita con [n] según la numeración de {dir}/fuentes.md (no la de tus \
+                 hallazgos). Sin inventar: si un dato no está en los archivos, no va. No pongas la lista de fuentes: va al \
+                 final del informe.\n{}",
+                done_line(&file)
+            ),
+            assign: w.clone(),
+            parents: vec![verify],
+            role: "redactar",
+        });
+    }
+    let chapter_ids: Vec<usize> = (verify + 1..specs.len()).collect();
+    let includes = team.iter().map(|w| format!("`{{{{incluir: capitulo-{}.md}}}}`", slug(w))).collect::<Vec<_>>().join(", ");
+    specs.push(Spec {
+        title: format!("📝 Informe final exhaustivo: {short}"),
+        notes: format!(
+            "Investigación exhaustiva. Pregunta: «{q}»\nCarpeta: {dir}/\n\n\
+             Lee {dir}/plan.md, {dir}/verificacion.md y los {dir}/capitulo-*.md y escribe {dir}/informe.md, en este orden:\n\
+             1. «# <título>» y la fecha de la investigación.\n\
+             2. «Resumen ejecutivo»: la respuesta directa y 5-10 puntos clave con citas [n].\n\
+             3. «Alcance y método»: qué se investigó, qué no, cuántas fuentes y de qué tipo.\n\
+             4. Los capítulos, en el orden del índice del plan, cada uno en una línea sola: {includes}. Prometeo pega ahí \
+             el capítulo al mostrar el informe: no los copies. Si uno tiene un error, corrígelo en su archivo.\n\
+             5. «Visión de conjunto»: lo que se ve al juntar las partes (una tabla comparativa si aplica).\n\
+             6. «Conclusiones y recomendaciones», concretas y con citas.\n\
+             7. «Dudas y lo que no se pudo confirmar».\n\
+             8. «Fuentes» y debajo, en una línea sola: `{{{{incluir: fuentes.md}}}}`.\n\
+             Lo que escribes tú: unas 1500-3000 palabras (con los capítulos, el informe completo pasa de 8000). Citas con \
+             la numeración de {dir}/fuentes.md; sin inventar citas.\n{}",
+            done_line(&format!("{dir}/informe.md"))
+        ),
+        assign: leader.to_string(),
+        parents: chapter_ids,
+        role: "informe",
+    });
+    specs
+}
+
+/// Un nombre suelto de archivo o carpeta (nada que salga de la investigación).
+fn safe_name(s: &str) -> bool {
+    !s.is_empty() && !s.contains(['/', '\\', ':']) && !s.contains("..")
+}
+
+/// Pega los `{{incluir: archivo.md}}` del informe (un nivel, solo archivos de la misma carpeta).
+fn expand(dir: &Path, text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let t = line.trim().trim_matches('`');
+        let name = t
+            .strip_prefix("{{")
+            .and_then(|s| s.strip_suffix("}}"))
+            .and_then(|s| s.trim().strip_prefix("incluir:"))
+            .map(str::trim);
+        match name {
+            Some(n) if safe_name(n) && n.ends_with(".md") && n != "informe.md" => match std::fs::read_to_string(dir.join(n)) {
+                Ok(body) => {
+                    out.push_str(body.trim_end());
+                    out.push_str("\n\n");
+                }
+                Err(_) => out.push_str(&format!("> _Falta {n}: aún no está escrito._\n\n")),
+            },
+            _ => out.push_str(line),
+        }
+    }
+    out
+}
+
 fn read_meta(dir: &Path) -> Option<Meta> {
     serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).ok()?).ok()
 }
@@ -230,7 +390,10 @@ pub fn start(hub: &Hub, project: &str, question: &str, mode: &str, leader: &str,
     let base = root(project).join(&id);
     std::fs::create_dir_all(&base).map_err(|e| format!("No se pudo crear la carpeta de la investigación: {e}"))?;
     let rel = format!(".lienzo/investigaciones/{id}");
-    let mode = if mode == "profunda" { "profunda" } else { "rapida" };
+    let mode = match mode {
+        "profunda" | "exhaustiva" => mode,
+        _ => "rapida",
+    };
     let specs = plan(&rel, question, mode, leader, workers);
 
     let mut meta = Meta { id: id.clone(), question: question.to_string(), mode: mode.into(), created_ms: now, ..Default::default() };
@@ -314,12 +477,12 @@ pub fn list(project: &str) -> Vec<Value> {
 
 /// Un .md de una investigación (solo nombres sueltos: nada fuera de su carpeta).
 pub fn read(project: &str, id: &str, file: &str) -> Result<String, String> {
-    let safe = |s: &str| !s.is_empty() && !s.contains(['/', '\\', ':']) && !s.contains("..");
-    if !safe(id) || !safe(file) || !file.ends_with(".md") {
+    if !safe_name(id) || !safe_name(file) || !file.ends_with(".md") {
         return Err("Archivo no válido.".into());
     }
-    let p = root(project).join(id).join(file);
-    let text = std::fs::read_to_string(&p).map_err(|_| format!("Aún no existe {file}."))?;
+    let dir = root(project).join(id);
+    let text = std::fs::read_to_string(dir.join(file)).map_err(|_| format!("Aún no existe {file}."))?;
+    let text = if file == "informe.md" { expand(&dir, &text) } else { text };
     Ok(text.chars().take(400_000).collect())
 }
 
@@ -407,6 +570,50 @@ mod tests {
         assert_eq!(s.len(), 4);
         assert!(s.iter().all(|x| x.assign == "claude"));
         assert!(s[0].notes.contains("2 partes"));
+    }
+
+    #[test]
+    fn exhaustiva_por_capitulos() {
+        let w: Vec<String> = vec!["claude".into(), "opencode".into(), "antigravity".into()];
+        let s = plan("d", "pregunta larga de prueba", "exhaustiva", "claude", &w);
+        let roles: Vec<&str> = s.iter().map(|x| x.role).collect();
+        assert_eq!(roles, ["plan", "parte", "parte", "verificar", "redactar", "redactar", "informe"]);
+        assert!(s[0].notes.contains("4 partes"));
+        assert!(s[1].notes.contains("máximo 10 rondas"));
+        assert!(s[1].notes.contains("12 fuentes"));
+        assert_eq!(s[3].parents, vec![1, 2]);
+        assert!(s[3].notes.contains("d/fuentes.md"));
+        assert_eq!(s[4].parents, vec![3]);
+        assert_eq!(s[4].assign, "opencode");
+        assert!(s[4].notes.contains("d/capitulo-opencode.md"));
+        assert_eq!(s[6].parents, vec![4, 5]);
+        assert_eq!(s[6].assign, "claude");
+        assert!(s[6].notes.contains("{{incluir: capitulo-antigravity.md}}"));
+        assert!(s[6].notes.contains("{{incluir: fuentes.md}}"));
+        // Un solo agente: lo hace todo, con 4 partes.
+        let s = plan("d", "pregunta", "exhaustiva", "claude", &["claude".into()]);
+        assert_eq!(s.len(), 5);
+        assert!(s.iter().all(|x| x.assign == "claude"));
+    }
+
+    #[test]
+    fn el_informe_pega_sus_capitulos() {
+        let p = std::env::temp_dir().join(format!("lienzo-inv-inc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        let proj = p.display().to_string();
+        let d = root(&proj).join("abc");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("capitulo-a.md"), "## Cap A\ntexto\n").unwrap();
+        std::fs::write(d.join("informe.md"), "# T\n{{incluir: capitulo-a.md}}\n`{{incluir: capitulo-b.md}}`\n{{incluir: ../x.md}}\n{{incluir: informe.md}}\nfin").unwrap();
+        let t = read(&proj, "abc", "informe.md").unwrap();
+        assert!(t.contains("## Cap A\ntexto"));
+        assert!(t.contains("Falta capitulo-b.md"));
+        assert!(t.contains("{{incluir: ../x.md}}"));
+        assert!(t.contains("{{incluir: informe.md}}"));
+        assert!(t.ends_with("fin"));
+        // Los demás archivos se leen tal cual.
+        assert_eq!(read(&proj, "abc", "capitulo-a.md").unwrap(), "## Cap A\ntexto\n");
+        let _ = std::fs::remove_dir_all(&p);
     }
 
     #[test]

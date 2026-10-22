@@ -8,6 +8,7 @@ import {
   fileOrder,
   kindCount,
   fileLabel,
+  MODE_LABEL,
   overall,
   phasesOf,
   researchDir,
@@ -24,6 +25,11 @@ import "../research.css";
 const MODES: { v: ResearchMode; l: string; d: string }[] = [
   { v: "rapida", l: "Rápida", d: "Un agente, por rondas: busca, lee, anota y no para hasta tener evidencia." },
   { v: "profunda", l: "Profunda", d: "El equipo divide la pregunta, investiga en paralelo, verifica las fuentes y escribe el informe." },
+  {
+    v: "exhaustiva",
+    l: "Exhaustiva",
+    d: "A fondo: 4-6 partes, hasta 10 rondas por agente y cada uno escribe sus capítulos. Informe largo (15+ páginas); tarda y gasta bastante más cuota.",
+  },
 ];
 
 /** Último agente elegido para la investigación rápida. */
@@ -121,11 +127,17 @@ export function ResearchTab({
       ? quick
         ? `Investiga ${agentLabel(quick)}.`
         : ""
-      : lead
-        ? `Planea y escribe el informe ${agentLabel(lead)}; ${
-            workers.length ? `investigan ${workers.map(agentLabel).join(", ")}; verifica ${agentLabel(workers[0])}.` : "hace también las partes y la verificación."
-          }`
-        : "";
+      : !lead
+        ? ""
+        : mode === "exhaustiva"
+          ? `Planea y une el informe ${agentLabel(lead)}; ${
+              workers.length
+                ? `investigan y escriben capítulos ${workers.map(agentLabel).join(", ")}; verifica ${agentLabel(workers[0])}.`
+                : "hace también las partes, la verificación y los capítulos."
+            }`
+          : `Planea y escribe el informe ${agentLabel(lead)}; ${
+              workers.length ? `investigan ${workers.map(agentLabel).join(", ")}; verifica ${agentLabel(workers[0])}.` : "hace también las partes y la verificación."
+            }`;
 
   const start = async () => {
     if (!project || busy) return;
@@ -136,14 +148,14 @@ export function ResearchTab({
       const r =
         mode === "rapida"
           ? await researchStart(project, q, "rapida", lead, [quick])
-          : await researchStart(project, q, "profunda", lead, online);
+          : await researchStart(project, q, mode, lead, online);
       setQuestion("");
       setSel(r.id);
       load();
       onSay(
         mode === "rapida"
           ? `🔎 Investigación en marcha con ${agentLabel(quick)}.`
-          : `🔎 Investigación profunda en marcha: ${r.tasks.length} tareas encadenadas.`,
+          : `🔎 Investigación ${mode} en marcha: ${r.tasks.length} tareas encadenadas.`,
       );
     } catch (e) {
       onSay(errMsg(e), true);
@@ -249,7 +261,7 @@ export function ResearchTab({
                 <span className="rs-item-q">{r.question}</span>
                 <span className="rs-item-m">
                   <span className="rs-chip" data-mode={r.mode}>
-                    {r.mode === "profunda" ? "Profunda" : "Rápida"}
+                    {MODE_LABEL[r.mode] ?? "Rápida"}
                   </span>
                   <span className="rs-state" data-st={st}>
                     {st === "en-curso" && now ? now.label : STATE_ES[st]}
@@ -284,6 +296,10 @@ export function ResearchTab({
                 <b>Profunda</b>: el líder divide la pregunta, cada agente investiga su parte en paralelo, otro verifica las
                 fuentes y el líder escribe el informe.
               </li>
+              <li>
+                <b>Exhaustiva</b>: como la profunda pero a fondo (más partes, rondas y fuentes) y cada agente escribe los
+                capítulos de sus partes; el líder los une en un informe largo, de 15 páginas o más.
+              </li>
             </ol>
             <p className="rs-muted">Todo queda en la carpeta del proyecto: .lienzo/investigaciones/</p>
           </div>
@@ -293,7 +309,7 @@ export function ResearchTab({
               <div className="rs-head-q">
                 <h3>{cur.question}</h3>
                 <small>
-                  {cur.mode === "profunda" ? "Profunda" : "Rápida"} · {researchDir(cur.id)}
+                  {MODE_LABEL[cur.mode] ?? "Rápida"} · {researchDir(cur.id)}
                 </small>
               </div>
               <div className="rs-actions">

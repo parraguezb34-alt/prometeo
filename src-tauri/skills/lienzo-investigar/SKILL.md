@@ -8,7 +8,7 @@ description: Método para investigar en la web con fuentes, sin inventar y sin o
 Investigar no es buscar una vez y resumir: son rondas cortas hasta tener evidencia suficiente, y cada dato con su fuente.
 
 ## Por rondas
-Máximo 4 rondas, máximo 3 páginas leídas por ronda:
+Máximo 4 rondas, máximo 3 páginas leídas por ronda, salvo que tu tarea diga otros límites (la investigación **exhaustiva** da hasta 10 rondas de 5 páginas y pide más fuentes): manda lo que diga la tarea.
 1. **Piensa** qué falta saber y elige como mucho 3 búsquedas o páginas.
 2. **Busca y lee** con tus herramientas web. Si no tienes búsqueda, lee `https://html.duckduckgo.com/html/?q=<búsqueda>`.
 3. **Anota** cada hallazgo con su fuente (formato abajo).
@@ -41,7 +41,8 @@ No termines antes de tener al menos **2 hallazgos útiles de 2 fuentes distintas
 - Fecha de la investigación: los datos cambian.
 
 ## En equipo
-- En una investigación profunda (pestaña Investigar), cada tarea dice tu parte y tu archivo: haz solo esa y escribe en la carpeta que indica.
+- En una investigación profunda o exhaustiva (pestaña Investigar), cada tarea dice tu parte y tu archivo: haz solo esa y escribe en la carpeta que indica.
+- En la exhaustiva el informe va por capítulos: cada agente escribe el suyo (`capitulo-<agente>.md`) y el informe los incluye con una línea `{{incluir: capitulo-<agente>.md}}`. No copies los capítulos en el informe: Prometeo los pega al mostrarlo.
 - Si la investigación alimenta código, termina con «Qué implica para el proyecto» y, si toca, propón las tareas (`team_task_create`) o el contrato (`lienzo-contrato`).
 - Lo que deba recordarse (una versión, un límite, una decisión con su fuente) va a la memoria del equipo con `team_memory_propose` (`kind: "hecho"`).
 
