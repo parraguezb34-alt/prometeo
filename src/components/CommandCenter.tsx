@@ -50,6 +50,7 @@ import { Markdown } from "./Markdown";
 import { buildTimeline } from "../lib/timeline";
 import { chatHtml, chatMarkdown, fileSlug } from "../lib/exportChat";
 import { exportSave } from "../lib/viewer";
+import { droppedEvents, withOlder } from "../lib/chatsDisk";
 import { updateApply, updateCheck } from "../lib/update";
 import type { UpdateInfo } from "../lib/update";
 import { findSkill, riskNotice, skillsInstall, skillsList, skillsSet } from "../lib/skills";
@@ -567,21 +568,51 @@ export function CommandCenter() {
   const lineage = useMemo(() => (activeChat ? chatLineage(activeChat, chats.chats) : []), [activeChat, chats.chats]);
   const inActive = (ts: number) => lineage.length === 0 || inChat(lineage, ts);
 
+  // El feed vivo guarda los últimos 500 eventos. Lo anterior del chat abierto se lee del archivo
+  // del feed al abrirlo, y lo que se va cayendo mientras está abierto se guarda aquí.
+  const [older, setOlder] = useState<TeamEvent[]>([]);
+  const olderKey = useRef("");
+  const prevLive = useRef<TeamEvent[]>([]);
+  const chatFrom = lineage.length ? Math.min(...lineage.map((c) => c.startMs)) : 0;
+  const liveEvents = state?.events;
+  useEffect(() => {
+    if (!liveEvents) return;
+    const key = `${project ?? ""}|${activeChat?.id ?? ""}`;
+    if (olderKey.current !== key) {
+      olderKey.current = key;
+      prevLive.current = liveEvents;
+      setOlder([]);
+      const oldest = liveEvents[liveEvents.length - 1]?.ts_ms ?? 0;
+      if (activeChat && liveEvents.length > 0 && chatFrom < oldest) {
+        teamEventsRange(chatFrom, oldest)
+          .then((list) => {
+            if (olderKey.current === key) setOlder((cur) => [...list, ...cur]);
+          })
+          .catch(() => {});
+      }
+      return;
+    }
+    const gone = droppedEvents(prevLive.current, liveEvents, chatFrom);
+    prevLive.current = liveEvents;
+    if (gone.length) setOlder((cur) => [...cur, ...gone]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveEvents, activeChat?.id, project]);
+
   // Las tareas son del proyecto, pero cada chat muestra las suyas: las que nacieron en él o que
   // alguien tomó o cerró en él. Las que quedaron sin terminar en chats anteriores van aparte.
   const { chatTasks, earlierTasks } = useMemo(() => {
     if (lineage.length === 0) return { chatTasks: tasks, earlierTasks: [] as TeamTask[] };
-    const ids = taskIdsOfChat(lineage, tasks, state?.events ?? []);
+    const ids = taskIdsOfChat(lineage, tasks, [...older, ...(state?.events ?? [])]);
     const mine = tasks.filter((t) => ids.has(t.id));
     const first = Math.min(...lineage.map((c) => c.startMs));
     const earlier = tasks.filter((t) => !mine.includes(t) && t.status !== "done" && t.created_ms < first);
     return { chatTasks: mine, earlierTasks: earlier };
-  }, [tasks, lineage, state]);
+  }, [tasks, lineage, state, older]);
   const done = chatTasks.filter((t) => t.status === "done").length;
   const total = chatTasks.length;
 
   const msgs = useMemo(() => {
-    const all = (state?.events ?? []).slice().reverse();
+    const all = withOlder(older, (state?.events ?? []).slice().reverse());
     const base =
       sel.kind === "team"
         ? all
@@ -597,7 +628,7 @@ export function CommandCenter() {
         !list.some((e) => eventImages(e).some((p) => samePath(p, img.files[0]))),
     );
     return extra.length > 0 ? [...list, ...extra].sort((a, b) => a.ts_ms - b.ts_ms) : list;
-  }, [state, sel, lineage, newImages]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state, sel, lineage, newImages, older]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Imágenes nuevas en el proyecto (capturas que guardan los agentes): se miran cada poco.
   useEffect(() => {

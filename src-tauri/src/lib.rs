@@ -1,4 +1,5 @@
 mod aviso;
+mod chatstore;
 mod devapp;
 pub mod errlog;
 pub mod history;
@@ -99,6 +100,8 @@ pub fn run() {
             project::project_commit_paths,
             project::project_revert_paths,
             project::image_data,
+            chatstore::chats_read,
+            chatstore::chats_write,
             viewer::file_blob,
             viewer::file_text,
             viewer::file_open_external,

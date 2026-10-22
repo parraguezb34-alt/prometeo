@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentLabel } from "./team";
 import type { TeamEvent } from "./team";
+import { chatsRead, chatsWrite, mergeChats, sameChats } from "./chatsDisk";
 
 /**
  * Chats = ventanas de tiempo sobre el feed del hub. El hub no sabe de chats:
@@ -33,7 +34,8 @@ export function currentTeamChat(chats: Chat[]): Chat | null {
   return chats.find((c) => c.kind === "team" && c.endMs == null) ?? null;
 }
 
-const MAX_CHATS = 80;
+/** Tope de chats por proyecto (en disco y en la copia rápida del navegador). */
+const MAX_CHATS = 500;
 const DEFAULT_TITLE = "Chat nuevo";
 
 function storageKey(project: string | null): string {
@@ -71,12 +73,22 @@ function load(project: string | null): Chat[] {
   return bootstrap();
 }
 
+/** Proyectos cuyo disco ya se leyó: hasta entonces no se escribe en él (la copia rápida podría
+ * estar vacía y pisaría los chats guardados). */
+const synced = new Set<string>();
+
+/**
+ * Guarda en disco (lo que vale) y en el navegador interno (copia rápida para abrir al instante).
+ * Las escrituras a disco van en orden, así que la última siempre gana.
+ */
 function save(project: string | null, chats: Chat[]) {
+  const list = chats.slice(0, MAX_CHATS);
   try {
-    localStorage.setItem(storageKey(project), JSON.stringify(chats.slice(0, MAX_CHATS)));
+    localStorage.setItem(storageKey(project), JSON.stringify(list));
   } catch {
-    /* sin almacenamiento: el historial no persistirá */
+    /* sin almacenamiento rápido: queda el disco */
   }
+  if (project && synced.has(storageKey(project))) void chatsWrite(project, list).catch(() => {});
 }
 
 /** ¿El evento pertenece a la ventana del chat? */
@@ -174,6 +186,26 @@ export function useChats(project: string | null) {
     setChats(next);
     save(projectRef.current, next);
   }, []);
+
+  // Lo que vale está en disco: se junta con la copia rápida (sin perder ninguno de los dos) y,
+  // si el disco aún no tenía nada, se guarda lo de aquí (la primera vez, al pasar del navegador).
+  useEffect(() => {
+    if (!project) return;
+    let alive = true;
+    chatsRead(project)
+      .then((disk) => {
+        if (!alive || projectRef.current !== project) return;
+        synced.add(storageKey(project));
+        // Sin nada en disco (la primera vez), se guarda lo de aquí; si no, los dos juntos.
+        const merged = disk ? mergeChats(ref.current, disk).slice(0, MAX_CHATS) : ref.current;
+        if (sameChats(merged, ref.current)) save(project, merged);
+        else update(() => merged);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [project, update]);
 
   const active = useMemo(
     () => chats.find((c) => c.id === activeId) ?? chats[0] ?? null,
