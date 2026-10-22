@@ -114,6 +114,15 @@ export function kindLabel(path: string): string {
   )[k];
 }
 
+/** Etiqueta corta para la lista («MD», «PDF», «DOCX»…): la larga va en la barra del archivo. */
+export function shortTag(path: string): string {
+  const e = extOf(path);
+  if (e === "markdown") return "MD";
+  if (e === "htm") return "HTML";
+  if (e === "jpeg") return "JPG";
+  return (e || "?").slice(0, 4).toUpperCase();
+}
+
 /** Un CSV (o TSV) a filas: comillas dobles, comas dentro de comillas y saltos de línea en celdas. */
 export function parseCsv(text: string, maxRows = 2000): string[][] {
   const first = text.split(/\r?\n/, 1)[0] ?? "";

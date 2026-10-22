@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ago, errMsg } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
@@ -16,6 +17,7 @@ import {
   kindLabel,
   parseCsv,
   prettyJson,
+  shortTag,
   viewKind,
 } from "../lib/viewer";
 import type { Group, ViewKind } from "../lib/viewer";
@@ -36,6 +38,9 @@ type Loaded =
   | { kind: "text"; text: string; truncated: boolean; binary: boolean; size: number; mtime: number }
   | { kind: "blob"; url: string; size: number; mtime: number }
   | { kind: "page"; html: string };
+
+/** La lista de archivos escondida (para leer a todo el ancho), recordado entre sesiones. */
+const HIDE_KEY = "lienzo.viewer.hideList";
 
 const TEXTY: ViewKind[] = ["html", "svg", "md", "csv", "json", "text"];
 const BLOBBY: ViewKind[] = ["pdf", "image", "video", "audio"];
@@ -72,6 +77,32 @@ export function PreviewTab({
   const [loading, setLoading] = useState(false);
   const lastSeq = useRef(0);
   const urlRef = useRef<string | null>(null);
+  // Ampliado: el archivo ocupa toda la ventana (por encima del chat). Se sale con Esc.
+  const [full, setFull] = useState(false);
+  const [hideList, setHideList] = useState(() => {
+    try {
+      return localStorage.getItem(HIDE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleList = () =>
+    setHideList((v) => {
+      try {
+        localStorage.setItem(HIDE_KEY, v ? "0" : "1");
+      } catch {
+        /* sin almacenamiento: no se recuerda */
+      }
+      return !v;
+    });
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFull(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [full]);
 
   const loadList = useCallback(() => {
     if (!project) return;
@@ -247,9 +278,66 @@ export function PreviewTab({
 
   const meta = data && data.kind !== "page" ? data : null;
 
+  // Ampliado se dibuja sobre la ventana (portal): ninguna capa de encima puede recortarlo.
+  const main = (
+    <div className="cc-art-main" data-full={full ? "1" : "0"}>
+      {(sel || hideList) && (
+        <div className="cc-art-bar">
+          {!full && (
+            <button
+              className="ap-icon"
+              data-on={hideList ? "1" : "0"}
+              onClick={toggleList}
+              title={hideList ? "Mostrar la lista de archivos" : "Ocultar la lista de archivos"}
+              aria-label={hideList ? "Mostrar la lista de archivos" : "Ocultar la lista de archivos"}
+            >
+              <Icon name="panel" size={14} />
+            </button>
+          )}
+          {!sel && <span className="cc-art-path">Ningún archivo abierto</span>}
+          {sel && (
+            <>
+              <span className="vw-tag" data-g={groupOf(sel)}>
+                {kindLabel(sel)}
+              </span>
+              <span className="cc-art-path" title={sel}>
+                {shortName(sel)}
+              </span>
+              {meta && (
+                <span className="cc-art-meta">
+                  {friendlySize(meta.size)}
+                  {meta.kind === "text" && meta.truncated ? " · recortado" : ""} · guardado hace {ago(meta.mtime)}
+                </span>
+              )}
+              <button className="cc-mini-btn" onClick={() => open(sel)} disabled={loading} title="Recargar" aria-label="Recargar">
+                {loading ? "…" : "⟳"}
+              </button>
+              <button className="ap-icon" onClick={() => external("reveal")} title="Mostrar en la carpeta" aria-label="Mostrar en la carpeta">
+                <Icon name="folder" size={14} />
+              </button>
+              <button className="ap-icon" onClick={() => external("open")} title="Abrir con su programa" aria-label="Abrir con su programa">
+                <Icon name="external" size={14} />
+              </button>
+              <button
+                className="ap-icon"
+                data-on={full ? "1" : "0"}
+                onClick={() => setFull((v) => !v)}
+                title={full ? "Volver (Esc)" : "Ampliar a toda la ventana"}
+                aria-label={full ? "Volver" : "Ampliar"}
+              >
+                <Icon name={full ? "shrink" : "expand"} size={14} />
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {body}
+    </div>
+  );
+
   return (
     <div className="cc-art">
-      <div className="cc-art-side vw-side">
+      <div className="cc-art-side vw-side" hidden={hideList}>
         <div className="vw-tools">
           <button className="hs-btn vw-open" onClick={() => void pickFile()} title="Abrir cualquier archivo">
             <Icon name="folder" size={13} />
@@ -272,8 +360,8 @@ export function PreviewTab({
         ) : (
           shown.map((f) => (
             <button className="cc-art-file" data-active={sel === f.rel ? "1" : "0"} key={f.rel} onClick={() => open(f.rel)} title={f.rel}>
-              <span className="vw-tag" data-g={groupOf(f.rel)}>
-                {kindLabel(f.rel)}
+              <span className="vw-tag" data-g={groupOf(f.rel)} title={kindLabel(f.rel)}>
+                {shortTag(f.rel)}
               </span>
               <span className="cc-art-file-name">{f.rel}</span>
               <span className="cc-art-file-ago">{ago(f.mtime_ms)}</span>
@@ -281,34 +369,7 @@ export function PreviewTab({
           ))
         )}
       </div>
-      <div className="cc-art-main">
-        {sel && (
-          <div className="cc-art-bar">
-            <span className="vw-tag" data-g={groupOf(sel)}>
-              {kindLabel(sel)}
-            </span>
-            <span className="cc-art-path" title={sel}>
-              {shortName(sel)}
-            </span>
-            {meta && (
-              <span className="cc-art-meta">
-                {friendlySize(meta.size)}
-                {meta.kind === "text" && meta.truncated ? " · recortado" : ""} · guardado hace {ago(meta.mtime)}
-              </span>
-            )}
-            <button className="cc-mini-btn" onClick={() => open(sel)} disabled={loading} title="Recargar" aria-label="Recargar">
-              {loading ? "…" : "⟳"}
-            </button>
-            <button className="ap-icon" onClick={() => external("reveal")} title="Mostrar en la carpeta" aria-label="Mostrar en la carpeta">
-              <Icon name="folder" size={14} />
-            </button>
-            <button className="ap-icon" onClick={() => external("open")} title="Abrir con su programa" aria-label="Abrir con su programa">
-              <Icon name="external" size={14} />
-            </button>
-          </div>
-        )}
-        {body}
-      </div>
+      {full ? createPortal(main, document.body) : main}
     </div>
   );
 }
