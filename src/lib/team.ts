@@ -181,6 +181,9 @@ export const teamScheduleSave = (
   draft: { title: string; notes: string; every: string; assign: string; level: string; model: string; daily_cap: number; chat: string; chat_title: string },
 ) => invoke<TeamSchedule>("team_schedule_save", { id, draft });
 /** Liga una programación al chat donde se pidió. */
+/** Eventos de una ventana de tiempo, del feed vivo y de su archivo (para exportar un chat entero). */
+export const teamEventsRange = (fromMs: number, toMs: number | null) =>
+  invoke<TeamEvent[]>("team_events_range", { fromMs, toMs });
 export const teamScheduleLink = (id: number, chat: string, title: string) =>
   invoke<void>("team_schedule_link", { id, chat, title });
 /** Le toca (o «Ejecutar ahora» con `manual`): crea su tarea, o se la salta con `skip`. */

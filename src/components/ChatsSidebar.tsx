@@ -35,6 +35,7 @@ export function ChatsSidebar({
   onSelect,
   onRemove,
   onRename,
+  onExport,
   project,
   otherProjects,
   switching,
@@ -53,6 +54,8 @@ export function ChatsSidebar({
   onSelect: (chat: Chat) => void;
   onRemove: (chat: Chat) => void;
   onRename: (chat: Chat, title: string) => void;
+  /** Guardar el chat entero en un archivo (Markdown o HTML). */
+  onExport: (chat: Chat) => void;
   project: string | null;
   otherProjects: ProjectItem[];
   switching: boolean;
@@ -199,6 +202,17 @@ export function ChatsSidebar({
                     {c.endMs == null && <span className="cc-live" title="Chat abierto" />}
                     <time>{stampLabel(c.createdMs)}</time>
                   </div>
+                  <button
+                    className="cc-chat-del cc-chat-exp"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onExport(c);
+                    }}
+                    title="Exportar el chat (Markdown o página web)"
+                    aria-label="Exportar chat"
+                  >
+                    <Icon name="download" size={12} />
+                  </button>
                   <button
                     className="cc-chat-del cc-chat-ren"
                     onClick={(e) => {

@@ -11,6 +11,8 @@ mod rename;
 mod research;
 pub mod skills;
 mod tray;
+mod updater;
+mod viewer;
 
 // Los tests también necesitan el manifiesto de Windows que tauri-build solo
 // enlaza en los binarios (ver build.rs); sin él no llegan a arrancar.
@@ -97,6 +99,15 @@ pub fn run() {
             project::project_commit_paths,
             project::project_revert_paths,
             project::image_data,
+            viewer::file_blob,
+            viewer::file_text,
+            viewer::file_open_external,
+            viewer::file_reveal,
+            viewer::file_office,
+            viewer::export_save,
+            updater::update_check,
+            updater::update_apply,
+            hub::team_events_range,
             project::project_save_image,
             project::project_save_attachment,
             project::project_attach_path,

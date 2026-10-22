@@ -10,8 +10,8 @@ import { Icon } from "./Icon";
 import "../history.css";
 
 /**
- * «App»: el proyecto arrancado y a la vista (su `npm run dev`, o sus páginas servidas). También
- * abre archivos sueltos (html, svg, md) que salen en el chat.
+ * «App»: el proyecto arrancado y a la vista (su `npm run dev`, o sus páginas servidas), y sus
+ * archivos: páginas, PDF, Word, Excel, PowerPoint, imágenes, vídeo… (ver PreviewTab).
  */
 export function AppTab({
   project,
@@ -46,6 +46,10 @@ export function AppTab({
     setDet(null);
     if (project) appDetect(project).then(setDet).catch(() => setDet(null));
   }, [project]);
+  // Sin nada que arrancar, lo útil son los archivos.
+  useEffect(() => {
+    if (det?.kind === "none" && !st?.running) setMode("file");
+  }, [det?.kind, st?.running]);
 
   const poll = useCallback(() => {
     appStatus()
@@ -212,9 +216,9 @@ export function AppTab({
             role="tab"
             data-on={mode === "file" ? "1" : "0"}
             onClick={() => setMode("file")}
-            title="Ver un archivo suelto (html, svg, md…)"
+            title="Ver archivos: web, Markdown, PDF, Word, Excel, PowerPoint, imágenes, vídeo…"
           >
-            {openRel ? openRel.split("/").pop() : "Archivo"}
+            {openRel ? openRel.split("/").pop() : "Archivos"}
           </button>
         </div>
         {mode === "app" && (

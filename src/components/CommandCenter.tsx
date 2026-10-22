@@ -28,6 +28,7 @@ import {
   teamScheduleLink,
   teamScheduleOp,
   teamScheduleSave,
+  teamEventsRange,
   teamLeader,
   teamMemoryAdd,
   teamMemoryForget,
@@ -43,6 +44,14 @@ import {
 import type { DetectResult, InboxInfo, ModelCatalog, QAnswer, TeamAgent, TeamEvent, TeamSchedule, TeamState, TeamTask } from "../lib/team";
 import { chatAt, dayKey, isDue } from "../lib/schedule";
 import { ScheduleTab } from "./ScheduleTab";
+import { renderToStaticMarkup } from "react-dom/server";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { Markdown } from "./Markdown";
+import { buildTimeline } from "../lib/timeline";
+import { chatHtml, chatMarkdown, fileSlug } from "../lib/exportChat";
+import { exportSave } from "../lib/viewer";
+import { updateApply, updateCheck } from "../lib/update";
+import type { UpdateInfo } from "../lib/update";
 import { findSkill, riskNotice, skillsInstall, skillsList, skillsSet } from "../lib/skills";
 import type { Skill } from "../lib/skills";
 import {
@@ -388,6 +397,27 @@ export function CommandCenter() {
   }, [project]);
 
   const tasks = state?.tasks ?? [];
+
+  // Actualizar sin pasar por el instalador: se mira cada pocos minutos si hay una versión compilada nueva.
+  const [upd, setUpd] = useState<UpdateInfo | null>(null);
+  const [updAsk, setUpdAsk] = useState(false);
+  const [updBusy, setUpdBusy] = useState(false);
+  useEffect(() => {
+    const check = () => void updateCheck().then(setUpd).catch(() => {});
+    check();
+    const id = window.setInterval(check, 3 * 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  const workingNow = new Set(tasks.filter((t) => t.status === "claimed" && t.owner).map((t) => t.owner)).size;
+  const applyUpdate = async () => {
+    setUpdBusy(true);
+    try {
+      await updateApply();
+    } catch (e) {
+      setUpdBusy(false);
+      say(errMsg(e), true);
+    }
+  };
   // Solo los agentes de este proyecto, uno por nombre. Otras apps (OpenCode Desktop en otra
   // carpeta, la app de escritorio de Antigravity) también se conectan al hub con su puente, y
   // sin este filtro el mismo agente salía repetido en el chat, la barra y el compositor.
@@ -2508,6 +2538,48 @@ export function CommandCenter() {
    * Retomar un chat cerrado con su memoria: abre un chat nuevo que lo continúa y reabre a cada
    * agente con la conversación que tenía en él (los que no estuvieron, empiezan de cero).
    */
+  /** Exporta un chat entero (también lo que ya salió del feed vivo) a Markdown o a una página HTML. */
+  const exportChat = async (chat: Chat) => {
+    const name = chat.kind === "agent" ? (chat.agent ?? "") : "";
+    const path = await saveDialog({
+      title: "Exportar el chat",
+      defaultPath: `${fileSlug(chat.title)}.md`,
+      filters: [
+        { name: "Markdown", extensions: ["md"] },
+        { name: "Página web", extensions: ["html"] },
+      ],
+    }).catch(() => null);
+    if (!path) return;
+    try {
+      const lineage = chatLineage(chat, chats.chats);
+      const from = Math.min(...lineage.map((c) => c.startMs));
+      const all = await teamEventsRange(from, chat.endMs ?? null);
+      const evs = all.filter(
+        (e) =>
+          !HIDDEN_KINDS.has(e.kind) &&
+          inChat(lineage, e.ts_ms) &&
+          (!name || e.agent === name || e.to === name || (e.kind === "broadcast" && e.agent === "tú")),
+      );
+      const rows = buildTimeline(evs);
+      const info = {
+        title: chat.title,
+        scope: name ? `Chat privado con ${agentLabel(name)}` : "Chat del equipo",
+        project: project ?? "—",
+        fromMs: evs[0]?.ts_ms ?? chat.startMs,
+        toMs: chat.endMs ?? null,
+        nowMs: Date.now(),
+        label: agentLabel,
+      };
+      const text = /\.html?$/i.test(path)
+        ? chatHtml(rows, info, (t) => renderToStaticMarkup(<Markdown text={t} />))
+        : chatMarkdown(rows, info);
+      await exportSave(path, text);
+      say(`💾 Chat exportado (${evs.length} eventos): ${path}`);
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
   const resumeChat = async (old: Chat) => {
     const chat = chats.create("team", undefined, `↩ ${old.title.replace(/^↩\s*/, "")}`, old.id);
     const refs = old.sessions ?? {};
@@ -2759,6 +2831,37 @@ export function CommandCenter() {
         )}
 
         <div className="cc-top-r" data-tauri-drag-region>
+          {upd?.available && (
+            <div className="cc-upd">
+              <button className="cc-upd-btn" onClick={() => setUpdAsk((v) => !v)} title="Hay una versión nueva de Prometeo">
+                <Icon name="refresh" size={13} />
+                Actualizar
+              </button>
+              {updAsk && (
+                <div className="cc-upd-pop" role="dialog" aria-label="Actualizar Prometeo">
+                  <b>Versión nueva de Prometeo</b>
+                  <p>
+                    Compilada hace {ago(upd.built_ms)}. Prometeo se cierra, se instala solo y se vuelve a abrir en unos
+                    segundos. Las terminales de los agentes se reabren retomando su conversación.
+                  </p>
+                  {workingNow > 0 && (
+                    <p className="cc-upd-warn">
+                      {workingNow === 1 ? "Hay 1 agente trabajando" : `Hay ${workingNow} agentes trabajando`}: se cortará lo que
+                      esté haciendo en este momento.
+                    </p>
+                  )}
+                  <div className="cc-upd-row">
+                    <button className="hs-btn hs-btn-go" disabled={updBusy} onClick={() => void applyUpdate()}>
+                      {updBusy ? "Actualizando…" : "Actualizar ahora"}
+                    </button>
+                    <button className="hs-btn" onClick={() => setUpdAsk(false)}>
+                      Luego
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <button
             className="cc-hub"
             data-on={hubOk ? "1" : "0"}
@@ -2815,6 +2918,7 @@ export function CommandCenter() {
           onSelect={activateChat}
           onRemove={(c) => chats.remove(c.id)}
           onRename={(c, t) => chats.rename(c.id, t)}
+          onExport={(c) => void exportChat(c)}
           project={project}
           otherProjects={otherProjects}
           switching={switching}

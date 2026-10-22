@@ -2051,6 +2051,7 @@ name = "lienzo"
 version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
+ "flate2",
  "getrandom 0.3.4",
  "portable-pty",
  "rusqlite",

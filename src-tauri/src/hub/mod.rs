@@ -1617,6 +1617,39 @@ pub fn search_feed(inner: &HubInner, query: &str, agent: &str, limit: usize) -> 
     found
 }
 
+/// Los eventos entre dos instantes, del feed vivo y del archivo del proyecto, en orden: para
+/// exportar un chat entero aunque ya no quepa en el feed vivo. `limit` acota lo que se devuelve.
+/// `live` es el feed vivo (copiado, para no leer el archivo con el hub bloqueado).
+pub fn events_between(live: Vec<Event>, archive: &std::path::Path, from_ms: u64, to_ms: u64, limit: usize) -> Vec<Event> {
+    let inside = |e: &Event| e.ts_ms >= from_ms && e.ts_ms < to_ms;
+    let mut out: Vec<Event> = Vec::new();
+    let oldest_live = live.first().map(|e| e.seq).unwrap_or(u64::MAX);
+    // El archivo solo hace falta si la ventana empieza antes del feed vivo.
+    if live.first().is_none_or(|e| from_ms < e.ts_ms) {
+        for file in [archive.with_extension("old.jsonl"), archive.to_path_buf()] {
+            let Ok(raw) = std::fs::read_to_string(&file) else { continue };
+            out.extend(raw.lines().filter_map(|l| serde_json::from_str::<Event>(l).ok()).filter(|e| e.seq < oldest_live && inside(e)));
+        }
+    }
+    out.extend(live.into_iter().filter(|e| inside(e)));
+    out.sort_by_key(|e| e.seq);
+    out.dedup_by_key(|e| e.seq);
+    if out.len() > limit {
+        out.drain(..out.len() - limit);
+    }
+    out
+}
+
+/// Eventos de una ventana de tiempo (`to_ms` ausente = hasta ahora), para exportar un chat.
+#[tauri::command]
+pub async fn team_events_range(hub: tauri::State<'_, Hub>, from_ms: u64, to_ms: Option<u64>) -> Result<Vec<Event>, String> {
+    let (live, archive) = {
+        let inner = hub.0.lock().map_err(|e| e.to_string())?;
+        (inner.events.iter().cloned().collect::<Vec<_>>(), archive_file(inner.project.as_deref()))
+    };
+    Ok(events_between(live, &archive, from_ms, to_ms.unwrap_or(u64::MAX), 50_000))
+}
+
 /// Guarda el relevo de un agente pegado a su tarea y lo anuncia en el feed.
 pub fn save_handover(
     inner: &mut HubInner,
@@ -2750,6 +2783,28 @@ mod task_tests {
 #[cfg(test)]
 mod inbox_tests {
     use super::*;
+
+    #[test]
+    fn eventos_de_una_ventana_con_el_archivo() {
+        let ev = |seq: u64, ts: u64| Event { seq, ts_ms: ts, agent: "a".into(), session_id: String::new(), kind: "message".into(), text: format!("e{seq}"), files: vec![], to: None, task_id: None };
+        let dir = std::env::temp_dir().join(format!("lienzo-evr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let arch = dir.join("x.jsonl");
+        let lines: String = [ev(1, 100), ev(2, 200), ev(3, 300)].iter().map(|e| serde_json::to_string(e).unwrap() + "\n").collect();
+        std::fs::write(&arch, lines).unwrap();
+        std::fs::write(arch.with_extension("old.jsonl"), serde_json::to_string(&ev(0, 50)).unwrap() + "\n").unwrap();
+        // El 3 está también en el feed vivo: no se repite.
+        let live = vec![ev(3, 300), ev(4, 400), ev(5, 500)];
+        let got: Vec<u64> = events_between(live.clone(), &arch, 0, 450, 100).iter().map(|e| e.seq).collect();
+        assert_eq!(got, [0, 1, 2, 3, 4]);
+        let got: Vec<u64> = events_between(live.clone(), &arch, 350, u64::MAX, 100).iter().map(|e| e.seq).collect();
+        assert_eq!(got, [4, 5]);
+        // Con tope, se quedan los más nuevos.
+        let got: Vec<u64> = events_between(live, &arch, 0, u64::MAX, 2).iter().map(|e| e.seq).collect();
+        assert_eq!(got, [4, 5]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn hub() -> HubInner {
         HubInner {

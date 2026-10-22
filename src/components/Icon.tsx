@@ -34,6 +34,7 @@ const PATHS: Record<string, ReactNode> = {
   list: <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />,
   pulse: <path d="M22 12h-4l-3 9L9 3l-3 9H2" />,
   x: <path d="M18 6 6 18M6 6l12 12" />,
+  download: <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />,
   trash: <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" />,
   chev: <path d="m6 9 6 6 6-6" />,
   bell: <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />,
