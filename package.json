@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "node scripts/test-dispatcher.mjs",
     "pretauri": "node scripts/unblock-bins.mjs",
+    "release": "node scripts/unblock-bins.mjs && node scripts/version.mjs && tauri build",
     "tauri": "tauri"
   },
   "dependencies": {

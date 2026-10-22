@@ -705,7 +705,7 @@ fn tools_catalog() -> Value {
                     "every": { "type": "string", "description": "«cada 30 min», «cada 2 h», «cada día 9:00», «lun-vie 8:30» o «lun,mie,vie 18:00» (mínimo 15 min)" },
                     "assign": { "type": "string", "description": "Agente que la ejecuta (vacío = el primero libre)" },
                     "level": { "type": "string", "enum": ["simple", "media", "dificil"] },
-                    "model": { "type": "string", "description": "Solo si la ejecuta Claude: sonnet, haiku u opus (vacío = el suyo)" },
+                    "model": { "type": "string", "description": "Si la ejecuta Claude: sonnet, haiku u opus; si la ejecuta Antigravity u OpenCode, el id de su modelo (se reinicia con él). Vacío = el suyo" },
                     "daily_cap": { "type": "integer", "description": "Máximo de ejecuciones al día (6 por defecto)" }
                 },
                 "required": ["title", "notes", "every"]

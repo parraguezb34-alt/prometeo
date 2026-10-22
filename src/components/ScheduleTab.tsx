@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { agentLabel, errMsg } from "../lib/team";
-import type { TeamSchedule, TeamTask } from "../lib/team";
+import { agentLabel, errMsg, teamModels } from "../lib/team";
+import type { ModelEntry, TeamSchedule, TeamTask } from "../lib/team";
 import { chatAt, dayKey, nextRun, parseEvery, scheduleOrder } from "../lib/schedule";
 import type { ChatWindow } from "../lib/schedule";
 import { projectKey } from "../lib/project";
@@ -433,6 +433,17 @@ function ScheduleForm({
   const spec = parseEvery(d.every);
   const preview = spec ? when(nextRun(spec, Date.now())) : "";
   const isClaude = d.assign.toLowerCase().includes("claude");
+  // Antigravity y OpenCode eligen modelo al arrancar: Prometeo los reinicia con él (retomando su
+  // conversación) antes de pasarles la tarea.
+  const restartAgent = /antigravity|agy/i.test(d.assign) ? "antigravity" : /opencode/i.test(d.assign) ? "opencode" : "";
+  const isAgy = restartAgent !== "";
+  const [agyModels, setAgyModels] = useState<{ agent: string; models: ModelEntry[] } | null>(null);
+  useEffect(() => {
+    if (!restartAgent || agyModels?.agent === restartAgent) return;
+    teamModels(restartAgent)
+      .then((c) => setAgyModels({ agent: restartAgent, models: c.models }))
+      .catch(() => setAgyModels({ agent: restartAgent, models: [] }));
+  }, [restartAgent, agyModels]);
   const teamChats = chats.filter((c) => c.kind === "team").slice().sort((a, b) => b.startMs - a.startMs);
   const ready = d.title.trim() && d.notes.trim() && spec;
 
@@ -444,7 +455,7 @@ function ScheduleForm({
         if (!ready || busy) return;
         setBusy(true);
         setErr("");
-        onSave({ ...d, model: isClaude ? d.model : "" })
+        onSave({ ...d, model: isClaude || isAgy ? d.model : "" })
           .catch((e2) => setErr(errMsg(e2)))
           .finally(() => setBusy(false));
       }}
@@ -517,6 +528,27 @@ function ScheduleForm({
               <option value="sonnet">Sonnet</option>
               <option value="opus">Opus</option>
             </select>
+          </label>
+        )}
+        {isAgy && (
+          <label className="sc-field">
+            <span>Modelo ({agentLabel(restartAgent)})</span>
+            {agyModels && agyModels.agent === restartAgent && agyModels.models.length > 0 ? (
+              <select className="cc-mini-select" value={d.model} onChange={(e) => set({ model: e.target.value })}>
+                <option value="">El suyo</option>
+                {agyModels.models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label || m.id}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input value={d.model} onChange={(e) => set({ model: e.target.value.trim() })} placeholder="El suyo" />
+            )}
+            <small>
+              Si no es el que tiene, se reinicia con este antes de la tarea y retoma su conversación; después sigue con él
+              {restartAgent === "opencode" ? " (queda guardado en el opencode.json del proyecto)" : ""}.
+            </small>
           </label>
         )}
       </div>

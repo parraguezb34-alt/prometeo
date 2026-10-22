@@ -51,8 +51,8 @@ import { buildTimeline } from "../lib/timeline";
 import { chatHtml, chatMarkdown, fileSlug } from "../lib/exportChat";
 import { exportSave } from "../lib/viewer";
 import { droppedEvents, withOlder } from "../lib/chatsDisk";
-import { updateApply, updateCheck } from "../lib/update";
-import type { UpdateInfo } from "../lib/update";
+import { appAbout, loadSeen, newSince, saveSeen, updateApply, updateCheck } from "../lib/update";
+import type { Change, UpdateInfo } from "../lib/update";
 import { findSkill, riskNotice, skillsInstall, skillsList, skillsSet } from "../lib/skills";
 import type { Skill } from "../lib/skills";
 import {
@@ -408,6 +408,20 @@ export function CommandCenter() {
     check();
     const id = window.setInterval(check, 3 * 60_000);
     return () => window.clearInterval(id);
+  }, []);
+  // Novedades: al abrir una versión nueva se enseñan los commits que trae (una vez).
+  const [news, setNews] = useState<{ version: string; changes: Change[] } | null>(null);
+  useEffect(() => {
+    appAbout()
+      .then((a) => {
+        const seen = loadSeen();
+        if (seen?.version === a.version && seen.commit === a.commit) return;
+        // La primera vez que hay novedades (sin nada visto antes), las últimas.
+        const list = seen ? newSince(a.changes, seen) : a.changes.slice(0, 8);
+        saveSeen({ version: a.version, commit: a.commit });
+        if (list.length) setNews({ version: a.version, changes: list });
+      })
+      .catch(() => {});
   }, []);
   const workingNow = new Set(tasks.filter((t) => t.status === "claimed" && t.owner).map((t) => t.owner)).size;
   const applyUpdate = async () => {
@@ -923,6 +937,27 @@ export function CommandCenter() {
   const [dispatchView, setDispatchView] = useState<DispatchState>(EMPTY_DISPATCH);
   const dispatchRef = useRef<DispatchState>(EMPTY_DISPATCH);
   const dispatchBusy = useRef(false);
+  /** Reinicia a un agente con otro modelo (retomando su conversación), para una tarea programada.
+   * En una ref para que el ciclo del reparto use siempre los ajustes del momento. */
+  const switchModelRef = useRef<(name: string, model: string) => Promise<boolean>>(async () => false);
+  /** El modelo con el que se reinició a cada agente (OpenCode no lo lleva en su línea de comandos). */
+  const modelNow = useRef<Record<string, string>>({});
+  switchModelRef.current = async (name, model) => {
+    const panel = panelForAgent(getLayout().panels, name);
+    if (!panel) return false;
+    try {
+      if (panel.sessionId) await termKill(panel.sessionId).catch(() => {});
+      removePanel(panel.id);
+      const mode: Shoot = /(?:--mode|--permission-mode)[ =]plan/.test(panel.cmd ?? "") ? "plan" : "exec";
+      const r = await teamOpen(name, mode, { model, effort: prefs[name]?.effort });
+      if (r.kind === "pty") addAgentTerminal(agentLabel(name), withResume(r.cmd, sessionRef(name) ?? LATEST));
+      modelNow.current[name] = model;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   /** Lo último que el ciclo necesita ver, actualizado en cada render. */
   const latestRef = useRef<{
     tasks: TeamTask[];
@@ -992,10 +1027,21 @@ export function CommandCenter() {
           const panel = panelForAgent(cur.panels, agent);
           try {
             if (!task || !panel?.sessionId) throw new Error("sin terminal");
-            // Programada con modelo propio (solo Claude, y nunca al líder: le cambiaría el suyo).
-            const model = (task.model ?? "").trim().toLowerCase();
-            if (model && /^[a-z0-9.\-]{2,40}$/.test(model) && agent.toLowerCase().includes("claude") && agent !== cur.leader) {
-              await termWrite(panel.sessionId, `/model ${model}\r`);
+            // Programada con modelo propio (nunca al líder: le cambiaría el suyo). Claude lo cambia
+            // en caliente con /model; Antigravity solo al arrancar, así que se reinicia con él
+            // (retomando su conversación) y la tarea le llega cuando vuelve.
+            const model = (task.model ?? "").trim();
+            const okModel = /^[\w.:/@+-]{2,60}$/.test(model) && agent !== cur.leader;
+            const restarts = /antigravity|agy|opencode/i.test(agent);
+            const hasIt = (panel.cmd ?? "").includes(`--model ${model}`) || modelNow.current[agent] === model;
+            if (okModel && restarts && !hasIt) {
+              if (!(await switchModelRef.current(agent, model))) throw new Error(`no se pudo reiniciar con ${model}`);
+              const { [taskId]: _sent, ...pending } = next.pending;
+              next = { ...next, pending, agentPausedUntil: { ...next.agentPausedUntil, [agent]: now + 30_000 } };
+              say(`🔁 ${agentLabel(agent)} se reinicia con ${model} para #${taskId}; se la paso en cuanto vuelva.`);
+            } else {
+            if (okModel && agent.toLowerCase().includes("claude")) {
+              await termWrite(panel.sessionId, `/model ${model.toLowerCase()}\r`);
               await new Promise((ok) => window.setTimeout(ok, 2500));
             }
             await termWrite(
@@ -1011,6 +1057,7 @@ export function CommandCenter() {
             );
             await teamDm(agent, `📌 Despacho: #${taskId} «${task.title}»`);
             say(`📌 #${taskId} pedida a ${agentLabel(agent)}.`);
+            }
           } catch (e) {
             next = sendFailed(next, taskId, agent, now);
             say(`No pude avisar a ${agentLabel(agent)}: ${errMsg(e)}`, true);
@@ -2870,7 +2917,7 @@ export function CommandCenter() {
               </button>
               {updAsk && (
                 <div className="cc-upd-pop" role="dialog" aria-label="Actualizar Prometeo">
-                  <b>Versión nueva de Prometeo</b>
+                  <b>Prometeo {upd.version || "nuevo"} está listo</b>
                   <p>
                     Compilada hace {ago(upd.built_ms)}. Prometeo se cierra, se instala solo y se vuelve a abrir en unos
                     segundos. Las terminales de los agentes se reabren retomando su conversación.
@@ -3326,6 +3373,28 @@ export function CommandCenter() {
           <TerminalPanel key={p.id} panel={p} />
         ))}
       </div>
+
+      {news && (
+        <div className="cc-news" role="dialog" aria-label="Novedades de Prometeo">
+          <header>
+            <b>Novedades de Prometeo {news.version}</b>
+            <button className="ap-icon" onClick={() => setNews(null)} aria-label="Cerrar" title="Cerrar">
+              <Icon name="x" size={14} />
+            </button>
+          </header>
+          <ul>
+            {news.changes.map((c) => (
+              <li key={c.hash}>
+                <span>{c.subject}</span>
+                <time>{ago(c.ts_ms)}</time>
+              </li>
+            ))}
+          </ul>
+          <button className="hs-btn" onClick={() => setNews(null)}>
+            Entendido
+          </button>
+        </div>
+      )}
 
       <Toast flash={flash} onDismiss={() => setFlash(null)} />
       <InAppAvisos onOpen={openAviso} />

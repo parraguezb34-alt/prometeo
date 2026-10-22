@@ -17,8 +17,10 @@ import { ErrorsPanel } from "./ErrorsPanel";
 import { useUnseenErrors } from "../lib/errors";
 import type { IconName } from "./Icon";
 import { EFFORT_LABEL } from "./TeamModal";
+import { appAbout, updateCheck } from "../lib/update";
+import type { About, UpdateInfo } from "../lib/update";
 
-export type SettingsSection = "general" | "agents" | "team" | "skills" | "usage" | "dispatch" | "notify" | "hub" | "errors";
+export type SettingsSection = "general" | "agents" | "team" | "skills" | "usage" | "dispatch" | "notify" | "hub" | "errors" | "about";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: IconName; hint: string }[] = [
   { id: "general", label: "General", icon: "settings", hint: "Proyecto y arranque" },
@@ -30,6 +32,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: IconName; hint: stri
   { id: "notify", label: "Avisos", icon: "bell", hint: "Notificaciones" },
   { id: "hub", label: "Conexión", icon: "plug", hint: "Hub y diagnóstico" },
   { id: "errors", label: "Errores", icon: "warn", hint: "Registro de fallos" },
+  { id: "about", label: "Acerca de", icon: "app", hint: "Versión y novedades" },
 ];
 
 /** Frases listas para las normas: se añaden al final si aún no están. */
@@ -135,6 +138,7 @@ export function SettingsModal(props: Props) {
             {section === "notify" && <Notify {...props} />}
             {section === "hub" && <Hub {...props} />}
             {section === "errors" && <ErrorsPanel say={props.say} />}
+            {section === "about" && <AboutPanel />}
           </div>
         </div>
       </section>
@@ -1243,6 +1247,58 @@ function Notify({ notifyOn, onNotify, say }: Props) {
 }
 
 // ---- Conexión ------------------------------------------------------------------------
+
+/** La versión que corre, si hay otra lista para instalar y los últimos cambios. */
+function AboutPanel() {
+  const [about, setAbout] = useState<About | null>(null);
+  const [upd, setUpd] = useState<UpdateInfo | null>(null);
+  const [checking, setChecking] = useState(false);
+  const check = () => {
+    setChecking(true);
+    updateCheck()
+      .then(setUpd)
+      .catch(() => setUpd(null))
+      .finally(() => setChecking(false));
+  };
+  useEffect(() => {
+    appAbout().then(setAbout).catch(() => setAbout(null));
+    check();
+  }, []);
+  return (
+    <>
+      <Group title="Prometeo" desc="La versión sube sola cada vez que se compila (una por commit).">
+        <Row label="Versión">
+          <b>{about?.version ?? "…"}</b>
+        </Row>
+        <Row label="Commit" hint={about?.dirty ? "Compilada con cambios que aún no estaban guardados en git." : undefined}>
+          <code>{about?.commit || "—"}</code>
+        </Row>
+        <Row label="Compilada">{about?.built_ms ? `hace ${ago(about.built_ms)}` : "—"}</Row>
+        <Row
+          label="Actualización"
+          hint={upd?.available ? "Usa el botón «Actualizar» de arriba a la derecha." : upd?.reason || undefined}
+        >
+          <span className="st-pill" data-tone={upd?.available ? "ok" : undefined}>
+            {upd?.available ? `Lista: ${upd.version || "versión nueva"}` : "Al día"}
+          </span>
+          <button className="hs-btn" onClick={check} disabled={checking}>
+            {checking ? "Buscando…" : "Buscar ahora"}
+          </button>
+        </Row>
+      </Group>
+      <Group title="Últimos cambios" desc="Lo que trae esta versión, del más nuevo al más viejo.">
+        <ul className="st-changes">
+          {(about?.changes ?? []).slice(0, 20).map((c) => (
+            <li key={c.hash}>
+              <span>{c.subject}</span>
+              <time>{ago(c.ts_ms)}</time>
+            </li>
+          ))}
+        </ul>
+      </Group>
+    </>
+  );
+}
 
 function Hub({ state, detect, hubOk, say }: Props) {
   const [details, setDetails] = useState<TeamDetails | null>(null);

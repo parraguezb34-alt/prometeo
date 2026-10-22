@@ -21,6 +21,8 @@ pub struct UpdateInfo {
     setup: String,
     /// Cuándo se compiló (ms epoch).
     built_ms: u64,
+    /// Su número de versión (del nombre del instalador).
+    version: String,
     /// Por qué no hay (en desarrollo, sin compilar…), para Ajustes.
     reason: String,
 }
@@ -101,6 +103,7 @@ pub fn check_in(source: &Path, current: &Path) -> UpdateInfo {
     let available = built.is_file() && !same_file(&built, current);
     let info = UpdateInfo {
         available,
+        version: setup_version(&key),
         setup: key.clone(),
         built_ms,
         reason: if available { String::new() } else { "Ya tienes la última versión compilada.".into() },
@@ -117,6 +120,55 @@ pub async fn update_check() -> UpdateInfo {
         Ok(cur) => check_in(&source_dir(), &cur),
         Err(e) => UpdateInfo { reason: e.to_string(), ..Default::default() },
     }
+}
+
+/// Un commit de los que trae esta versión.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Change {
+    hash: String,
+    ts_ms: u64,
+    subject: String,
+}
+
+/// Qué versión corre: número, commit, cuándo se compiló y sus últimos cambios.
+#[derive(Serialize)]
+pub struct About {
+    version: &'static str,
+    commit: &'static str,
+    /// Se compiló con cambios aún sin guardar en git.
+    dirty: bool,
+    built_ms: u64,
+    changes: Vec<Change>,
+}
+
+/// Las líneas `hash<US>fecha<US>asunto` que deja build.rs.
+pub fn parse_changes(raw: &str) -> Vec<Change> {
+    raw.lines()
+        .filter_map(|l| {
+            let mut it = l.splitn(3, '\u{1f}');
+            let hash = it.next()?.trim().to_string();
+            let ts: u64 = it.next()?.trim().parse().ok()?;
+            let subject = it.next()?.trim().to_string();
+            (!hash.is_empty()).then_some(Change { hash, ts_ms: ts * 1000, subject })
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub fn app_about() -> About {
+    About {
+        version: env!("CARGO_PKG_VERSION"),
+        commit: env!("PROMETEO_COMMIT"),
+        dirty: !env!("PROMETEO_DIRTY").is_empty(),
+        built_ms: env!("PROMETEO_BUILT_MS").parse().unwrap_or(0),
+        changes: parse_changes(include_str!(concat!(env!("OUT_DIR"), "/cambios.txt"))),
+    }
+}
+
+/// «Prometeo_1.0.104_x64-setup.exe» → «1.0.104».
+pub fn setup_version(setup: &str) -> String {
+    let name = setup.rsplit(['\\', '/']).next().unwrap_or("");
+    name.split('_').nth(1).filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit())).unwrap_or("").to_string()
 }
 
 /// Comillas simples de PowerShell.
@@ -204,6 +256,18 @@ mod tests {
         // Corriendo desde la carpeta de compilación (desarrollo): nunca.
         assert!(!check_in(&src, &src.join("target/debug/lienzo.exe")).available);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cambios_y_version_del_instalador() {
+        let c = parse_changes("abc1234\u{1f}1792700000\u{1f}Chats en disco\nmal\n\u{1f}1\u{1f}x\ndef5678\u{1f}1792600000\u{1f}Uno: dos \u{1f} tres");
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0], Change { hash: "abc1234".into(), ts_ms: 1_792_700_000_000, subject: "Chats en disco".into() });
+        assert_eq!(c[1].subject, "Uno: dos \u{1f} tres");
+        assert_eq!(setup_version(r"C:\x\nsis\Prometeo_1.0.104_x64-setup.exe"), "1.0.104");
+        assert_eq!(setup_version("raro-setup.exe"), "");
+        // Lo que dejó build.rs se lee.
+        assert!(!app_about().version.is_empty());
     }
 
     #[test]

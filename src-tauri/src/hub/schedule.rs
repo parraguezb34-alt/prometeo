@@ -26,7 +26,8 @@ pub struct Schedule {
     pub assign: String,
     #[serde(default)]
     pub level: String,
-    /// Modelo con el que debe ejecutarse (solo Claude: se le teclea `/model`), vacío = el suyo.
+    /// Modelo con el que debe ejecutarse (Claude: se le teclea `/model`; Antigravity: se reinicia
+    /// con `--model`), vacío = el suyo.
     #[serde(default)]
     pub model: String,
     /// pending (espera tu OK) · active · paused

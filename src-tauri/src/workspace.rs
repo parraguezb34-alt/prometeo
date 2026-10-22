@@ -4,7 +4,10 @@
 //! git propio de cada proyecto (`.lienzo/historial`, ver `history.rs`), que ya existe en todos.
 //!
 //! - Al tomar la tarea se guarda una foto del proyecto (la «base») y se abre un worktree de ella.
-//! - Las carpetas pesadas (`node_modules`, `.venv`…) no se copian: se enlazan con un junction.
+//! - Las carpetas pesadas (`node_modules`, `.venv`…, también las de subcarpetas como `web/`) no se
+//!   copian: se enlazan con un junction.
+//! - Si el proyecto está en OneDrive, las copias van fuera (`%LOCALAPPDATA%\lienzo\tareas`): si no,
+//!   OneDrive subiría a la nube cada copia de cada tarea.
 //! - Al entregar (o al aprobarse, en modo director) primero se trae a la copia lo que cambió en el
 //!   proyecto desde la base (fusión a tres bandas, como `git merge-file`) y después se copia al
 //!   proyecto lo que cambió el agente. Si algo choca, se deja marcado en la copia y no se toca el
@@ -16,9 +19,52 @@ use std::path::{Path, PathBuf};
 /// Carpetas que no entran en el historial y que la copia necesita para compilar o probar: se enlazan.
 const SHARED: [&str; 3] = ["node_modules", ".venv", "venv"];
 
-/// Carpeta aislada de la tarea `task` dentro del proyecto.
+/// Clave de una ruta para compararla: sin `\\?\`, con «/», sin barra final y en minúsculas.
+fn path_key(p: &str) -> String {
+    let p = p.strip_prefix(r"\\?\").unwrap_or(p);
+    crate::hub::project_key(p)
+}
+
+/// Las carpetas de OneDrive de este equipo (personal y de empresa).
+fn onedrive_dirs() -> Vec<String> {
+    ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .filter(|v| !v.trim().is_empty())
+        .collect()
+}
+
+/// Dónde van las copias de las tareas de un proyecto: dentro de él salvo que esté en OneDrive;
+/// entonces en `local/<huella de la carpeta>`.
+fn tasks_root_in(root: &Path, onedrive: &[String], local: &Path) -> PathBuf {
+    let key = path_key(&root.display().to_string());
+    let synced = onedrive.iter().map(|d| path_key(d)).any(|d| key == d || key.starts_with(&format!("{d}/")));
+    if !synced {
+        return root.join(".lienzo").join("tareas");
+    }
+    // FNV-1a: un nombre corto y estable por carpeta (como el archivo del feed).
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in key.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    local.join(format!("{h:016x}"))
+}
+
+/// La carpeta de las copias de las tareas del proyecto (ver `tasks_root_in`).
+pub fn tasks_root(root: &Path) -> PathBuf {
+    let local = std::env::var("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    tasks_root_in(root, &onedrive_dirs(), &local.join("lienzo").join("tareas"))
+}
+
+/// Carpeta aislada de la tarea `task`. Una copia ya empezada en el sitio de antes
+/// (`.lienzo/tareas` dentro del proyecto) sigue allí hasta que se entregue.
 pub fn ws_dir(root: &Path, task: u64) -> PathBuf {
-    root.join(".lienzo").join("tareas").join(task.to_string())
+    let before = root.join(".lienzo").join("tareas").join(task.to_string());
+    if before.join(".git").exists() {
+        return before;
+    }
+    tasks_root(root).join(task.to_string())
 }
 
 fn base_ref(task: u64) -> String {
@@ -136,13 +182,43 @@ fn merge3(root: &Path, task: u64, mine: &[u8], base: &[u8], theirs: &[u8]) -> Op
     }
 }
 
+/// Hasta qué profundidad se buscan carpetas pesadas en subcarpetas (`web/node_modules`, `apps/x/…`).
+const SHARED_DEPTH: usize = 4;
+
+/// Carpetas en las que no se busca (ni se entra en las pesadas que se encuentren).
+fn skip_dir(name: &str) -> bool {
+    name.starts_with('.') || matches!(name, "target" | "dist" | "build" | "out" | "__pycache__")
+}
+
+/// Las carpetas pesadas de `dir` y sus subcarpetas (rutas relativas). Sin seguir enlaces.
+fn find_shared(dir: &Path, rel: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Ok(ft) = e.file_type() else { continue };
+        let path = e.path();
+        if SHARED.contains(&name.as_str()) {
+            if ft.is_dir() || ft.is_symlink() || is_junction(&path) {
+                out.push(rel.join(&name));
+            }
+            continue;
+        }
+        if depth > 0 && ft.is_dir() && !ft.is_symlink() && !is_junction(&path) && !skip_dir(&name) {
+            find_shared(&path, &rel.join(&name), depth - 1, out);
+        }
+    }
+}
+
 /// Enlaza en la copia las carpetas pesadas del proyecto (un junction en Windows: no pide permisos
-/// de administrador). Si no se puede, la copia sigue sin ellas.
+/// de administrador), también las de subcarpetas. Si no se puede, la copia sigue sin ellas.
 fn link_shared(root: &Path, ws: &Path) {
-    for name in SHARED {
-        let src = root.join(name);
-        let dst = ws.join(name);
-        if !src.is_dir() || dst.exists() {
+    let mut found = Vec::new();
+    find_shared(root, Path::new(""), SHARED_DEPTH, &mut found);
+    for rel in found {
+        let src = root.join(&rel);
+        let dst = ws.join(&rel);
+        // Solo donde la copia tiene la carpeta de al lado (si no, esa parte no es del proyecto).
+        if !src.is_dir() || dst.exists() || !dst.parent().is_some_and(Path::is_dir) {
             continue;
         }
         #[cfg(windows)]
@@ -166,8 +242,10 @@ fn link_shared(root: &Path, ws: &Path) {
 
 /// Quita los enlaces de la copia (solo el enlace: lo enlazado sigue intacto en el proyecto).
 fn unlink_shared(ws: &Path) -> Result<(), String> {
-    for name in SHARED {
-        let dst = ws.join(name);
+    let mut found = Vec::new();
+    find_shared(ws, Path::new(""), SHARED_DEPTH, &mut found);
+    for rel in found {
+        let dst = ws.join(rel);
         let Ok(meta) = std::fs::symlink_metadata(&dst) else { continue };
         let is_link = meta.file_type().is_symlink() || is_junction(&dst);
         if is_link {
@@ -406,11 +484,33 @@ mod tests {
         let root = project("enlaces");
         std::fs::create_dir_all(root.join("node_modules").join("pkg")).unwrap();
         std::fs::write(root.join("node_modules").join("pkg").join("index.js"), "x").unwrap();
+        // También los de subcarpetas (web/node_modules), pero no los de carpetas que no están en la copia.
+        std::fs::create_dir_all(root.join("src").join("node_modules").join("lib")).unwrap();
+        std::fs::write(root.join("src").join("node_modules").join("lib").join("i.js"), "y").unwrap();
+        std::fs::create_dir_all(root.join("vacia").join(".venv")).unwrap();
         let proj = root.display().to_string();
         let ws = PathBuf::from(create(&proj, 9).unwrap());
         assert!(ws.join("node_modules").join("pkg").join("index.js").exists(), "la copia ve node_modules");
+        assert!(ws.join("src").join("node_modules").join("lib").join("i.js").exists(), "y el de la subcarpeta");
+        assert!(!ws.join("vacia").exists(), "una carpeta sin archivos del proyecto no se crea");
         discard(&proj, 9).unwrap();
         assert!(root.join("node_modules").join("pkg").join("index.js").exists(), "borrar la copia no toca el original");
+        assert!(root.join("src").join("node_modules").join("lib").join("i.js").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn las_copias_salen_de_onedrive() {
+        let local = Path::new(r"C:\Local\lienzo\tareas");
+        let od = vec![r"C:\Users\x\OneDrive".to_string()];
+        let inside = tasks_root_in(Path::new(r"\\?\C:\Users\x\OneDrive\Escritorio\Mi app"), &od, local);
+        assert!(inside.starts_with(local), "{}", inside.display());
+        // La misma carpeta escrita de otra forma da la misma huella.
+        assert_eq!(inside, tasks_root_in(Path::new(r"c:/users/x/onedrive/escritorio/mi app/"), &od, local));
+        // Fuera de OneDrive (o una carpeta que solo empieza igual), dentro del proyecto.
+        let out = tasks_root_in(Path::new(r"C:\Projects\app"), &od, local);
+        assert_eq!(out, Path::new(r"C:\Projects\app").join(".lienzo").join("tareas"));
+        let near = tasks_root_in(Path::new(r"C:\Users\x\OneDriveViejo\app"), &od, local);
+        assert!(!near.starts_with(local));
     }
 }

@@ -846,8 +846,34 @@ pub async fn team_open(
                 }
             }
         }
+        // Con carpetas aisladas fuera del proyecto (proyecto en OneDrive), Claude Code necesita
+        // permiso para trabajar allí: se la añade como carpeta de trabajo.
+        let mut spec = spec;
+        if agent == "claude" {
+            if let Some(dir) = isolated_outside(&app) {
+                if let Some(cmd) = spec["cmd"].as_str().map(|c| format!("{c} --add-dir {}", quoted(&dir))) {
+                    spec["cmd"] = json!(cmd);
+                }
+            }
+        }
         Ok(spec)
     }
+}
+
+/// La carpeta de las copias de las tareas, si las carpetas aisladas están activas y quedan fuera
+/// del proyecto (la crea, para que el CLI la acepte).
+fn isolated_outside(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let (on, project) = app.try_state::<Hub>().and_then(|hub| hub.0.lock().ok().map(|i| (i.isolate, i.project.clone())))?;
+    let root = PathBuf::from(project?.trim());
+    if !on || !root.is_dir() {
+        return None;
+    }
+    let dir = crate::workspace::tasks_root(&root.canonicalize().unwrap_or(root.clone()));
+    if crate::hub::project_key(&dir.display().to_string()).starts_with(&crate::hub::project_key(&root.display().to_string())) {
+        return None;
+    }
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
 }
 
 /// El CLI de OpenCode: el incluido con su app de escritorio o el del PATH.

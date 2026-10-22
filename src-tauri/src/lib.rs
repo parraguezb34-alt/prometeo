@@ -109,6 +109,7 @@ pub fn run() {
             viewer::file_office,
             viewer::export_save,
             updater::update_check,
+            updater::app_about,
             updater::update_apply,
             hub::team_events_range,
             project::project_save_image,

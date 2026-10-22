@@ -2313,6 +2313,64 @@ button.cc-lead {
   gap: 8px;
   margin-top: 12px;
 }
+
+/* Novedades tras actualizar (abajo a la derecha) */
+.cc-news {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 70;
+  width: min(380px, calc(100vw - 36px));
+  max-height: min(60vh, 520px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 16px 40px rgb(0 0 0 / 0.4);
+  font-size: 12.5px;
+}
+.cc-news header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-strong);
+}
+.cc-news ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cc-news li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  color: var(--text);
+  line-height: 1.4;
+}
+.cc-news li span {
+  flex: 1;
+  min-width: 0;
+}
+.cc-news li span::before {
+  content: "•";
+  color: var(--accent);
+  margin-right: 6px;
+}
+.cc-news time {
+  flex: none;
+  color: var(--faint);
+  font-size: 11px;
+}
+.cc-news > .hs-btn {
+  align-self: flex-end;
+}
 .rn-input {
   box-sizing: border-box;
   width: 100%;

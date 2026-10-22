@@ -1039,3 +1039,28 @@
 :root[data-motion="off"] .er-body {
   animation: none;
 }
+
+/* Acerca de: últimos cambios */
+.st-changes {
+  margin: 0;
+  padding: 0 0 4px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.st-changes li {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+.st-changes li span {
+  flex: 1;
+  min-width: 0;
+}
+.st-changes time {
+  flex: none;
+  color: var(--faint);
+  font-size: 11px;
+}
