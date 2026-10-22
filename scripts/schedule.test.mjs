@@ -42,3 +42,24 @@ test("le toca solo activa, de su proyecto y con la hora pasada", () => {
 });
 
 console.log(`${n} pruebas de programadas OK`);
+
+{
+  const { chatAt, scheduleOrder } = await import("./lib/schedule.js");
+  const chats = [
+    { id: "a", kind: "team", title: "Orca", startMs: 0, endMs: 100 },
+    { id: "p", kind: "agent", title: "Privado", startMs: 0 },
+    { id: "b", kind: "team", title: "Hermes", startMs: 100 },
+  ];
+  assert.equal(chatAt(chats, 50).id, "a");
+  assert.equal(chatAt(chats, 150).id, "b", "el abierto se queda lo nuevo");
+  const base = { every: "cada 2 h", approved_ms: 1000, last_ms: 0, project: "c:/p" };
+  const list = [
+    { ...base, id: 1, title: "pausada", status: "paused" },
+    { ...base, id: 2, title: "otra carpeta", status: "active", project: "c:/otro" },
+    { ...base, id: 3, title: "pronto", status: "active", every: "cada 30 min" },
+    { ...base, id: 4, title: "pendiente", status: "pending" },
+    { ...base, id: 5, title: "luego", status: "active" },
+  ];
+  assert.deepEqual(scheduleOrder(list, 2000, "c:/p").map((s) => s.id), [4, 3, 5, 1, 2]);
+  console.log("ok - chat de origen y orden de la sección");
+}

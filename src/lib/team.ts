@@ -167,11 +167,22 @@ export type TeamSchedule = {
   runs_total: number;
   last_task: number;
   skipped: string;
+  /** Chat al que está ligada (id y título), vacío si a ninguno. */
+  chat: string;
+  chat_title: string;
 };
 
 /** Desde el tablero: aprobar, pausar, reanudar o borrar una programación. */
 export const teamScheduleOp = (id: number, op: "approve" | "pause" | "resume" | "delete") =>
   invoke<void>("team_schedule_op", { id, op });
+/** La creas tú desde Programadas (ya activa), o la editas con su `id`. */
+export const teamScheduleSave = (
+  id: number | null,
+  draft: { title: string; notes: string; every: string; assign: string; level: string; model: string; daily_cap: number; chat: string; chat_title: string },
+) => invoke<TeamSchedule>("team_schedule_save", { id, draft });
+/** Liga una programación al chat donde se pidió. */
+export const teamScheduleLink = (id: number, chat: string, title: string) =>
+  invoke<void>("team_schedule_link", { id, chat, title });
 /** Le toca (o «Ejecutar ahora» con `manual`): crea su tarea, o se la salta con `skip`. */
 export const teamScheduleFire = (id: number, day: string, skip?: string, manual?: boolean) =>
   invoke<number | null>("team_schedule_fire", { id, day, skip: skip ?? null, manual: manual ?? null });

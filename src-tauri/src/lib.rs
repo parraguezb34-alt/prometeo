@@ -76,6 +76,8 @@ pub fn run() {
             hub::team_isolate,
             hub::team_schedule_op,
             hub::team_schedule_fire,
+            hub::team_schedule_save,
+            hub::team_schedule_link,
             hub::team_strengths,
             hub::team_broadcast,
             hub::team_broadcast_ack,

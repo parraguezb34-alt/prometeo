@@ -25,7 +25,9 @@ import {
   teamDm,
   teamPlan,
   teamScheduleFire,
+  teamScheduleLink,
   teamScheduleOp,
+  teamScheduleSave,
   teamLeader,
   teamMemoryAdd,
   teamMemoryForget,
@@ -39,7 +41,8 @@ import {
   teamTaskOp,
 } from "../lib/team";
 import type { DetectResult, InboxInfo, ModelCatalog, QAnswer, TeamAgent, TeamEvent, TeamSchedule, TeamState, TeamTask } from "../lib/team";
-import { dayKey, isDue } from "../lib/schedule";
+import { chatAt, dayKey, isDue } from "../lib/schedule";
+import { ScheduleTab } from "./ScheduleTab";
 import { findSkill, riskNotice, skillsInstall, skillsList, skillsSet } from "../lib/skills";
 import type { Skill } from "../lib/skills";
 import {
@@ -108,7 +111,7 @@ import { TerminalPanel } from "./TerminalPanel";
 type Sel = { kind: "team" } | { kind: "agent"; name: string };
 
 /** What the stage shows for the team destination. */
-type CenterView = "feed" | "research" | "history" | "app" | "term";
+type CenterView = "feed" | "research" | "schedule" | "history" | "app" | "term";
 
 /** Mission trigger mode: plan-first or straight to execution. */
 type Shoot = "plan" | "exec";
@@ -2119,6 +2122,22 @@ export function CommandCenter() {
     };
   }, [say]);
 
+  // Las que pidió un agente quedan ligadas al chat donde se pidieron (el de su hora de creación).
+  const schedPending = (state?.schedules ?? []).filter(
+    (s) => s.status === "pending" && (!s.project || !project || projectKey(s.project) === projectKey(project)),
+  ).length;
+  const linkedSched = useRef(new Set<number>());
+  useEffect(() => {
+    if (!project) return;
+    for (const s of state?.schedules ?? []) {
+      if (s.chat || linkedSched.current.has(s.id)) continue;
+      if (s.project && projectKey(s.project) !== projectKey(project)) continue;
+      const c = chatAt(chats.chats, s.created_ms);
+      linkedSched.current.add(s.id);
+      if (c) void teamScheduleLink(s.id, c.id, c.title).catch(() => {});
+    }
+  }, [state?.schedules, chats.chats, project]);
+
   /** Desde el tablero: aprobar, pausar, reanudar, borrar o «ejecutar ahora» una programación. */
   const scheduleAction = async (id: number, op: "approve" | "pause" | "resume" | "delete" | "run") => {
     try {
@@ -2376,6 +2395,7 @@ export function CommandCenter() {
   const VIEWS: { id: CenterView; label: string; icon: IconName; title: string }[] = [
     { id: "feed", label: "Comando", icon: "msg", title: "Chat y actividad del equipo" },
     { id: "research", label: "Investigar", icon: "search", title: "Investigación en la web con el equipo, con fuentes" },
+    { id: "schedule", label: "Programadas", icon: "refresh", title: "Tareas que se repiten solas, de todos los chats" },
     { id: "history", label: "Historial", icon: "history", title: "Qué cambió cada tarea, para verlo y deshacerlo" },
     { id: "app", label: "App", icon: "app", title: "Tu proyecto arrancado y a la vista" },
     { id: "term", label: "Terminal", icon: "term", title: "Terminal de cada agente a pantalla completa" },
@@ -2477,6 +2497,7 @@ export function CommandCenter() {
             <Icon name={v.icon} size={14} />
             {v.label}
             {v.id === "history" && changeCount ? <span className="cc-count">{changeCount}</span> : null}
+            {v.id === "schedule" && schedPending > 0 ? <span className="cc-count">{schedPending}</span> : null}
           </button>
         ))}
       </div>
@@ -2888,6 +2909,41 @@ export function CommandCenter() {
             />
           )}
 
+          {view === "schedule" && (
+            <ScheduleTab
+              schedules={state?.schedules ?? []}
+              tasks={tasks}
+              chats={chats.chats}
+              activeChat={currentTeamChat(chats.chats)}
+              project={project}
+              agents={[...new Set(agents.map((a) => a.name))]}
+              onSave={async (id, d) => {
+                try {
+                  const s = await teamScheduleSave(id, d);
+                  say(id ? `📅 P${s.id} guardada.` : `📅 P${s.id} creada y activa: ${s.every}.`);
+                  refresh();
+                  return s;
+                } catch (e) {
+                  say(errMsg(e), true);
+                  return null;
+                }
+              }}
+              onOp={(id, op) => void scheduleAction(id, op)}
+              onOpenChat={(id) => {
+                const c = chats.chats.find((x) => x.id === id);
+                if (c) activateChat(c);
+              }}
+              onOpenTask={(id) => {
+                setDiffTask(id);
+                setView("history");
+              }}
+              onAsk={(text) => {
+                setDraft(text);
+                setView("feed");
+              }}
+            />
+          )}
+
           {view === "history" && (
             <HistoryTab
               project={project}
@@ -3044,7 +3100,10 @@ export function CommandCenter() {
       {overlay === "tasks" && (
         <TasksDrawer
           schedules={(state?.schedules ?? []).filter((s) => !s.project || !project || projectKey(s.project) === projectKey(project))}
-          onSchedule={(id, op) => void scheduleAction(id, op)}
+          onOpenSchedules={() => {
+            setOverlay(null);
+            setView("schedule");
+          }}
           tasks={chatTasks}
           earlier={earlierTasks}
           allTasks={tasks}

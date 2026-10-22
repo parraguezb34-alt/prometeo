@@ -696,7 +696,7 @@ fn tools_catalog() -> Value {
         },
         {
             "name": "team_schedule_create",
-            "description": "Programa una tarea que se repite (revisar algo cada mañana, actualizar un informe…). Escribe el encargo una vez, completo y con rutas absolutas; Prometeo crea una tarea normal a cada hora y la reparte (mejor a un agente económico con `assign`). Queda PENDIENTE hasta que el usuario la apruebe en el tablero. Pregúntale antes si no te la pidió.",
+            "description": "Programa una tarea que se repite (revisar algo cada mañana, actualizar un informe…). Escribe el encargo una vez, completo y con rutas absolutas; Prometeo crea una tarea normal a cada hora y la reparte (mejor a un agente económico con `assign`). Queda PENDIENTE hasta que el usuario la apruebe en la sección Programadas. Pregúntale antes si no te la pidió.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1102,7 +1102,7 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
             .map(|v| {
                 text_result(
                     &format!(
-                        "programación P{} creada y PENDIENTE: el usuario la aprueba en el tablero. Hasta entonces no se ejecuta.",
+                        "programación P{} creada y PENDIENTE: el usuario la aprueba en la sección Programadas de Prometeo. Hasta entonces no se ejecuta.",
                         v["schedule"]["id"].as_u64().unwrap_or(0)
                     ),
                     false,

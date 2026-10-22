@@ -6,7 +6,6 @@ import { isParked } from "../lib/dispatcher";
 import type { DispatchState } from "../lib/dispatcher";
 import { dispatchConfig, useSettings } from "../lib/settings";
 import type { MemoryEntry, TeamEvent, TeamSchedule, TeamTask } from "../lib/team";
-import { dayKey, nextRun, parseEvery } from "../lib/schedule";
 import { stepOf } from "../lib/steps";
 import { askPhrase, isNotice, parseTask, span } from "../lib/timeline";
 import { Icon } from "./Icon";
@@ -65,7 +64,7 @@ export function TasksDrawer({
   onTerminal,
   onSelectAgent,
   schedules = [],
-  onSchedule,
+  onOpenSchedules,
 }: {
   /** Tareas de este chat. */
   tasks: TeamTask[];
@@ -105,9 +104,9 @@ export function TasksDrawer({
   onAnswer: (name: string) => void;
   onTerminal: (name: string) => void;
   onSelectAgent: (name: string) => void;
-  /** Tareas programadas del proyecto y qué hacer con ellas. */
+  /** Tareas programadas del proyecto (se gestionan en la sección Programadas). */
   schedules?: TeamSchedule[];
-  onSchedule?: (id: number, op: "approve" | "pause" | "resume" | "delete" | "run") => void;
+  onOpenSchedules?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [scope, setScope] = useState<Scope>("chat");
@@ -277,21 +276,17 @@ export function TasksDrawer({
                 </div>
               )}
 
-              {schedules.length > 0 && onSchedule && (
-                <Group
-                  key={`${scope}-sched`}
-                  label={schedules.some((s) => s.status === "pending") ? "Programadas · esperan tu OK" : "Programadas"}
-                  count={schedules.length}
-                  status="sched"
-                  startOpen={schedules.some((s) => s.status === "pending")}
-                >
-                  {schedules
-                    .slice()
-                    .sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending") || a.id - b.id)
-                    .map((s) => (
-                      <ScheduleRow key={s.id} s={s} onOp={onSchedule} />
-                    ))}
-                </Group>
+              {schedules.length > 0 && onOpenSchedules && (
+                <button className="td-sched-link" onClick={onOpenSchedules}>
+                  <Icon name="refresh" size={13} />
+                  <span>
+                    {schedules.length === 1 ? "1 tarea programada" : `${schedules.length} tareas programadas`}
+                    {schedules.some((x) => x.status === "pending") && (
+                      <b> · {schedules.filter((x) => x.status === "pending").length} esperan tu OK</b>
+                    )}
+                  </span>
+                  <span className="td-sched-go">Ver en Programadas</span>
+                </button>
               )}
 
               {groups.map((g) =>
@@ -395,85 +390,6 @@ export function TasksDrawer({
         )}
       </aside>
     </>
-  );
-}
-
-// ---- programadas -----------------------------------------------------------------------
-
-/** «hoy 9:00», «mañana 8:30», «lun 26, 8:30». */
-function whenLabel(ms: number): string {
-  const d = new Date(ms);
-  const hm = d.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
-  const today = new Date();
-  const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
-  if (d.toDateString() === today.toDateString()) return `hoy ${hm}`;
-  if (d.toDateString() === tomorrow.toDateString()) return `mañana ${hm}`;
-  return `${d.toLocaleDateString("es", { weekday: "short", day: "numeric" })}, ${hm}`;
-}
-
-function ScheduleRow({ s, onOp }: { s: TeamSchedule; onOp: (id: number, op: "approve" | "pause" | "resume" | "delete" | "run") => void }) {
-  const [sure, setSure] = useState(false);
-  const spec = parseEvery(s.every);
-  const base = s.last_ms || s.approved_ms;
-  const next = s.status === "active" && spec && base ? nextRun(spec, base) : 0;
-  const tag = s.status === "pending" ? "espera tu OK" : s.status === "paused" ? "en pausa" : "activa";
-  const today = s.day === dayKey(Date.now()) ? s.runs_day : 0;
-  return (
-    <div className="td-task" data-s={s.status === "active" ? "claimed" : "open"}>
-      <span className="td-check" data-s="sched" aria-hidden="true">
-        <Icon name="history" size={11} />
-      </span>
-      <div className="td-main" style={{ cursor: "default" }}>
-        <span className="td-title">{s.title}</span>
-        <span className="td-meta">
-          <span className="td-id">P{s.id}</span>
-          <span className="td-free">{s.every}</span>
-          <span className="td-free">{s.assign ? `para ${agentLabel(s.assign)}` : "para quien esté libre"}</span>
-          {s.model && <span className="td-free">modelo {s.model}</span>}
-          <span className="td-review">{tag}</span>
-          {!spec && <span className="td-review">no entiendo la frecuencia</span>}
-        </span>
-        <span className="td-meta">
-          {next > 0 && <span className="td-free">próxima: {whenLabel(next)}</span>}
-          <span className="td-free">
-            hoy {today}/{s.daily_cap} · {s.runs_total} en total
-          </span>
-          {s.skipped && <span className="td-free">última vez saltada: {s.skipped}</span>}
-          <span className="td-free">la creó {agentLabel(s.by)}</span>
-        </span>
-        <span className="cc-btn-row">
-          {s.status === "pending" && (
-            <button className="cc-btn" onClick={() => onOp(s.id, "approve")} title={s.notes}>
-              Aprobar
-            </button>
-          )}
-          {s.status === "active" && (
-            <button className="cc-btn sec" onClick={() => onOp(s.id, "pause")}>
-              Pausar
-            </button>
-          )}
-          {s.status === "paused" && (
-            <button className="cc-btn sec" onClick={() => onOp(s.id, "resume")}>
-              Reanudar
-            </button>
-          )}
-          <button className="cc-btn sec" onClick={() => onOp(s.id, "run")} title="Crea la tarea ahora (cuenta para el tope de hoy)">
-            Ejecutar ahora
-          </button>
-          <button
-            className="cc-btn sec"
-            onClick={() => (sure ? onOp(s.id, "delete") : setSure(true))}
-            onBlur={() => setSure(false)}
-          >
-            {sure ? "¿Borrar?" : "Borrar"}
-          </button>
-        </span>
-        <details className="td-sched-notes">
-          <summary>Encargo</summary>
-          <div>{s.notes}</div>
-        </details>
-      </div>
-    </div>
   );
 }
 

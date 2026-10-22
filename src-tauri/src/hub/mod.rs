@@ -2434,6 +2434,31 @@ pub fn team_schedule_op(hub: tauri::State<'_, Hub>, id: u64, op: String) -> Resu
     Ok(())
 }
 
+/// La creas tú desde la sección Programadas (ya activa) o la editas (`id`).
+#[tauri::command]
+pub fn team_schedule_save(hub: tauri::State<'_, Hub>, id: Option<u64>, draft: schedule::Draft) -> Result<schedule::Schedule, String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    let s = match id {
+        Some(id) => schedule::update(&mut inner, id, &draft)?,
+        None => schedule::create_by_user(&mut inner, &draft)?,
+    };
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(s)
+}
+
+/// Liga una programación a un chat (la interfaz sabe en qué chat se pidió).
+#[tauri::command]
+pub fn team_schedule_link(hub: tauri::State<'_, Hub>, id: u64, chat: String, title: String) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    schedule::link(&mut inner, id, &chat, &title)?;
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
 /// Le toca a una programación (lo decide el reloj de la interfaz, que sabe la hora local): crea su
 /// tarea o se la salta (`skip` con el motivo). Devuelve la tarea creada, si hubo.
 #[tauri::command]
@@ -2967,6 +2992,27 @@ mod inbox_tests {
         assert_eq!((cost["opencode"].input, cost["claude"].output, cost["claude"].turns), (100, 51, 2));
         assert!(!h.focus.contains_key("claude"), "tras cerrarla, su gasto ya no cuenta para la tarea");
         assert_eq!(h.usage["claude"].turns, 3);
+    }
+
+    #[test]
+    fn user_schedules_start_active_and_can_be_edited() {
+        let mut h = hub();
+        let d = schedule::Draft {
+            title: "Informe diario".into(),
+            notes: "Resume lo hecho ayer en propuestas/diario.md".into(),
+            every: "lun-vie 8:30".into(),
+            chat: "c1".into(),
+            chat_title: "Hermes".into(),
+            ..Default::default()
+        };
+        let s = schedule::create_by_user(&mut h, &d).unwrap();
+        assert_eq!((s.status.as_str(), s.chat.as_str()), ("active", "c1"));
+        assert!(h.events.back().unwrap().text.contains("creada"), "sin el aviso de pendiente");
+        let s2 = schedule::update(&mut h, s.id, &schedule::Draft { every: "cada 2 h".into(), ..d.clone() }).unwrap();
+        assert_eq!((s2.every.as_str(), s2.status.as_str()), ("cada 2 h", "active"));
+        assert!(schedule::update(&mut h, s.id, &schedule::Draft { every: "a veces".into(), ..d }).is_err());
+        schedule::link(&mut h, s.id, "c2", "Odysseus").unwrap();
+        assert_eq!(h.schedules[0].chat_title, "Odysseus");
     }
 
     #[test]

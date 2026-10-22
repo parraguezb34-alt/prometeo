@@ -55,6 +55,31 @@ pub struct Schedule {
     /// Por qué se saltó la última vez (vacío si se ejecutó).
     #[serde(default)]
     pub skipped: String,
+    /// Chat al que está ligada (id del chat de Prometeo y su título), vacío si a ninguno.
+    #[serde(default)]
+    pub chat: String,
+    #[serde(default)]
+    pub chat_title: String,
+}
+
+/// Lo que se puede escribir de una programación (al crearla desde la app o al editarla).
+#[derive(Clone, Default, Deserialize)]
+pub struct Draft {
+    pub title: String,
+    pub notes: String,
+    pub every: String,
+    #[serde(default)]
+    pub assign: String,
+    #[serde(default)]
+    pub level: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub daily_cap: u32,
+    #[serde(default)]
+    pub chat: String,
+    #[serde(default)]
+    pub chat_title: String,
 }
 
 /// Normaliza: minúsculas, sin tildes, espacios simples.
@@ -186,6 +211,8 @@ pub fn create(
         runs_total: 0,
         last_task: 0,
         skipped: String::new(),
+        chat: String::new(),
+        chat_title: String::new(),
     };
     let to = if s.assign.is_empty() { "quien esté libre".to_string() } else { s.assign.clone() };
     push_event(
@@ -193,12 +220,68 @@ pub fn create(
         by,
         session_id,
         "update",
-        &format!("📅 Programación P{} pendiente de tu OK: «{}» · {when} → {to}. Apruébala en el tablero.", s.id, s.title),
+        &format!("📅 Programación P{} pendiente de tu OK: «{}» · {when} → {to}. Apruébala en Programadas.", s.id, s.title),
         vec![],
         None,
     );
     inner.schedules.push(s.clone());
     Ok(s)
+}
+
+/// La creas tú desde la app: ya va aprobada (activa).
+pub fn create_by_user(inner: &mut HubInner, d: &Draft) -> Result<Schedule, String> {
+    let mut s = create(inner, "tú", "ui", &d.title, &d.notes, &d.every, &d.assign, &d.level, &d.model, d.daily_cap)?;
+    if let Some(saved) = inner.schedules.iter_mut().find(|x| x.id == s.id) {
+        saved.status = "active".into();
+        saved.approved_ms = now_ms();
+        saved.chat = d.chat.trim().chars().take(80).collect();
+        saved.chat_title = d.chat_title.trim().chars().take(120).collect();
+        s = saved.clone();
+    }
+    // El aviso de «pendiente» sobra: la creaste tú.
+    if let Some(e) = inner.events.back_mut() {
+        if e.text.starts_with(&format!("📅 Programación P{} pendiente", s.id)) {
+            e.text = format!("📅 Programación P{} creada: «{}» · {}", s.id, s.title, validate_every(&s.every).unwrap_or_default());
+        }
+    }
+    Ok(s)
+}
+
+/// Cambia lo escrito de una programación (frecuencia, encargo, agente…). Sigue en su estado.
+pub fn update(inner: &mut HubInner, id: u64, d: &Draft) -> Result<Schedule, String> {
+    let when = validate_every(&d.every)?;
+    let title = super::redact::redact(d.title.trim()).chars().take(160).collect::<String>();
+    let notes = super::redact::redact(d.notes.trim()).chars().take(4000).collect::<String>();
+    if title.is_empty() || notes.is_empty() {
+        return Err("hacen falta el título y el encargo".into());
+    }
+    let assign = resolve_agent(inner, &d.assign);
+    let Some(s) = inner.schedules.iter_mut().find(|s| s.id == id) else {
+        return Err("programación no encontrada".into());
+    };
+    s.title = title;
+    s.notes = notes;
+    s.every = d.every.trim().to_string();
+    s.assign = assign;
+    s.level = task_level(&d.level);
+    s.model = d.model.trim().chars().take(40).collect();
+    s.daily_cap = if d.daily_cap == 0 { DEFAULT_DAILY_CAP } else { d.daily_cap.min(48) };
+    s.chat = d.chat.trim().chars().take(80).collect();
+    s.chat_title = d.chat_title.trim().chars().take(120).collect();
+    s.skipped = String::new();
+    let out = s.clone();
+    push_event(inner, "tú", "ui", "update", &format!("📅 P{id} «{}» cambiada · {when}", out.title), vec![], None);
+    Ok(out)
+}
+
+/// Liga una programación a un chat (la que creó un agente queda en el chat donde se pidió).
+pub fn link(inner: &mut HubInner, id: u64, chat: &str, title: &str) -> Result<(), String> {
+    let Some(s) = inner.schedules.iter_mut().find(|s| s.id == id) else {
+        return Err("programación no encontrada".into());
+    };
+    s.chat = chat.trim().chars().take(80).collect();
+    s.chat_title = title.trim().chars().take(120).collect();
+    Ok(())
 }
 
 /// approve · pause · resume · delete (desde el tablero).

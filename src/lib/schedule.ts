@@ -98,3 +98,27 @@ export function isDue(s: SchedLite, now: number, projectKey: string): boolean {
   const base = s.last_ms || s.approved_ms;
   return base > 0 && nextRun(spec, base) <= now;
 }
+
+/** Lo que hace falta de un chat (lib/chats): su ventana de tiempo. */
+export type ChatWindow = { id: string; kind: string; title: string; startMs: number; endMs?: number };
+
+/** El chat del equipo en cuya ventana cae `ms` (donde se pidió o se creó algo), o null. */
+export function chatAt<T extends ChatWindow>(chats: T[], ms: number): T | null {
+  return chats.find((c) => c.kind === "team" && c.startMs <= ms && (c.endMs == null || ms < c.endMs)) ?? null;
+}
+
+/** Orden de la sección: primero lo que espera tu OK, luego las activas por su próxima hora, las
+ * pausadas y, al final, las de otros proyectos. */
+export function scheduleOrder<T extends SchedLite & { title: string }>(list: T[], now: number, projectKey: string): T[] {
+  const rank = (s: T) => {
+    const mine = !s.project || s.project.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() === projectKey;
+    if (!mine) return 3;
+    return s.status === "pending" ? 0 : s.status === "active" ? 1 : 2;
+  };
+  const next = (s: T) => {
+    const spec = parseEvery(s.every);
+    const base = s.last_ms || s.approved_ms || now;
+    return spec ? nextRun(spec, base) : Number.MAX_SAFE_INTEGER;
+  };
+  return list.slice().sort((a, b) => rank(a) - rank(b) || next(a) - next(b) || a.id - b.id);
+}
