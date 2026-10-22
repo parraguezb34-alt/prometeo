@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { watchSubmit } from "./activity";
 
 export type SessionInfo = {
   id: string;
@@ -27,10 +28,12 @@ export const termSpawn = (
 /**
  * Escribe en una terminal. Un texto con su Enter al final llegaría de un solo golpe y
  * Claude Code lo toma por un pegado: el Enter queda como salto de línea y el mensaje no se
- * envía. Por eso el Enter va aparte, un instante después.
+ * envía. Por eso el Enter va aparte, un instante después. Y si aun así el agente no arranca y
+ * el texto sigue en su cuadro, se vuelve a pulsar Enter una vez (`watchSubmit`).
  */
 export async function termWrite(id: string, data: string): Promise<void> {
   if (data.length > 1 && data.endsWith("\r") && !data.startsWith("\x1b")) {
+    watchSubmit(id, data.slice(0, -1), () => invoke<void>("term_write", { id, data: "\r" }));
     await invoke<void>("term_write", { id, data: data.slice(0, -1) });
     await new Promise((ok) => setTimeout(ok, 180));
     return invoke<void>("term_write", { id, data: "\r" });

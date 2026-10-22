@@ -11,7 +11,9 @@
 pub mod client;
 pub mod connectors;
 pub mod mirror;
+pub mod redact;
 pub mod review;
+pub mod schedule;
 pub mod server;
 
 use serde::{Deserialize, Serialize};
@@ -168,6 +170,20 @@ pub struct Task {
     /// por la revisión del director: la investigación profunda ya tiene su propio verificador.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub research: String,
+    /// Carpeta aislada donde se trabaja (opción «carpetas aisladas»), vacía si se trabaja en el
+    /// proyecto. Lo hecho allí se une al proyecto al entregar (o al aprobarse en modo director).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub workspace: String,
+    /// Programación que la creó (P<n>), 0 si no viene de ninguna.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub schedule: u64,
+    /// Modelo con el que debe ejecutarse (de su programación), vacío = el del agente.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl Task {
@@ -188,6 +204,9 @@ impl Task {
             fix_rounds: 0,
             cost: HashMap::new(),
             research: String::new(),
+            workspace: String::new(),
+            schedule: 0,
+            model: String::new(),
         }
     }
 }
@@ -207,7 +226,7 @@ const MEMORY_KINDS: [&str; 4] = ["decision", "hecho", "convencion", "aviso"];
 
 /// Aplana espacios y recorta a `max` caracteres.
 fn clean_text(text: &str, max: usize) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max).collect()
+    redact::redact(text).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max).collect()
 }
 
 pub fn memory_kind(kind: &str) -> String {
@@ -314,6 +333,14 @@ pub fn delete_task(inner: &mut HubInner, id: u64) -> Result<(), String> {
     let gone = inner.tasks.remove(pos);
     for t in inner.tasks.iter_mut() {
         t.parents.retain(|p| *p != id);
+    }
+    // Su carpeta aislada ya no sirve: fuera (sin frenar al hub con git).
+    if !gone.workspace.is_empty() {
+        if let Some(project) = inner.project.clone() {
+            std::thread::spawn(move || {
+                let _ = crate::workspace::discard(&project, id);
+            });
+        }
     }
     push_event(
         inner,
@@ -516,7 +543,7 @@ pub fn brief_task(
     let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) else {
         return Err("tarea no encontrada".into());
     };
-    if !matches!(task.status.as_str(), "draft" | "open") {
+    if !matches!(task.status.as_str(), "draft" | "open" | "plan") {
         return Err(format!("la tarea #{id} ya está {}: no se cambia su encargo", task.status));
     }
     let notes: String = notes.trim().chars().take(4000).collect();
@@ -532,10 +559,83 @@ pub fn brief_task(
     if !assign.is_empty() {
         task.assign = assign;
     }
-    task.status = "open".into();
+    // Si es del plan, sigue esperando tu OK; si era un borrador, ya se puede repartir.
+    if task.status != "plan" {
+        task.status = "open".into();
+    }
     let title = clean_text(&task.title, 100);
     push_event_full(inner, by, session_id, "task", &format!("#{id} con encargo: {title}"), vec![], None, Some(id));
     Ok(format!("#{id} lista para repartir."))
+}
+
+/// Apruebas el plan: sus tareas pasan a abiertas y el despacho ya las puede repartir.
+/// Devuelve las tareas que se liberaron.
+pub fn approve_plan(inner: &mut HubInner, by: &str, session_id: &str) -> Vec<u64> {
+    inner.plan_hold = false;
+    let mut ids = Vec::new();
+    for t in inner.tasks.iter_mut().filter(|t| t.status == "plan") {
+        t.status = "open".into();
+        ids.push(t.id);
+    }
+    if !ids.is_empty() {
+        let list = ids.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(", ");
+        push_event(inner, by, session_id, "update", &format!("✅ Plan aprobado: {list} ya se pueden empezar"), vec![], None);
+    }
+    ids
+}
+
+/// Descartas el plan: sus tareas se borran sin que nadie las haya empezado.
+pub fn discard_plan(inner: &mut HubInner, by: &str, session_id: &str) -> Vec<u64> {
+    inner.plan_hold = false;
+    let ids: Vec<u64> = inner.tasks.iter().filter(|t| t.status == "plan").map(|t| t.id).collect();
+    inner.tasks.retain(|t| t.status != "plan");
+    if !ids.is_empty() {
+        let list = ids.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(", ");
+        push_event(inner, by, session_id, "update", &format!("🗑 Plan descartado: {list} borradas"), vec![], None);
+    }
+    ids
+}
+
+/// El líder (o tú) pasa una tarea tomada por otro agente que se paró o se bloqueó: queda libre
+/// para `to` (o para quien esté libre) y su antiguo dueño recibe la orden de dejarla. Así no hace
+/// falta que el agente parado la cierre como «No hecha» para que otro pueda reclamarla.
+pub fn handoff_task(
+    inner: &mut HubInner,
+    id: u64,
+    by: &str,
+    session_id: &str,
+    to: &str,
+    notes: &str,
+) -> Result<String, String> {
+    let is_leader = inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(by));
+    if by != "tú" && !is_leader {
+        return Err("solo el líder (o tú) pasa una tarea de un agente a otro".into());
+    }
+    let to = resolve_to(inner, to);
+    let notes = clean_text(notes, 300);
+    let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) else {
+        return Err("tarea no encontrada".into());
+    };
+    if !matches!(task.status.as_str(), "claimed" | "open") {
+        return Err(format!("la tarea #{id} está {}: solo se pasa una tarea abierta o tomada", task.status));
+    }
+    let owner = std::mem::take(&mut task.owner);
+    task.status = "open".into();
+    task.assign = to.clone();
+    let title = clean_text(&task.title, 100);
+    let now = now_ms();
+    let dest = if to.is_empty() { "quien esté libre".to_string() } else { to.clone() };
+    let why = if notes.is_empty() { String::new() } else { format!(": {notes}") };
+    task.comments.push(TaskComment { by: by.into(), text: format!("🔁 Pasa a {dest}{why}"), ts_ms: now });
+    let from = if owner.is_empty() { String::new() } else { format!(" (era de {owner})") };
+    push_event_full(inner, by, session_id, "task", &format!("#{id} liberada por {by}{from} → {dest}"), vec![], None, Some(id));
+    if !owner.is_empty() && !owner.eq_ignore_ascii_case(&to) {
+        let text = format!(
+            "🔁 La tarea #{id} «{title}» pasa a {dest}. Deja de trabajar en ella y suelta sus reservas con team_release_files."
+        );
+        push_event_full(inner, by, session_id, "message", &text, vec![], Some(owner), Some(id));
+    }
+    Ok(format!("#{id} libre para {dest}: lienzo se la despacha en cuanto esté libre."))
 }
 
 /// Decisión sobre una entrega en revisión. `ok` la cierra, `fix` la devuelve a su dueño con
@@ -589,8 +689,13 @@ pub fn review_task(
             task.status = "claimed".into();
             task.comments.push(TaskComment { by: by.into(), text: format!("🔧 Ronda {round}/{limit}: {notes}"), ts_ms: now });
             let last = if round >= limit { " Es la última ronda: si no queda bien, la asumirá el líder." } else { "" };
+            let place = if task.workspace.is_empty() {
+                String::new()
+            } else {
+                format!(" Corrígelo en tu carpeta aislada {}.", task.workspace)
+            };
             let text = format!(
-                "🔧 Corrige #{id} «{title}» (ronda {round} de {limit}): {notes}{last} \
+                "🔧 Corrige #{id} «{title}» (ronda {round} de {limit}): {notes}{last}{place} \
                  Al terminar, ciérrala otra vez con team_task_done (summary, files, evidence)."
             );
             push_event_full(inner, by, session_id, "message", &text, vec![], Some(owner.clone()), Some(id));
@@ -880,6 +985,28 @@ pub fn project_key(path: &str) -> String {
     path.trim().replace('\\', "/").trim_end_matches('/').to_lowercase()
 }
 
+/// Clave de una reserva: la misma para un archivo se escriba como se escriba
+/// (`C:\A\b.md`, `c:/a//b.md`, `C:\A\.\b.md` → `c:/a/b.md`).
+pub fn claim_key(path: &str) -> String {
+    let p = project_key(path);
+    let mut parts: Vec<&str> = Vec::new();
+    for (i, seg) in p.split('/').enumerate() {
+        // Un «//» al principio es una ruta de red: se conserva.
+        if seg.is_empty() && i > 0 && !(i == 1 && p.starts_with("//")) {
+            continue;
+        }
+        if seg == "." {
+            continue;
+        }
+        if seg == ".." && parts.len() > 1 {
+            parts.pop();
+            continue;
+        }
+        parts.push(seg);
+    }
+    parts.join("/")
+}
+
 /// Cambia la carpeta del equipo. Lo del proyecto actual se guarda en su estante y se trae lo del
 /// nuevo (vacío si es la primera vez). Devuelve si cambió de proyecto.
 pub fn switch_project(inner: &mut HubInner, path: Option<String>) -> bool {
@@ -905,11 +1032,13 @@ pub fn switch_project(inner: &mut HubInner, path: Option<String>) -> bool {
     let s = inner.projects.remove(&next).unwrap_or_default();
     inner.events = s.events.into_iter().collect();
     inner.tasks = s.tasks;
-    inner.claims = s.claims.into_iter().map(|c| (c.path.clone(), c)).collect();
+    inner.claims = s.claims.into_iter().map(|c| (claim_key(&c.path), c)).collect();
     inner.charter = s.charter;
     inner.memory = s.memory;
     inner.memory_seq = s.memory_seq;
     inner.questions = s.questions;
+    // Un plan a medias se queda en su proyecto: sus tareas siguen en «plan» hasta que lo apruebes.
+    inner.plan_hold = false;
     // Lo de las entregas en curso era del otro proyecto.
     inner.bases.clear();
     inner.focus.clear();
@@ -994,11 +1123,19 @@ pub struct PersistedState {
     #[serde(default)]
     pub fix_limit: u32,
     #[serde(default)]
+    pub plan_hold: bool,
+    #[serde(default)]
+    pub isolate: bool,
+    #[serde(default)]
     pub strengths: HashMap<String, String>,
     #[serde(default)]
     pub questions: Vec<Question>,
     #[serde(default)]
     pub question_seq: u64,
+    #[serde(default)]
+    pub schedules: Vec<schedule::Schedule>,
+    #[serde(default)]
+    pub schedule_seq: u64,
     /// Lo de los otros proyectos (carpetas), guardado mientras trabajas en este.
     #[serde(default)]
     pub projects: HashMap<String, ProjectSlot>,
@@ -1034,6 +1171,11 @@ pub struct HubInner {
     pub director: bool,
     /// Rondas de corrección antes de que el líder tenga que asumir la tarea (0 = las de por defecto).
     pub fix_limit: u32,
+    /// Modo plan: pediste un plan y aún no lo apruebas. Las tareas que se creen mientras tanto
+    /// quedan en «plan» (nadie las toma ni se despachan) hasta tu OK.
+    pub plan_hold: bool,
+    /// Carpetas aisladas: cada tarea tomada trabaja en su copia del proyecto (ver `workspace.rs`).
+    pub isolate: bool,
     /// Copia de cada archivo al reservarlo (clave de `review::rel_key`), para el diff de la entrega.
     pub bases: HashMap<String, review::FileBase>,
     /// Tarea en la que trabaja cada agente (en minúsculas): a ella va el gasto de sus turnos.
@@ -1043,6 +1185,9 @@ pub struct HubInner {
     /// Preguntas de los agentes al usuario (team_ask_user).
     pub questions: Vec<Question>,
     pub question_seq: u64,
+    /// Tareas programadas (ver `schedule.rs`).
+    pub schedules: Vec<schedule::Schedule>,
+    pub schedule_seq: u64,
     /// Lo de los otros proyectos, por carpeta (ver `switch_project`).
     pub projects: HashMap<String, ProjectSlot>,
     /// Límites de uso de cada agente: sesión, semana… (ver `set_limits`).
@@ -1234,9 +1379,13 @@ pub fn persist(inner: &HubInner) {
         usage_since: inner.usage_since,
         director: inner.director,
         fix_limit: inner.fix_limit,
+        plan_hold: inner.plan_hold,
+        isolate: inner.isolate,
         strengths: inner.strengths.clone(),
         questions: inner.questions.clone(),
         question_seq: inner.question_seq,
+        schedules: inner.schedules.clone(),
+        schedule_seq: inner.schedule_seq,
         projects: inner.projects.clone(),
         limits: inner.limits.clone(),
     };
@@ -1353,16 +1502,119 @@ pub fn push_event_full(
         agent: agent.to_string(),
         session_id: session_id.to_string(),
         kind: kind.to_string(),
-        text: text.to_string(),
+        // Todo lo que pasa por el feed se guarda en disco y lo leen los demás: sin secretos.
+        text: redact::redact(text),
         files,
         to,
         task_id,
     };
     inner.events.push_back(event.clone());
+    let mut old = Vec::new();
     while inner.events.len() > MAX_EVENTS {
-        inner.events.pop_front();
+        if let Some(e) = inner.events.pop_front() {
+            old.push(e);
+        }
+    }
+    // Lo que sale del feed no se pierde: va al archivo del proyecto, donde lo encuentra team_feed_search.
+    if !cfg!(test) {
+        archive_events(inner.project.as_deref(), &old);
     }
     event
+}
+
+// ---------------------------------------------------------------------------
+// Archivo del feed: el feed vivo guarda los últimos MAX_EVENTS eventos; lo anterior se añade a un
+// JSONL por proyecto para poder buscarlo después (team_feed_search).
+// ---------------------------------------------------------------------------
+
+/// Tope del archivo de cada proyecto; al pasarlo, el actual pasa a `.old` y se empieza otro.
+const ARCHIVE_MAX_BYTES: u64 = 20 * 1024 * 1024;
+
+fn archive_file(project: Option<&str>) -> std::path::PathBuf {
+    let key = project.map(project_key).unwrap_or_default();
+    // FNV-1a: un nombre de archivo estable y corto para cada carpeta.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in key.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    data_dir().join("feed-archive").join(format!("{h:016x}.jsonl"))
+}
+
+fn archive_events(project: Option<&str>, events: &[Event]) {
+    use std::io::Write;
+    if events.is_empty() {
+        return;
+    }
+    let path = archive_file(project);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::metadata(&path).map(|m| m.len() > ARCHIVE_MAX_BYTES).unwrap_or(false) {
+        let _ = std::fs::rename(&path, path.with_extension("old.jsonl"));
+    }
+    let mut lines = String::new();
+    for e in events {
+        if let Ok(l) = serde_json::to_string(e) {
+            lines.push_str(&l);
+            lines.push('\n');
+        }
+    }
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| f.write_all(lines.as_bytes()));
+    if let Err(e) = written {
+        crate::errlog::log("hub", "No se pudo archivar el feed", &e.to_string());
+    }
+}
+
+/// ¿El evento casa con la búsqueda? Todas las palabras (sin mayúsculas) en su texto, autor o
+/// archivos; `#67` también casa con los eventos de la tarea 67.
+pub fn feed_matches(e: &Event, terms: &[String], agent: &str) -> bool {
+    if matches!(e.kind.as_str(), "join" | "leave" | "session" | "stop" | "prompt") {
+        return false;
+    }
+    if !agent.is_empty() && !e.agent.to_lowercase().contains(agent) {
+        return false;
+    }
+    let hay = format!("{} {} {}", e.text, e.agent, e.files.join(" ")).to_lowercase();
+    terms.iter().all(|t| {
+        hay.contains(t.as_str())
+            || t.strip_prefix('#').and_then(|n| n.parse::<u64>().ok()).is_some_and(|n| e.task_id == Some(n))
+    })
+}
+
+/// Busca en el feed vivo y en el archivo del proyecto (lo más nuevo primero, hasta `limit`).
+/// Devuelve los eventos en orden cronológico.
+pub fn search_feed(inner: &HubInner, query: &str, agent: &str, limit: usize) -> Vec<Event> {
+    let terms: Vec<String> = query.to_lowercase().split_whitespace().map(String::from).collect();
+    let agent = agent.trim().to_lowercase();
+    if terms.is_empty() && agent.is_empty() {
+        return Vec::new();
+    }
+    let mut found: Vec<Event> = inner.events.iter().rev().filter(|e| feed_matches(e, &terms, &agent)).take(limit).cloned().collect();
+    if found.len() < limit {
+        let path = archive_file(inner.project.as_deref());
+        for file in [path.clone(), path.with_extension("old.jsonl")] {
+            let Ok(raw) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            for line in raw.lines().rev() {
+                if found.len() >= limit {
+                    break;
+                }
+                if let Ok(e) = serde_json::from_str::<Event>(line) {
+                    if feed_matches(&e, &terms, &agent) && !found.iter().any(|f| f.seq == e.seq) {
+                        found.push(e);
+                    }
+                }
+            }
+        }
+    }
+    found.sort_by_key(|e| e.seq);
+    found
 }
 
 /// Guarda el relevo de un agente pegado a su tarea y lo anuncia en el feed.
@@ -1379,7 +1631,7 @@ pub fn save_handover(
     if let Some(id) = task_id {
         if let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) {
             task.handover = Some(TaskHandover {
-                text: summary.to_string(),
+                text: redact::redact(summary),
                 by: agent.to_string(),
                 ts_ms: now,
                 files: files.clone(),
@@ -1457,9 +1709,12 @@ pub fn snapshot(inner: &HubInner, limit: usize) -> serde_json::Value {
         "usage": inner.usage,
         "usage_since": inner.usage_since,
         "director": inner.director,
+        "plan_hold": inner.plan_hold,
+        "isolate": inner.isolate,
         "fix_limit": fix_limit(inner),
         "strengths": inner.strengths,
         "questions": inner.questions.iter().rev().take(20).collect::<Vec<_>>(),
+        "schedules": inner.schedules,
         "projects": project_list(inner),
         "limits": inner.limits,
         "now_ms": now,
@@ -2045,10 +2300,38 @@ pub fn team_memory_forget(hub: tauri::State<'_, Hub>, id: u64) -> Result<(), Str
 
 #[tauri::command]
 pub fn team_task_op(hub: tauri::State<'_, Hub>, id: u64, op: String) -> Result<(), String> {
+    // Aprobar o dar por hecha una tarea con carpeta aislada: antes, lo suyo se une al proyecto
+    // (fuera del cerrojo: git puede tardar). Si choca, no se cierra.
+    let isolated = {
+        let inner = hub.0.lock().map_err(|e| e.to_string())?;
+        let t = inner.tasks.iter().find(|t| t.id == id);
+        match (t, inner.project.clone()) {
+            (Some(t), Some(p)) if !t.workspace.is_empty() && (op == "approve" || op == "done") => {
+                Some((p, t.workspace.clone(), t.title.clone(), if t.owner.is_empty() { "tú".to_string() } else { t.owner.clone() }))
+            }
+            _ => None,
+        }
+    };
+    let merged = match &isolated {
+        Some((project, ws, _, _)) => Some(merge_workspace(project, id, ws)?),
+        None => None,
+    };
+    if let (Some((project, _, title, by)), Some(files)) = (isolated, merged) {
+        after_merge(project, id, title, by, files);
+        let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+        if let Some(t) = inner.tasks.iter_mut().find(|t| t.id == id) {
+            t.workspace = String::new();
+        }
+        drop(inner);
+    }
     let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
-    if op == "delete" || op == "approve" {
+    // Liberar la tarea que tiene otro agente: además se le avisa de que la deje.
+    let others = inner.tasks.iter().any(|t| t.id == id && t.status == "claimed" && !t.owner.is_empty() && t.owner != "tú");
+    if op == "delete" || op == "approve" || (op == "reopen" && others) {
         if op == "delete" {
             delete_task(&mut inner, id)?;
+        } else if op == "reopen" {
+            handoff_task(&mut inner, id, "tú", "ui", "", "")?;
         } else {
             review_task(&mut inner, id, "tú", "ui", "ok", "")?;
         }
@@ -2140,6 +2423,105 @@ pub fn team_director(hub: tauri::State<'_, Hub>, enabled: bool, fix_limit: Optio
     Ok(())
 }
 
+/// Tareas programadas desde el tablero: approve · pause · resume · delete.
+#[tauri::command]
+pub fn team_schedule_op(hub: tauri::State<'_, Hub>, id: u64, op: String) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    schedule::op(&mut inner, id, &op)?;
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
+/// Le toca a una programación (lo decide el reloj de la interfaz, que sabe la hora local): crea su
+/// tarea o se la salta (`skip` con el motivo). Devuelve la tarea creada, si hubo.
+#[tauri::command]
+pub fn team_schedule_fire(
+    hub: tauri::State<'_, Hub>,
+    id: u64,
+    day: String,
+    skip: Option<String>,
+    manual: Option<bool>,
+) -> Result<Option<u64>, String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    let out = schedule::fire(&mut inner, id, &day, skip.as_deref(), manual.unwrap_or(false))?;
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(out)
+}
+
+/// Carpetas aisladas: cada tarea tomada trabaja en su copia del proyecto (ver `workspace.rs`).
+#[tauri::command]
+pub fn team_isolate(hub: tauri::State<'_, Hub>, enabled: bool) -> Result<(), String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    inner.isolate = enabled;
+    let text = if enabled {
+        "carpetas aisladas activadas: cada tarea que se tome trabaja en su copia del proyecto y se une al entregar"
+    } else {
+        "carpetas aisladas desactivadas: las tareas nuevas trabajan en el proyecto (las que ya tienen copia la terminan allí)"
+    };
+    push_event(&mut inner, "tú", "ui", "update", text, vec![], None);
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(())
+}
+
+/// Tras unir una carpeta aislada: lo unido queda en el historial como entrega y la copia se borra.
+pub fn after_merge(project: String, id: u64, title: String, by: String, files: Vec<String>) {
+    std::thread::spawn(move || {
+        if !files.is_empty() {
+            if let Err(e) = crate::history::record(&project, id, &title, &by, &files) {
+                crate::errlog::log("historial", &format!("No se guardó la entrega de #{id} en el historial"), &e);
+            }
+        }
+        if let Err(e) = crate::workspace::discard(&project, id) {
+            crate::errlog::log("carpetas", &format!("No se pudo borrar la carpeta aislada de #{id}"), &e);
+        }
+    });
+}
+
+/// Une al proyecto lo hecho en la carpeta aislada de una tarea (si tiene). Devuelve las rutas que
+/// cambiaron, o un error que explica el choque (queda marcado en la copia para resolverlo allí).
+pub fn merge_workspace(project: &str, id: u64, workspace: &str) -> Result<Vec<String>, String> {
+    match crate::workspace::deliver(project, id)? {
+        crate::workspace::Delivery::Merged(files) => Ok(files),
+        crate::workspace::Delivery::Conflict(files) => Err(format!(
+            "la entrega de #{id} choca con cambios que hubo en el proyecto mientras tanto ({}). \
+             Los dejé marcados con <<<<<<< en la carpeta aislada {workspace}: resuélvelos allí (deja \
+             la versión buena, sin marcas) y vuelve a entregar con team_task_done.",
+            files.join(", ")
+        )),
+    }
+}
+
+/// Modo plan: `hold` (pediste un plan: lo que se cree espera tu OK), `free`, `approve` o `discard`.
+/// Devuelve las tareas afectadas.
+#[tauri::command]
+pub fn team_plan(hub: tauri::State<'_, Hub>, op: String) -> Result<Vec<u64>, String> {
+    let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
+    let ids = match op.as_str() {
+        "hold" => {
+            inner.plan_hold = true;
+            Vec::new()
+        }
+        // Escribes fuera del modo plan: lo nuevo ya no espera (lo del plan sigue esperando tu OK).
+        "free" => {
+            inner.plan_hold = false;
+            Vec::new()
+        }
+        "approve" => approve_plan(&mut inner, "tú", "ui"),
+        "discard" => discard_plan(&mut inner, "tú", "ui"),
+        _ => return Err(format!("operación de plan desconocida: {op}")),
+    };
+    persist(&inner);
+    drop(inner);
+    notify_ui();
+    Ok(ids)
+}
+
 /// Log a direct user message to one agent in the feed (the text itself is typed
 /// into its terminal by the UI, so the agent receives it as a prompt).
 #[tauri::command]
@@ -2226,7 +2608,7 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         claims: persisted
             .claims
             .into_iter()
-            .map(|c| (c.path.clone(), c))
+            .map(|c| (claim_key(&c.path), c))
             .collect(),
         project: persisted.project,
         charter: persisted.charter,
@@ -2240,11 +2622,15 @@ pub fn init(app: AppHandle) -> Result<(), String> {
         usage_seen: VecDeque::new(),
         director: persisted.director,
         fix_limit: persisted.fix_limit,
+        plan_hold: persisted.plan_hold,
+        isolate: persisted.isolate,
         bases: HashMap::new(),
         focus: HashMap::new(),
         strengths: persisted.strengths,
         questions: persisted.questions,
         question_seq: persisted.question_seq,
+        schedules: persisted.schedules,
+        schedule_seq: persisted.schedule_seq,
         projects: persisted.projects,
         limits: persisted.limits,
         seq: persisted.seq,
@@ -2362,11 +2748,15 @@ mod inbox_tests {
             usage_seen: VecDeque::new(),
             director: false,
             fix_limit: 0,
+            plan_hold: false,
+            isolate: false,
             bases: HashMap::new(),
             focus: HashMap::new(),
             strengths: HashMap::new(),
             questions: Vec::new(),
             question_seq: 0,
+            schedules: Vec::new(),
+            schedule_seq: 0,
             projects: HashMap::new(),
             limits: HashMap::new(),
             seq: 0,
@@ -2577,6 +2967,105 @@ mod inbox_tests {
         assert_eq!((cost["opencode"].input, cost["claude"].output, cost["claude"].turns), (100, 51, 2));
         assert!(!h.focus.contains_key("claude"), "tras cerrarla, su gasto ya no cuenta para la tarea");
         assert_eq!(h.usage["claude"].turns, 3);
+    }
+
+    #[test]
+    fn schedules_wait_for_approval_and_do_not_pile_up() {
+        let mut h = hub();
+        let s = schedule::create(&mut h, "claude", "s", "Revisar enlaces rotos", "Recorre docs/ y anota los rotos", "cada día 9:00", "opencode", "simple", "", 2).unwrap();
+        assert_eq!(s.status, "pending");
+        assert!(schedule::create(&mut h, "claude", "s", "x", "y", "a veces", "", "", "", 0).is_err(), "frecuencia rara");
+        assert!(schedule::fire(&mut h, s.id, "2026-10-22", None, false).is_err(), "sin tu OK no corre");
+        schedule::op(&mut h, s.id, "approve").unwrap();
+        let t1 = schedule::fire(&mut h, s.id, "2026-10-22", None, false).unwrap().expect("crea la tarea");
+        let task = h.tasks.iter().find(|t| t.id == t1).unwrap();
+        assert_eq!((task.schedule, task.status.as_str(), task.level.as_str()), (s.id, "open", "simple"));
+        assert!(!task.assign.is_empty());
+        assert_eq!(schedule::fire(&mut h, s.id, "2026-10-22", None, false).unwrap(), None, "la anterior sin acabar");
+        h.tasks.iter_mut().find(|t| t.id == t1).unwrap().status = "done".into();
+        let t2 = schedule::fire(&mut h, s.id, "2026-10-22", None, false).unwrap();
+        assert!(t2.is_some());
+        h.tasks.iter_mut().find(|t| Some(t.id) == t2).unwrap().status = "done".into();
+        assert_eq!(schedule::fire(&mut h, s.id, "2026-10-22", None, false).unwrap(), None, "tope diario de 2");
+        assert!(schedule::fire(&mut h, s.id, "2026-10-23", None, false).unwrap().is_some(), "otro día, otra vez");
+        let last = h.schedules[0].last_task;
+        h.tasks.iter_mut().find(|t| t.id == last).unwrap().status = "done".into();
+        assert_eq!(schedule::fire(&mut h, s.id, "2026-10-23", Some("claude va por el 85 %"), false).unwrap(), None);
+        assert_eq!(h.schedules[0].skipped, "claude va por el 85 %");
+        schedule::op(&mut h, s.id, "delete").unwrap();
+        assert!(h.schedules.is_empty());
+    }
+
+    #[test]
+    fn feed_search_matches_words_agents_and_task_ids() {
+        let mut h = hub();
+        push_event_full(&mut h, "opencode", "s", "update", "Clon de Odysseus listo", vec![], None, Some(63));
+        push_event_full(&mut h, "claude", "s", "message", "Revisa la parte B de Hermes", vec![], None, None);
+        push_event_full(&mut h, "claude", "s", "join", "entró odysseus", vec![], None, None);
+        let texts = |v: Vec<Event>| v.into_iter().map(|e| e.text).collect::<Vec<_>>();
+        assert_eq!(texts(search_feed(&h, "odysseus", "", 10)), vec!["Clon de Odysseus listo"], "sin el ruido de entrar");
+        assert_eq!(texts(search_feed(&h, "#63", "", 10)), vec!["Clon de Odysseus listo"]);
+        assert_eq!(texts(search_feed(&h, "parte hermes", "claude", 10)), vec!["Revisa la parte B de Hermes"]);
+        assert!(search_feed(&h, "hermes", "opencode", 10).is_empty());
+        assert!(search_feed(&h, "  ", "", 10).is_empty());
+    }
+
+    #[test]
+    fn claim_keys_ignore_how_the_path_is_written() {
+        let k = claim_key(r"C:\Users\X\revision\arbol.md");
+        for p in ["c:/users/x/revision/arbol.md", r"C:\Users\X\\revision\.\arbol.md", "C:/Users/X/tmp/../revision/arbol.md "] {
+            assert_eq!(claim_key(p), k, "{p}");
+        }
+        assert_eq!(claim_key(r"\\nas\share\a.md"), "//nas/share/a.md");
+        assert_ne!(claim_key(r"C:\a\hermes\revision\arbol.md"), claim_key(r"C:\a\orca\revision\arbol.md"));
+    }
+
+    #[test]
+    fn leader_hands_off_a_stalled_task() {
+        let mut h = hub();
+        let mut t = Task::new(1, "parte B".into(), String::new(), vec![]);
+        t.status = "claimed".into();
+        t.owner = "opencode".into();
+        h.tasks.push(t);
+        assert!(handoff_task(&mut h, 1, "opencode", "s", "antigravity", "").is_err(), "solo el líder");
+        handoff_task(&mut h, 1, "claude", "s", "antigravity", "se paró dos veces").unwrap();
+        let t = &h.tasks[0];
+        assert_eq!((t.status.as_str(), t.owner.as_str()), ("open", ""));
+        assert!(!t.assign.is_empty());
+        let told = h.events.iter().any(|e| e.kind == "message" && e.to.as_deref() == Some("opencode"));
+        assert!(told, "su antiguo dueño recibe la orden de dejarla");
+    }
+
+    #[test]
+    fn plan_tasks_wait_for_approval() {
+        let mut h = hub();
+        h.plan_hold = true;
+        for (id, status) in [(1, "plan"), (2, "plan"), (3, "open")] {
+            let mut t = Task::new(id, format!("t{id}"), String::new(), vec![]);
+            t.status = status.into();
+            h.tasks.push(t);
+        }
+        // El encargo de una tarea del plan no la suelta antes de tiempo.
+        brief_task(&mut h, 1, "claude", "s", "Objetivo: …", "", "").unwrap();
+        assert_eq!(h.tasks[0].status, "plan");
+        assert_eq!(approve_plan(&mut h, "tú", "ui"), vec![1, 2]);
+        assert!(!h.plan_hold);
+        assert!(h.tasks.iter().all(|t| t.status == "open"));
+        assert!(approve_plan(&mut h, "tú", "ui").is_empty(), "aprobar dos veces no hace nada");
+    }
+
+    #[test]
+    fn discarding_a_plan_drops_only_its_tasks() {
+        let mut h = hub();
+        h.plan_hold = true;
+        for (id, status) in [(1, "plan"), (2, "claimed")] {
+            let mut t = Task::new(id, format!("t{id}"), String::new(), vec![]);
+            t.status = status.into();
+            h.tasks.push(t);
+        }
+        assert_eq!(discard_plan(&mut h, "tú", "ui"), vec![1]);
+        assert_eq!(h.tasks.iter().map(|t| t.id).collect::<Vec<_>>(), vec![2]);
+        assert!(!h.plan_hold);
     }
 
     #[test]

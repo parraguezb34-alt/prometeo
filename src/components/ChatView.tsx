@@ -63,6 +63,8 @@ type Props = {
   onSkill?: (source: string, agent: string) => Promise<void>;
   /** Teclas para contestar la pregunta que un agente tiene en su terminal. */
   onPrompt?: (agent: string, keys: string) => void;
+  /** Modo plan: apruebas (se reparten) o descartas las tareas que esperan tu OK. */
+  onPlan?: (op: "approve" | "discard") => Promise<void>;
   /** Para la página de pruebas: de dónde salen las imágenes (por defecto, del disco vía Tauri). */
   loadImage?: (path: string, project: string | null) => Promise<string>;
 };
@@ -344,6 +346,7 @@ export function ChatView({
   skills = NO_SKILLS,
   onSkill = noop,
   onPrompt = () => {},
+  onPlan,
   loadImage,
 }: Props) {
   const load = loadImage ?? diskImage;
@@ -359,6 +362,15 @@ export function ChatView({
 
   const busy = useMemo(() => new Map(live.filter((l) => l.busy).map((l) => [l.name, l])), [live]);
   const taskTitle = useMemo(() => new Map(tasks.map((t) => [t.id, t.title])), [tasks]);
+  // Tareas de un plan que aún no apruebas: nadie las empieza hasta tu OK.
+  const held = useMemo(() => tasks.filter((t) => t.status === "plan"), [tasks]);
+  const heldIds = useMemo(() => new Set(held.map((t) => t.id)), [held]);
+  const [planBusy, setPlanBusy] = useState(false);
+  const decidePlan = (op: "approve" | "discard") => {
+    if (!onPlan || planBusy) return;
+    setPlanBusy(true);
+    onPlan(op).finally(() => setPlanBusy(false));
+  };
   const hasTerm = (a: string) => terminals.includes(a);
 
   // Último evento de cada agente: una petición de permiso solo está pendiente si es lo último.
@@ -609,6 +621,7 @@ export function ChatView({
       <div className="cv-plan-head">
         <Icon name="list" size={13} />
         {parts.length === 1 ? "Creó una tarea" : `Repartió el trabajo en ${parts.length} tareas`}
+        {parts.some((p) => heldIds.has(p.task.id)) && <span className="cv-tag">Espera tu OK</span>}
       </div>
       <ol className="cv-plan-list">
         {parts.map((p) => (
@@ -1136,8 +1149,24 @@ export function ChatView({
           </div>
         )}
       </div>
+      {held.length > 0 && onPlan && (
+        <div className="cv-planbar" role="region" aria-label="Plan pendiente">
+          <Icon name="list" size={14} />
+          <span className="cv-planbar-tx">
+            <b>{held.length === 1 ? "1 tarea del plan espera tu OK" : `${held.length} tareas del plan esperan tu OK`}</b>
+            <small>Nadie empieza hasta que lo apruebes.</small>
+          </span>
+          <button className="cv-ghost" disabled={planBusy} onClick={() => decidePlan("discard")}>
+            Descartar
+          </button>
+          <button className="cv-btn" data-tone="accent" disabled={planBusy} onClick={() => decidePlan("approve")}>
+            <Icon name="check" size={13} />
+            Aprobar y empezar
+          </button>
+        </div>
+      )}
       {unseen > 0 && (
-        <button className="cv-jump" onClick={() => toBottom(true)}>
+        <button className="cv-jump" data-raised={held.length > 0 && onPlan ? "1" : undefined} onClick={() => toBottom(true)}>
           <Icon name="chev" size={14} />
           {unseen === 1 ? "1 novedad" : `${unseen} novedades`}
         </button>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { claimDrop } from "../lib/dropzone";
-import { RECOMMENDED, skillsInstall, skillsList, skillsRead, skillsRemove, skillsSet } from "../lib/skills";
+import { RECOMMENDED, riskNotice, skillsInstall, skillsList, skillsRead, skillsRemove, skillsSet } from "../lib/skills";
 import type { Skill, SkillLibrary } from "../lib/skills";
 import { errMsg } from "../lib/team";
 import { Icon } from "./Icon";
@@ -58,6 +58,11 @@ export function SkillsPanel({ say }: { say: (text: string, err?: boolean) => voi
       setSource("");
       const added = r.library.skills.filter((k) => r.installed.includes(k.name));
       const on = added.filter((k) => k.enabled).length;
+      const risky = riskNotice(r.warnings);
+      if (risky) {
+        say(risky, true);
+        return;
+      }
       say(
         added.length === 1
           ? `Skill «${added[0].name}» instalada${on ? " y encendida (a demanda)" : ""}.`

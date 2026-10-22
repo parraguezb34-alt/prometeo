@@ -28,7 +28,16 @@ export const skillsRead = (name: string) => invoke<string>("skills_read", { name
 
 /** Instala desde un enlace de GitHub, un enlace a un SKILL.md, una carpeta, un .zip o un SKILL.md. */
 export const skillsInstall = (source: string) =>
-  invoke<{ installed: string[]; library: SkillLibrary }>("skills_install", { source });
+  invoke<{ installed: string[]; library: SkillLibrary; warnings?: Record<string, string[]> }>("skills_install", { source });
+
+/** El aviso de las skills que se instalaron apagadas por traer algo sospechoso (o "" si ninguna). */
+export function riskNotice(warnings: Record<string, string[]> | undefined): string {
+  const entries = Object.entries(warnings ?? {});
+  if (entries.length === 0) return "";
+  return entries
+    .map(([name, found]) => `⚠ «${name}» quedó APAGADA: ${found.slice(0, 3).join(" · ")}${found.length > 3 ? " …" : ""}. Léela en Ajustes → Skills antes de encenderla.`)
+    .join(" ");
+}
 
 /** Colecciones conocidas que se instalan con un botón (quedan apagadas para que elijas). */
 export const RECOMMENDED: { label: string; desc: string; source: string }[] = [

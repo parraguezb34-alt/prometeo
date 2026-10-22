@@ -33,6 +33,32 @@ export function fmtReset(at: number | null | undefined, now = Date.now()): strin
   return `en ${Math.max(1, m)} min`;
 }
 
+/** Umbrales de uso a los que se avisa (porcentaje de cada ventana). */
+export const QUOTA_ALERTS = [80, 95];
+
+export type QuotaAlert = { key: string; agent: string; window: string; pct: number; threshold: number; resetsAt: number | null };
+
+/**
+ * Avisos de cuota que tocan ahora: uno por agente, ventana y umbral en cada periodo (al reiniciarse
+ * la ventana se puede volver a avisar). Si una ventana ya pasó el 95 % sin haber avisado del 80, solo
+ * se avisa del 95. `seen` son las claves ya avisadas; se marcan aquí.
+ */
+export function quotaAlerts(limits: Record<string, AgentLimits>, seen: Set<string>): QuotaAlert[] {
+  const out: QuotaAlert[] = [];
+  for (const [agent, l] of Object.entries(limits)) {
+    l.windows.forEach((w, i) => {
+      const crossed = QUOTA_ALERTS.filter((t) => w.used_pct >= t);
+      if (crossed.length === 0) return;
+      const keyOf = (t: number) => `${agent}|${w.key || i}|${t}|${w.resets_at ?? "-"}`;
+      const top = crossed[crossed.length - 1];
+      const fresh = !seen.has(keyOf(top));
+      for (const t of crossed) seen.add(keyOf(t));
+      if (fresh) out.push({ key: keyOf(top), agent, window: windowLabel(w, i), pct: Math.round(w.used_pct), threshold: top, resetsAt: w.resets_at });
+    });
+  }
+  return out;
+}
+
 /** Nombre para mostrar de una ventana: si no trae palabras (p. ej. «[ ]»), «Límite N». */
 export function windowLabel(w: LimitWindow, i: number): string {
   return /[a-záéíóúñ]{2,}/i.test(w.label) ? w.label : `Límite ${i + 1}`;

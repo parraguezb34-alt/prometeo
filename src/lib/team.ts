@@ -65,7 +65,7 @@ export type MemoryEntry = {
 export type TeamTask = {
   id: number;
   title: string;
-  status: string; // draft | open | claimed | review | done
+  status: string; // plan | draft | open | claimed | review | done
   owner: string;
   notes: string;
   created_ms: number;
@@ -83,6 +83,12 @@ export type TeamTask = {
   assign?: string;
   /** Rondas de corrección en modo director. */
   fix_rounds?: number;
+  /** Carpeta aislada donde se trabaja (vacía o ausente si se trabaja en el proyecto). */
+  workspace?: string;
+  /** Programación que la creó (0 o ausente si ninguna). */
+  schedule?: number;
+  /** Modelo con el que debe ejecutarse (de su programación). */
+  model?: string;
   /** Tokens gastados en la tarea por cada agente. */
   cost?: Record<string, AgentUsage>;
 };
@@ -116,12 +122,18 @@ export type TeamState = {
   usage_since?: number;
   /** Modo director: el líder reparte y revisa las entregas de los demás. */
   director?: boolean;
+  /** Modo plan: pediste un plan y lo que se cree espera tu OK (tareas en «plan»). */
+  plan_hold?: boolean;
+  /** Carpetas aisladas: cada tarea tomada trabaja en su copia del proyecto. */
+  isolate?: boolean;
   /** Rondas de corrección antes de que el líder asuma la tarea. */
   fix_limit?: number;
   /** Qué se le da bien a cada agente (lo escribes tú; el líder lo usa para repartir). */
   strengths?: Record<string, string>;
   /** Preguntas de los agentes al usuario (las últimas, de la más nueva a la más vieja). */
   questions?: TeamQuestion[];
+  /** Tareas programadas (se crean solas a su hora; ver lib/schedule.ts). */
+  schedules?: TeamSchedule[];
   /** Los otros proyectos (carpetas) con lo suyo guardado, del más reciente al más antiguo. */
   projects?: ProjectEntry[];
   /** Límites de uso de cada agente (sesión de 5 h, semana…), ver lib/limits.ts. */
@@ -134,6 +146,36 @@ export type ProjectEntry = { path: string; last_ms: number; open_tasks: number }
 export type QOption = { label: string; description: string };
 export type QItem = { question: string; header: string; options: QOption[]; multi: boolean };
 export type QAnswer = { question: string; choices: string[]; other: string };
+export type TeamSchedule = {
+  id: number;
+  title: string;
+  notes: string;
+  every: string;
+  assign: string;
+  level: string;
+  model: string;
+  /** pending (espera tu OK) · active · paused */
+  status: string;
+  daily_cap: number;
+  by: string;
+  created_ms: number;
+  project: string;
+  approved_ms: number;
+  last_ms: number;
+  day: string;
+  runs_day: number;
+  runs_total: number;
+  last_task: number;
+  skipped: string;
+};
+
+/** Desde el tablero: aprobar, pausar, reanudar o borrar una programación. */
+export const teamScheduleOp = (id: number, op: "approve" | "pause" | "resume" | "delete") =>
+  invoke<void>("team_schedule_op", { id, op });
+/** Le toca (o «Ejecutar ahora» con `manual`): crea su tarea, o se la salta con `skip`. */
+export const teamScheduleFire = (id: number, day: string, skip?: string, manual?: boolean) =>
+  invoke<number | null>("team_schedule_fire", { id, day, skip: skip ?? null, manual: manual ?? null });
+
 export type TeamQuestion = {
   id: number;
   agent: string;
@@ -262,6 +304,11 @@ export const teamUsageReset = () => invoke<void>("team_usage_reset");
 /** Modo director: el líder reparte, revisa y manda corregir (como mucho `fixLimit` rondas). */
 export const teamDirector = (enabled: boolean, fixLimit?: number) =>
   invoke<void>("team_director", { enabled, fixLimit: fixLimit ?? null });
+/** Modo plan: `hold` al pedirlo (lo que se cree espera tu OK), `free` al escribir sin modo plan,
+ * `approve` o `discard`. */
+export const teamPlan = (op: "hold" | "free" | "approve" | "discard") => invoke<number[]>("team_plan", { op });
+/** Carpetas aisladas por tarea (se unen al proyecto al entregar). */
+export const teamIsolate = (enabled: boolean) => invoke<void>("team_isolate", { enabled });
 export const teamStrengths = (agent: string, text: string) => invoke<void>("team_strengths", { agent, text });
 
 /** Compacta la sesión de OpenCode de un proyecto con la API de su servidor
@@ -342,7 +389,10 @@ export function buildBroadcastPrompt(text: string, leader: string): string {
     "proyecto mediante el MCP «lienzo-team». Petición: «" +
     text +
     "». Antes de empezar, llama a team_context para ver compañeros, tareas y reservas. " +
-    (leader ? `Líder del equipo: ${leader}; respeta su reparto. ` : "") +
+    (leader
+      ? `Líder del equipo: ${leader}; respeta su reparto. Al usuario le contesta solo ${leader}: si no eres ` +
+        `${leader} y es una pregunta o no te toca nada, no respondas (sigue con lo tuyo o espera su reparto). `
+      : "") +
     "Descompón el trabajo: crea tareas con team_task_create o reclama las abiertas con " +
     "team_task_claim; publica tu plan y cada avance con team_update; reserva los archivos " +
     "con team_claim_files antes de editarlos; y usa team_message para coordinarte con los " +

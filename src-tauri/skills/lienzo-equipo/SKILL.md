@@ -9,8 +9,9 @@ Trabajas con otros agentes de IA en el mismo proyecto. lienzo os coordina con la
 
 ## Al empezar
 1. `team_context`: quién está, qué tareas hay, quién lidera y qué archivos están reservados.
-2. Si tienes una tarea asignada, reclámala con `team_task_claim`: recibes las entregas de las tareas de las que depende. Léelas antes de tocar nada.
-3. Reserva con `team_claim_files` lo que vayas a editar. Si alguien ya lo tiene, mira «Si un archivo está reservado».
+2. Si tienes una tarea asignada, reclámala con `team_task_claim`: recibes las entregas de las tareas de las que depende. Léelas antes de tocar nada. Si te da una «📁 CARPETA AISLADA», trabaja solo en esa copia (misma ruta relativa que en el proyecto) y sáltate la reserva del paso 3: lienzo une tus cambios al entregar.
+3. Reserva con `team_claim_files` lo que vayas a editar, siempre con la ruta absoluta (`C:\…`): una relativa se rechaza. Si alguien ya lo tiene, mira «Si un archivo está reservado».
+4. ¿Necesitas algo de antes (una decisión, una entrega, lo que dijo el usuario hace días)? `team_feed` solo trae lo último; busca en todo el historial con `team_feed_search` (palabras o `#id` de tarea) en vez de preguntar o suponer.
 
 ## Buzón (📬)
 - Los mensajes que te mandan otros agentes van a tu buzón. Cuando una herramienta te diga «📬 tienes N mensajes», léelos con `team_inbox`.
@@ -62,6 +63,11 @@ Si recibes encargos en modo director, sigue la skill `lienzo-trabajador`.
 - Escribe a su dueño con `team_message` (`to` = dueño): qué necesitas y para qué. Mientras tanto, sigue con otra parte de tu tarea.
 - Si es urgente y no contesta, avisa al líder (`to: "líder"`). No esperes en bucle.
 
+## Servidores y puertos
+Varios agentes trabajan a la vez en el mismo equipo: si levantas un servidor de desarrollo o de pruebas, no uses el puerto por defecto a ciegas.
+- Antes de arrancarlo, mira si el puerto está libre (`netstat -ano | findstr :<puerto>` en Windows). Si está ocupado, elige otro, no mates el proceso de otro.
+- Di el puerto que usas en tu `team_update` («servidor en :5174») y páralo al acabar.
+
 ## Si te bloqueas
 Escribe al líder (`to: "líder"`) con qué te falta, en una frase, y sigue con otra parte mientras tanto.
 
@@ -72,6 +78,10 @@ Cuando una decisión depende de su gusto o de algo que no sabes (estilo, alcance
 - `header` corto («Estilo», «Alcance») y `multiSelect: true` si puede elegir varias.
 - En modo plan, pregunta antes de proponer el plan. No preguntes lo que puedes averiguar leyendo el proyecto.
 - Si no contesta a tiempo, acaba tu turno: la respuesta te llegará escrita en tu terminal.
+- Pregúntale siempre antes de borrar lo que no creaste en tu tarea, publicar o enviar algo fuera (push, despliegue, mensajes) o tocar algo fuera de la carpeta del proyecto que tu encargo no nombre.
+
+## Tareas largas
+Anuncia cada fase con un `team_update` corto («#N: fase 2/3, …»): el usuario ve por dónde vas y lienzo sabe que sigues vivo. Lo que pueda colgarse (instalar, compilar, servidores) va con tiempo límite o en segundo plano; si se cuelga, cambia algo antes de repetirlo.
 
 ## Skills
 Si al equipo le vendría bien una guía que no tiene (diseño, pruebas, un framework), mira `team_skill_list` y propón una con `team_skill_propose` (nombre de la biblioteca o enlace de GitHub). La instala el usuario.

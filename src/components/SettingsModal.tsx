@@ -7,7 +7,7 @@ import { testNotify } from "../lib/notify";
 import type { ProjectInfo } from "../lib/project";
 import { DEFAULT_SETTINGS, resetSettings, updateSettings, useSettings } from "../lib/settings";
 import type { LeaderMode } from "../lib/settings";
-import { agentColor, agentInitial, agentLabel, ago, errMsg, shortPath, teamDetails, teamDirector, teamStrengths, teamUsageReset } from "../lib/team";
+import { agentColor, agentInitial, agentLabel, ago, errMsg, shortPath, teamDetails, teamDirector, teamIsolate, teamStrengths, teamUsageReset } from "../lib/team";
 import { cachePct, sumUsage, totalTokens, usageOf } from "../lib/usage";
 import { fmtTokens } from "./AgentCard";
 import type { DetectResult, ModelCatalog, TeamDetails, TeamState } from "../lib/team";
@@ -703,6 +703,30 @@ function Director({ state, say }: Pick<Props, "state" | "say">) {
   );
 }
 
+/** Carpetas aisladas: cada tarea trabaja en su copia del proyecto y se une al entregarla. */
+function Isolate({ state, say }: Pick<Props, "state" | "say">) {
+  const on = !!state?.isolate;
+  const busy = (state?.tasks ?? []).filter((t) => !!t.workspace).length;
+  return (
+    <Group
+      title="Carpetas aisladas"
+      desc="Cada tarea que se toma trabaja en su propia copia del proyecto (en .lienzo/tareas), así dos agentes pueden tocar el mismo archivo a la vez sin pisarse. Al entregar, Prometeo une los cambios al proyecto; si chocan con algo que cambió mientras tanto, lo deja marcado en la copia para que el agente lo resuelva."
+      aside={on ? <span className="st-pill" data-tone="ok">Activo</span> : undefined}
+    >
+      <Row
+        label="Una copia por tarea"
+        hint={
+          on
+            ? `En modo director, los cambios se unen al aprobar la entrega. node_modules y .venv se comparten con el proyecto (no se copian).${busy ? ` Ahora hay ${busy} tarea${busy === 1 ? "" : "s"} con copia.` : ""}`
+            : "Las tareas trabajan directamente en el proyecto y se coordinan reservando archivos."
+        }
+      >
+        <Switch label="Carpetas aisladas" on={on} onChange={(v) => void teamIsolate(v).catch((e) => say(errMsg(e), true))} />
+      </Row>
+    </Group>
+  );
+}
+
 function Team({ state, detect, say, onTeamRules }: Props) {
   const saved = state?.charter ?? "";
   const leader = state?.leader ?? "";
@@ -755,6 +779,7 @@ function Team({ state, detect, say, onTeamRules }: Props) {
       </Group>
 
       <Director {...{ state, say }} />
+      <Isolate {...{ state, say }} />
 
       <Messages {...{ state, say }} />
 

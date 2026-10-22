@@ -122,3 +122,21 @@ test("sin porcentajes no hay ventanas", () => {
 });
 
 console.log(`${n} pruebas de límites OK`);
+
+{
+  const { quotaAlerts } = await import("./lib/limits.js");
+  const lim = (pct, resets_at = 1000) => ({ claude: { windows: [{ key: "5h", label: "Sesión de 5 h", used_pct: pct, resets_at }], exact: true, note: "", ts_ms: 0 } });
+  const seen = new Set();
+  assert.equal(quotaAlerts(lim(70), seen).length, 0, "por debajo del 80 no avisa");
+  const a = quotaAlerts(lim(82), seen);
+  assert.equal(a.length, 1);
+  assert.equal(a[0].threshold, 80);
+  assert.equal(quotaAlerts(lim(85), seen).length, 0, "un aviso por umbral");
+  assert.equal(quotaAlerts(lim(96), seen)[0].threshold, 95, "al 95 vuelve a avisar");
+  assert.equal(quotaAlerts(lim(83, 9000), seen).length, 1, "tras el reinicio, otra vez");
+  const fresh = new Set();
+  const b = quotaAlerts(lim(97), fresh);
+  assert.equal(b.length, 1, "si salta directo al 95, un solo aviso");
+  assert.equal(quotaAlerts(lim(97), fresh).length, 0);
+  console.log("ok - avisos de cuota al 80 y al 95 %");
+}

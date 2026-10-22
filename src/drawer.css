@@ -288,6 +288,30 @@
   background: var(--ok);
   animation: td-pop 0.25s ease-out;
 }
+/* Programadas: un reloj en vez de la casilla (no se marca a mano). */
+.td-check[data-s="sched"] {
+  cursor: default;
+  border-color: var(--line);
+  color: var(--muted);
+}
+.td-check[data-s="sched"]:hover {
+  transform: none;
+  border-color: var(--line);
+}
+.td-sched-notes {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.td-sched-notes summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.td-sched-notes div {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 @keyframes td-pop {
   50% {
     transform: scale(1.2);

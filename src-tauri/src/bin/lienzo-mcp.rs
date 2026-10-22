@@ -462,6 +462,9 @@ fn task_flag(t: &Value, tasks: &[Value]) -> String {
     if status == "draft" {
         return "borrador·sin encargo".to_string();
     }
+    if status == "plan" {
+        return "plan·espera el OK del usuario".to_string();
+    }
     if status != "open" {
         return status.to_string();
     }
@@ -690,6 +693,59 @@ fn tools_catalog() -> Value {
                 },
                 "required": ["id", "verdict"]
             }
+        },
+        {
+            "name": "team_schedule_create",
+            "description": "Programa una tarea que se repite (revisar algo cada mañana, actualizar un informe…). Escribe el encargo una vez, completo y con rutas absolutas; Prometeo crea una tarea normal a cada hora y la reparte (mejor a un agente económico con `assign`). Queda PENDIENTE hasta que el usuario la apruebe en el tablero. Pregúntale antes si no te la pidió.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string" },
+                    "notes": { "type": "string", "description": "El encargo de cada ejecución: qué hacer, archivos, criterio de hecho y cómo comprobarlo" },
+                    "every": { "type": "string", "description": "«cada 30 min», «cada 2 h», «cada día 9:00», «lun-vie 8:30» o «lun,mie,vie 18:00» (mínimo 15 min)" },
+                    "assign": { "type": "string", "description": "Agente que la ejecuta (vacío = el primero libre)" },
+                    "level": { "type": "string", "enum": ["simple", "media", "dificil"] },
+                    "model": { "type": "string", "description": "Solo si la ejecuta Claude: sonnet, haiku u opus (vacío = el suyo)" },
+                    "daily_cap": { "type": "integer", "description": "Máximo de ejecuciones al día (6 por defecto)" }
+                },
+                "required": ["title", "notes", "every"]
+            }
+        },
+        {
+            "name": "team_schedule_list",
+            "description": "Lista las tareas programadas: frecuencia, estado (pendiente, activa, en pausa), a quién van y cuántas veces se ejecutaron.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "team_feed_search",
+            "description": "Busca en todo el historial del equipo, también lo que ya no sale en team_feed (que solo muestra lo último): decisiones, entregas, mensajes. Todas las palabras de `query` deben aparecer; `#67` encuentra lo de la tarea 67.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Palabras a buscar (o #id de tarea)" },
+                    "agent": { "type": "string", "description": "Solo de este agente (opcional)" },
+                    "limit": { "type": "integer", "description": "Máximo de resultados (20 por defecto, hasta 50)" }
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "team_task_handoff",
+            "description": "Solo el líder: pasa una tarea tomada por otro agente que se paró o se bloqueó a `to` (o la deja libre para quien esté libre). Su antiguo dueño recibe la orden de dejarla.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer" },
+                    "to": { "type": "string", "description": "Agente que debe hacerla (vacío = el primero libre)" },
+                    "notes": { "type": "string", "description": "Por qué se la pasas (corto)" }
+                },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "team_plan_approve",
+            "description": "Solo el líder, en modo plan: cuando el usuario apruebe el plan por escrito («sí», «dale», «sigue»), suelta sus tareas para que se repartan. Hasta entonces nadie puede tomarlas.",
+            "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "team_task_list",
@@ -991,11 +1047,12 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                     let assign = v["task"]["assign"].as_str().filter(|a| !a.is_empty());
                     text_result(
                         &format!(
-                            "tarea #{} creada: {}{}{}",
+                            "tarea #{} creada: {}{}{}{}",
                             v["task"]["id"].as_u64().unwrap_or(0),
                             v["task"]["title"].as_str().unwrap_or(""),
                             assign.map(|a| format!(" → {a}")).unwrap_or_default(),
-                            if blocked { " (bloqueada hasta que terminen sus padres)" } else { "" }
+                            if blocked { " (bloqueada hasta que terminen sus padres)" } else { "" },
+                            v["note"].as_str().map(|n| format!(". {n}")).unwrap_or_default()
                         ),
                         false,
                     )
@@ -1028,6 +1085,82 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                 )
                 .map(|v| text_result(v["ok"].as_str().unwrap_or("hecho"), false))
         }
+        "team_schedule_create" => client
+            .post(
+                "/schedule",
+                &json!({
+                    "session_id": sid, "op": "create",
+                    "title": trunc(args["title"].as_str().unwrap_or(""), 160),
+                    "notes": trunc(args["notes"].as_str().unwrap_or(""), 4000),
+                    "every": args["every"].as_str().unwrap_or(""),
+                    "assign": args["assign"].as_str().unwrap_or(""),
+                    "level": args["level"].as_str().unwrap_or(""),
+                    "model": args["model"].as_str().unwrap_or(""),
+                    "daily_cap": args["daily_cap"].as_u64().unwrap_or(0)
+                }),
+            )
+            .map(|v| {
+                text_result(
+                    &format!(
+                        "programación P{} creada y PENDIENTE: el usuario la aprueba en el tablero. Hasta entonces no se ejecuta.",
+                        v["schedule"]["id"].as_u64().unwrap_or(0)
+                    ),
+                    false,
+                )
+            }),
+        "team_schedule_list" => client.post("/schedule", &json!({ "session_id": sid, "op": "list" })).map(|v| {
+            let list = v["schedules"].as_array().cloned().unwrap_or_default();
+            if list.is_empty() {
+                return text_result("No hay tareas programadas.", false);
+            }
+            let lines: Vec<String> = list
+                .iter()
+                .map(|s| {
+                    let to = s["assign"].as_str().filter(|a| !a.is_empty()).unwrap_or("quien esté libre");
+                    let skip = s["skipped"].as_str().filter(|x| !x.is_empty()).map(|x| format!(" · última vez saltada: {x}")).unwrap_or_default();
+                    format!(
+                        "P{} [{}] «{}» · {} → {} · {} ejecuciones{}",
+                        s["id"].as_u64().unwrap_or(0),
+                        s["status"].as_str().unwrap_or("?"),
+                        s["title"].as_str().unwrap_or(""),
+                        s["every"].as_str().unwrap_or(""),
+                        to,
+                        s["runs_total"].as_u64().unwrap_or(0),
+                        skip
+                    )
+                })
+                .collect();
+            text_result(&lines.join("\n"), false)
+        }),
+        "team_feed_search" => client
+            .post(
+                "/feed/search",
+                &json!({
+                    "query": trunc(args["query"].as_str().unwrap_or(""), 200),
+                    "agent": args["agent"].as_str().unwrap_or(""),
+                    "limit": args["limit"].as_u64().unwrap_or(20)
+                }),
+            )
+            .map(|v| {
+                if v["events"].as_array().map_or(true, |a| a.is_empty()) {
+                    text_result("Nada en el historial con esas palabras.", false)
+                } else {
+                    text_result(&render_feed(&v), false)
+                }
+            }),
+        "team_task_handoff" => client
+            .post(
+                "/task",
+                &json!({
+                    "session_id": sid, "op": "handoff", "id": args["id"].as_u64().unwrap_or(0),
+                    "assign": args["to"].as_str().unwrap_or(""),
+                    "notes": trunc(args["notes"].as_str().unwrap_or(""), 300)
+                }),
+            )
+            .map(|v| text_result(v["ok"].as_str().unwrap_or("hecho"), false)),
+        "team_plan_approve" => client
+            .post("/task", &json!({ "session_id": sid, "op": "plan_approve" }))
+            .map(|v| text_result(v["ok"].as_str().unwrap_or("hecho"), false)),
         "team_task_list" => client
             .get("/state?limit=1")
             .map(|v| text_result(&render_tasks(&v, args["all"].as_bool().unwrap_or(false)), false)),
@@ -1058,6 +1191,18 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                             v["task"]["status"].as_str().unwrap_or("")
                         ),
                     };
+                    // Carpeta aislada: lo primero, porque cambia dónde se trabaja.
+                    if let Some(ws) = v["workspace"].as_str() {
+                        let root = v["project_root"].as_str().unwrap_or("");
+                        msg.push_str(&format!(
+                            "\n\n📁 CARPETA AISLADA: {ws}\nEs tu copia del proyecto para esta tarea. Lee, edita, compila y prueba SOLO ahí: \
+                             donde el encargo diga {root}\\…, usa {ws}\\… (la misma ruta relativa). Las rutas fuera del proyecto se usan tal cual. \
+                             No hace falta reservar archivos: nadie más toca tu copia. Al entregar, lienzo une tus cambios al proyecto; \
+                             si chocan con algo que cambió mientras tanto, te lo dirá y lo dejará marcado en tu copia."
+                        ));
+                    } else if let Some(e) = v["workspace_error"].as_str() {
+                        msg.push_str(&format!("\n\n(No se pudo preparar tu carpeta aislada: {e}. Trabaja en el proyecto como siempre, reservando archivos.)"));
+                    }
                     // El encargo completo llega al reclamar (el aviso de despacho solo lleva el título).
                     if let Some(brief) = v["task"]["notes"].as_str().filter(|n| !n.trim().is_empty() && name == "team_task_claim") {
                         msg.push_str(&format!("\n\nEncargo:\n{}", brief.trim()));
@@ -1140,7 +1285,22 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                 .map(|v| {
                     let granted = str_array(&v["granted"]);
                     let conflicts = v["conflicts"].as_array().cloned().unwrap_or_default();
-                    if conflicts.is_empty() {
+                    let relative = str_array(&v["relative"]);
+                    if !relative.is_empty() {
+                        let ok = if granted.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" Sí reservaste: {}.", granted.join(", "))
+                        };
+                        text_result(
+                            &format!(
+                                "⚠️ Sin reservar (ruta relativa): {}. Repite con la ruta absoluta (C:\\…): cada agente trabaja en su carpeta y una ruta relativa no dice qué archivo es.{}",
+                                relative.join(", "),
+                                ok
+                            ),
+                            true,
+                        )
+                    } else if conflicts.is_empty() {
                         text_result(
                             &format!("reservados: {}", granted.join(", ")),
                             false,
@@ -2426,6 +2586,59 @@ fn ack_pending(client: &HubClient, agent: &str, session: &str, seq: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Herramientas que atiende `call_tool`: los nombres de sus ramas (`"team_x" =>`, `"a" | "b" =>`).
+    fn handled_tools() -> std::collections::BTreeSet<String> {
+        let src = include_str!("lienzo-mcp.rs");
+        let start = src.find("fn call_tool(").expect("call_tool");
+        let end = start + src[start..].find("herramienta desconocida").expect("rama por defecto");
+        let mut out = std::collections::BTreeSet::new();
+        for line in src[start..end].lines() {
+            let arm = line.trim_start();
+            // Solo las ramas del match de primer nivel: empiezan por el nombre entre comillas y acaban en «=>».
+            if !arm.starts_with("\"team_") || !arm.contains("=>") {
+                continue;
+            }
+            for name in arm.split("=>").next().unwrap_or("").split('|') {
+                let name = name.trim().trim_matches('"');
+                if name.starts_with("team_") {
+                    out.insert(name.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn every_announced_tool_is_handled_and_viceversa() {
+        let announced: std::collections::BTreeSet<String> = tools_catalog()
+            .as_array()
+            .expect("lista de herramientas")
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(String::from))
+            .collect();
+        let handled = handled_tools();
+        let missing: Vec<_> = announced.difference(&handled).collect();
+        let hidden: Vec<_> = handled.difference(&announced).collect();
+        assert!(missing.is_empty(), "anunciadas sin atender: {missing:?}");
+        assert!(hidden.is_empty(), "atendidas pero sin anunciar: {hidden:?}");
+        assert!(announced.len() >= 20, "se leyó mal la lista: {}", announced.len());
+    }
+
+    #[test]
+    fn every_tool_has_description_and_valid_schema() {
+        for t in tools_catalog().as_array().expect("lista") {
+            let name = t["name"].as_str().unwrap_or("?");
+            let desc = t["description"].as_str().unwrap_or("");
+            assert!(desc.len() >= 20, "{name}: falta la descripción");
+            assert_eq!(t["inputSchema"]["type"], "object", "{name}: el esquema debe ser un objeto");
+            let props = t["inputSchema"]["properties"].as_object().cloned().unwrap_or_default();
+            for req in t["inputSchema"]["required"].as_array().cloned().unwrap_or_default() {
+                let r = req.as_str().unwrap_or("");
+                assert!(props.contains_key(r), "{name}: «{r}» es obligatorio pero no está en properties");
+            }
+        }
+    }
 
     #[test]
     fn lista_del_equipo_con_uso_y_fortalezas() {

@@ -11,7 +11,7 @@ use std::process::Command;
 use std::sync::Mutex;
 
 /// Una operación de git a la vez (el índice es uno solo).
-static LOCK: Mutex<()> = Mutex::new(());
+pub(crate) static LOCK: Mutex<()> = Mutex::new(());
 
 const DIFF_CAP: usize = 400 * 1024;
 const BIG_FILE: u64 = 20 * 1024 * 1024;
@@ -71,7 +71,7 @@ pub struct HOutcome {
     pub warnings: Vec<String>,
 }
 
-fn root_of(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn root_of(path: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(path.trim());
     if !p.is_dir() {
         return Err("la carpeta del proyecto no existe".into());
@@ -82,11 +82,11 @@ fn root_of(path: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s)))
 }
 
-fn repo_dir(root: &Path) -> PathBuf {
+pub(crate) fn repo_dir(root: &Path) -> PathBuf {
     root.join(".lienzo").join("historial")
 }
 
-fn base_cmd() -> Command {
+pub(crate) fn base_cmd() -> Command {
     let mut c = Command::new("git");
     c.env("GIT_TERMINAL_PROMPT", "0");
     #[cfg(windows)]
@@ -97,7 +97,7 @@ fn base_cmd() -> Command {
     c
 }
 
-fn git_env(root: &Path, args: &[&str], env: &[(&str, &Path)]) -> Result<String, String> {
+pub(crate) fn git_env(root: &Path, args: &[&str], env: &[(&str, &Path)]) -> Result<String, String> {
     let mut c = base_cmd();
     c.arg(format!("--git-dir={}", repo_dir(root).display()))
         .arg(format!("--work-tree={}", root.display()))
@@ -123,7 +123,7 @@ fn git_env(root: &Path, args: &[&str], env: &[(&str, &Path)]) -> Result<String, 
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, String> {
     git_env(root, args, &[])
 }
 
@@ -156,7 +156,7 @@ fn big_files(root: &Path) -> Vec<String> {
 }
 
 /// Crea el historial con el estado actual como punto de partida (si aún no existe).
-fn ensure_at(root: &Path) -> Result<bool, String> {
+pub(crate) fn ensure_at(root: &Path) -> Result<bool, String> {
     let repo = repo_dir(root);
     if repo.join("HEAD").exists() {
         return Ok(false);

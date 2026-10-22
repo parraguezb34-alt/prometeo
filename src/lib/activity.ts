@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { base64ToBytes } from "./pty";
+import { SUBMIT_CHECK_MS, cleanTerm, needsResubmit } from "./submit";
 import type { PtyDataEvent } from "./pty";
 
 /**
@@ -26,24 +27,9 @@ const MARKER = /esc\W{0,3}(?:to\s+)?(?:interrupt|cancel)|again to interrupt/i;
 /** Frase de estado: «Pondering…», «Reading file...», «Managing tasks...». */
 const PHRASE = /[A-Z][A-Za-z']+(?: [a-z][A-Za-z']*){0,4}(?:…|\.\.\.)/g;
 
-function clean(text: string): string {
-  return (
-    text
-      // eslint-disable-next-line no-control-regex
-      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-      // Los saltos de cursor separan palabras en pantalla: se dejan como espacio.
-      // eslint-disable-next-line no-control-regex
-      .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, " ")
-      // eslint-disable-next-line no-control-regex
-      .replace(/\x1b[()][A-Z0-9]/g, "")
-      // Spinners (braille, estrellas) fuera.
-      .replace(/[⠀-⣿✻✶✳✢✽·•●◐◓◑◒]/g, " ")
-  );
-}
-
 /** La última frase de estado entera que se pintó (los repintados dejan restos sueltos). */
 function lastPhrase(tail: string): string {
-  const found = [...clean(tail).matchAll(PHRASE)].map((m) => m[0]);
+  const found = [...cleanTerm(tail).matchAll(PHRASE)].map((m) => m[0]);
   return found.length > 0 ? found[found.length - 1].slice(0, 60) : "";
 }
 
@@ -53,6 +39,25 @@ const lastBusy = new Map<string, number>();
 /** Cuándo se vio trabajando por última vez la terminal `sid` (ms epoch; 0 si nunca). */
 export function termLastBusyMs(sid: string): number {
   return lastBusy.get(sid) ?? 0;
+}
+
+/** Lo último que pintó cada terminal (en crudo), para saber si un mensaje se quedó sin enviar. */
+const lastTail = new Map<string, string>();
+
+/**
+ * Tras teclear un mensaje con su Enter: si el agente estaba libre y no arranca, y el texto sigue en
+ * su cuadro, se vuelve a pulsar Enter (una sola vez). `enter` escribe el Enter en esa terminal.
+ */
+export function watchSubmit(sid: string, text: string, enter: () => Promise<void>) {
+  // Sin la vigilancia de las terminales (fuera de la app) no se puede saber: no se hace nada.
+  if (!lastTail.has(sid)) return;
+  const sentMs = Date.now();
+  const busyBefore = sentMs - termLastBusyMs(sid) < 4_000;
+  if (busyBefore) return;
+  window.setTimeout(() => {
+    const again = needsResubmit({ text, tail: lastTail.get(sid) ?? "", busyBefore, sentMs, lastBusyMs: termLastBusyMs(sid) });
+    if (again) void enter().catch(() => {});
+  }, SUBMIT_CHECK_MS);
 }
 
 type Track = { tail: string; lastMs: number; since: number; armed: boolean; busy: boolean; status: string };
@@ -86,10 +91,11 @@ export function useTermActivity(): Map<string, Activity> {
         status: "",
       };
       // El aviso puede llegar partido entre dos trozos: se mira con un poco de lo anterior.
-      if (MARKER.test(clean(t.tail.slice(-120) + text))) t.armed = true;
+      if (MARKER.test(cleanTerm(t.tail.slice(-120) + text))) t.armed = true;
       t.tail = (t.tail + text).slice(-TAIL);
       t.lastMs = Date.now();
       if (t.armed) lastBusy.set(e.payload.id, t.lastMs);
+      lastTail.set(e.payload.id, t.tail);
       tracks.current.set(e.payload.id, t);
     });
     const id = window.setInterval(() => {

@@ -3,6 +3,7 @@ mod devapp;
 pub mod errlog;
 pub mod history;
 pub mod hub;
+pub mod workspace;
 mod limits;
 mod project;
 mod pty;
@@ -71,6 +72,10 @@ pub fn run() {
             hub::team_leader,
             hub::team_usage_reset,
             hub::team_director,
+            hub::team_plan,
+            hub::team_isolate,
+            hub::team_schedule_op,
+            hub::team_schedule_fire,
             hub::team_strengths,
             hub::team_broadcast,
             hub::team_broadcast_ack,

@@ -36,8 +36,9 @@ Un único `team_update`:
 En tu respuesta al usuario: una tabla corta (tarea, agente, dependencia), las suposiciones y la pregunta «¿Apruebas el plan?».
 
 ## 5. Esperar
-- No empieces nada hasta la aprobación. Acaba tu turno; no esperes en bucle.
-- Si el usuario pide cambios, ajusta las tareas existentes en vez de duplicarlas y vuelve a publicar el plan.
+- Las tareas que creas en modo plan quedan en «plan·espera el OK del usuario»: nadie puede reclamarlas ni se despachan. No empieces nada; acaba tu turno, no esperes en bucle.
+- El usuario aprueba con el botón «Aprobar y empezar» del chat (te llega «✅ El usuario aprobó el plan…») o por escrito («sí», «dale», «sigue»): en ese caso llama a `team_plan_approve` para soltar las tareas.
+- Si pide cambios, ajusta las tareas existentes (`team_task_brief`) en vez de duplicarlas y vuelve a publicar el plan.
 - Al aprobarse, lienzo despacha las tareas; las tuyas las reclamas con `team_task_claim`.
 
 ## Errores típicos

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { EMPTY_DISPATCH, DISPATCH_CONFIG as C, tick, isParked, retryTask, sendFailed, dispatchPrompt, remindPrompt } from "./lib/dispatcher.js";
+import { EMPTY_DISPATCH, DISPATCH_CONFIG as C, tick, isParked, retryTask, sendFailed, dispatchPrompt, remindPrompt, verdictHold, VERDICT_READ_MS, VERDICT_MAX_MS } from "./lib/dispatcher.js";
 
 const t = (id, status = "open", owner = "", parents = []) => ({ id, title: `t${id}`, notes: "", status, owner, parents });
 const a = (name, extra = {}) => ({ name, online: true, hasTerminal: true, blocked: false, lastActivityMs: 0, ...extra });
@@ -240,6 +240,35 @@ test("un estado guardado sin «reminded» sigue funcionando", () => {
 test("el recordatorio es una sola línea con el id de la tarea", () => {
   const p = remindPrompt({ ...t(9), title: "Arreglar\nel   login" });
   assert.ok(!p.includes("\n") && p.includes("#9") && p.includes("team_task_claim id 9") && p.includes("«Arreglar el login»"));
+});
+
+test("las tareas del plan sin aprobar no se reparten", () => {
+  const r = tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1, "plan")], agents: [a("x")], leader: "" });
+  assert.equal(r.send, null);
+});
+
+test("quien tiene una entrega en revisión espera el veredicto", () => {
+  const r = tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1, "review", "x"), t(2)], agents: [a("x")], leader: "" });
+  assert.equal(r.send, null);
+});
+
+test("tras un veredicto no se reparte hasta que lo lees", () => {
+  const r = tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1)], agents: [a("x")], leader: "", holdUntil: NOW + 1 });
+  assert.equal(r.send, null);
+  assert.equal(tick(EMPTY_DISPATCH, { now: NOW, tasks: [t(1)], agents: [a("x")], leader: "", holdUntil: NOW }).send.taskId, 1);
+});
+
+test("el freno del veredicto dura hasta la respuesta del líder y un margen", () => {
+  const ev = (agent, kind, text, ts_ms) => ({ agent, kind, text, ts_ms });
+  const ok = ev("claude", "task", "#62 aprobada por claude", NOW);
+  assert.equal(verdictHold([ok], "claude", NOW + 1_000), NOW + VERDICT_MAX_MS, "sin respuesta aún: espera");
+  const said = ev("claude", "reply", "He dado por buena la tarea #62", NOW + 3_000);
+  assert.equal(verdictHold([said, ok], "claude", NOW + 4_000), NOW + 3_000 + VERDICT_READ_MS);
+  const fix = ev("claude", "message", "🔧 Corrige #70 «Informe»", NOW);
+  assert.equal(verdictHold([fix], "claude", NOW), NOW + VERDICT_MAX_MS);
+  assert.equal(verdictHold([ok], "claude", NOW + VERDICT_MAX_MS + 1), 0, "un veredicto viejo no frena");
+  assert.equal(verdictHold([ev("opencode", "task", "#62 aprobada por opencode", NOW)], "claude", NOW), 0);
+  assert.equal(verdictHold([ok], "", NOW), 0, "sin líder no hay veredictos");
 });
 
 console.log(`\n${n} pruebas pasadas`);

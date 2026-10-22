@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { STALL_CONFIG as C, detectStall, lastHubSignal, sameToolSince, stallPrompt, stallText } from "./lib/stall.js";
+import { STALL_CONFIG as C, detectStall, lastHubSignal, sameToolSince, stallPrompt, stallText, stallAction, nudgePrompt, escalatePrompt, AUTO_NUDGES } from "./lib/stall.js";
 
 const NOW = 10_000_000;
 const MIN = 60_000;
@@ -100,6 +100,37 @@ test("lo de antes de abrir Prometeo no cuenta como silencio ni como racha", () =
   const s = detectStall(base(events, { fromMs: NOW - 9 * MIN }));
   assert.equal(s.reason, "quiet");
   assert.equal(s.minutes, 9);
+});
+
+test("despierta al agente parado con la terminal quieta, con plazo entre avisos", () => {
+  const s = { agent: "opencode", taskId: 67, reason: "quiet", sinceMs: 0, minutes: 9 };
+  const h = (extra) => ({ now: 10 * 60_000, busy: false, nudged: 0, lastNudgeMs: 0, escalated: false, ...extra });
+  assert.deepEqual(stallAction(s, h({})), { kind: "nudge", n: 1 });
+  assert.equal(stallAction(s, h({ busy: true })), null, "trabajando: no se le escribe encima");
+  assert.equal(stallAction({ ...s, reason: "tool" }, h({})), null, "atascado en una herramienta: lo decides tú");
+  assert.equal(stallAction(s, h({ nudged: 1, lastNudgeMs: 10 * 60_000 - 60_000 })), null, "recién avisado");
+  assert.deepEqual(stallAction(s, h({ nudged: 1, lastNudgeMs: 1 })), { kind: "nudge", n: 2 });
+  assert.deepEqual(stallAction(s, h({ nudged: AUTO_NUDGES, lastNudgeMs: 1 })), { kind: "escalate" });
+  assert.equal(stallAction(s, h({ nudged: AUTO_NUDGES, lastNudgeMs: 1, escalated: true })), null, "al líder, una vez");
+});
+
+test("los avisos son de una línea y dicen qué hacer", () => {
+  const s = { agent: "opencode", taskId: 67, reason: "quiet", sinceMs: 0, minutes: 36 };
+  const n = nudgePrompt(s);
+  assert.ok(!n.includes("\n") && n.includes("#67") && n.includes("team_task_done") && n.includes("por partes"));
+  const e = escalatePrompt(s, "Parte B\n de  Odysseus");
+  assert.ok(!e.includes("\n") && e.includes("«Parte B de Odysseus»") && e.includes("team_task_handoff"));
+});
+
+test("spinner girando sin avanzar: colgado trabajando", () => {
+  const now = 30 * 60_000;
+  const events = [{ agent: "opencode", kind: "update", text: "leyendo código", ts_ms: 60_000, seq: 1 }];
+  const s = detectStall({ now, agent: "opencode", taskId: 67, events, termBusyMs: now - 1_000, waiting: false });
+  assert.equal(s.reason, "spin");
+  assert.ok(stallText(s).includes("sin avanzar"));
+  assert.equal(stallAction(s, { now, busy: true, nudged: 0, lastNudgeMs: 0, escalated: false }), null, "no se le escribe encima");
+  const fresh = [{ ...events[0], ts_ms: now - 5 * 60_000 }];
+  assert.equal(detectStall({ now, agent: "opencode", taskId: 67, events: fresh, termBusyMs: now - 1_000, waiting: false }), null);
 });
 
 console.log(`\n${n} pruebas pasadas`);

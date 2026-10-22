@@ -23,6 +23,9 @@ import {
   teamDetect,
   teamAnswer,
   teamDm,
+  teamPlan,
+  teamScheduleFire,
+  teamScheduleOp,
   teamLeader,
   teamMemoryAdd,
   teamMemoryForget,
@@ -35,8 +38,9 @@ import {
   teamState,
   teamTaskOp,
 } from "../lib/team";
-import type { DetectResult, InboxInfo, ModelCatalog, QAnswer, TeamAgent, TeamEvent, TeamState, TeamTask } from "../lib/team";
-import { findSkill, skillsInstall, skillsList, skillsSet } from "../lib/skills";
+import type { DetectResult, InboxInfo, ModelCatalog, QAnswer, TeamAgent, TeamEvent, TeamSchedule, TeamState, TeamTask } from "../lib/team";
+import { dayKey, isDue } from "../lib/schedule";
+import { findSkill, riskNotice, skillsInstall, skillsList, skillsSet } from "../lib/skills";
 import type { Skill } from "../lib/skills";
 import {
   EMPTY_DISPATCH,
@@ -45,6 +49,7 @@ import {
   retryTask,
   sendFailed,
   tick as dispatchTick,
+  verdictHold,
 } from "../lib/dispatcher";
 import type { DAgent, DispatchState } from "../lib/dispatcher";
 import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, savePrefs } from "../lib/agentPrefs";
@@ -64,7 +69,7 @@ import type { ProjectInfo } from "../lib/project";
 import { chatLineage, currentTeamChat, inChat, prepareChat, useChats } from "../lib/chats";
 import { LATEST, resetCommand, withResume } from "../lib/resume";
 import { termLastBusyMs, useTermActivity } from "../lib/activity";
-import { STALL_CHECK_MS, detectStall, stallPrompt, stallText } from "../lib/stall";
+import { AUTO_NUDGES, STALL_CHECK_MS, detectStall, escalatePrompt, nudgePrompt, stallAction, stallPrompt, stallText } from "../lib/stall";
 import type { Stall } from "../lib/stall";
 import { askPhrase, eventImages, isDispatch, isImagePath, isNotice, parseTask, samePath } from "../lib/timeline";
 import { notify } from "../lib/notify";
@@ -81,7 +86,7 @@ import { WindowControls } from "./WindowControls";
 import { SlidingPill } from "./SlidingPill";
 import { BrandIcon, BrandWordmark } from "./Brand";
 import { LimitsChip } from "./LimitsChip";
-import { fmtReset, level as limitLevel, opencodeGoUsage, parseUsagePanel, teamLimitsSet, windowLabel } from "../lib/limits";
+import { fmtReset, level as limitLevel, opencodeGoUsage, parseUsagePanel, quotaAlerts, teamLimitsSet, windowLabel } from "../lib/limits";
 import { InAppAvisos, Toast } from "./Avisos";
 import { listen } from "@tauri-apps/api/event";
 import { taskPaths } from "../lib/history";
@@ -459,6 +464,11 @@ export function CommandCenter() {
       }
       const r = await skillsInstall(source);
       setSkillLib(r.library.skills);
+      const risky = riskNotice(r.warnings);
+      if (risky) {
+        say(risky, true);
+        return;
+      }
       const added = r.library.skills.filter((k) => r.installed.includes(k.name));
       if (added.length === 1) say(`Skill «${added[0].name}» instalada y encendida (la propuso ${agentLabel(agent)}).`);
       else say(`${added.length} skills añadidas, apagadas: elige cuáles encender en Ajustes → Skills.`);
@@ -476,6 +486,29 @@ export function CommandCenter() {
         if (p?.sessionId) await termWrite(p.sessionId, `${r.late.replace(/\s*\n\s*/g, " · ")}\r`);
         else say(`Respuesta guardada: ${agentLabel(r.agent)} no tiene la terminal abierta.`, true);
       }
+      refresh();
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
+
+  // Modo plan: apruebas (las tareas se reparten) o descartas lo que espera tu OK. El líder se entera
+  // en su terminal, para que reclame las suyas o no siga con ese plan.
+  const decidePlan = async (op: "approve" | "discard") => {
+    try {
+      const ids = await teamPlan(op);
+      const list = ids.map((i) => `#${i}`).join(", ");
+      const lead = state?.leader ?? "";
+      const p = lead ? panelForAgent(getLayout().panels, lead) : undefined;
+      if (p?.sessionId && ids.length > 0) {
+        await termWrite(
+          p.sessionId,
+          op === "approve"
+            ? `✅ El usuario aprobó el plan (${list}). Prometeo ya reparte las tareas; reclama las tuyas con team_task_claim.\r`
+            : `🗑 El usuario descartó el plan (${list}): esas tareas se borraron. No sigas con él; espera nuevas indicaciones.\r`,
+        );
+      }
+      say(op === "approve" ? `✅ Plan aprobado: ${list} ya se reparten.` : `🗑 Plan descartado: ${list} borradas.`);
       refresh();
     } catch (e) {
       say(errMsg(e), true);
@@ -885,6 +918,7 @@ export function CommandCenter() {
           leader: cur.leader,
           director: cur.director,
           bootMs: BOOT_MS,
+          holdUntil: verdictHold(cur.events, cur.leader, now),
         }, dispatchConfig(cfg));
         let next = res.state;
         for (const note of res.notes) say(note, true);
@@ -894,6 +928,12 @@ export function CommandCenter() {
           const panel = panelForAgent(cur.panels, agent);
           try {
             if (!task || !panel?.sessionId) throw new Error("sin terminal");
+            // Programada con modelo propio (solo Claude, y nunca al líder: le cambiaría el suyo).
+            const model = (task.model ?? "").trim().toLowerCase();
+            if (model && /^[a-z0-9.\-]{2,40}$/.test(model) && agent.toLowerCase().includes("claude") && agent !== cur.leader) {
+              await termWrite(panel.sessionId, `/model ${model}\r`);
+              await new Promise((ok) => window.setTimeout(ok, 2500));
+            }
             await termWrite(
               panel.sessionId,
               `${dispatchPrompt({
@@ -1294,7 +1334,9 @@ export function CommandCenter() {
     try {
       if (target.kind === "team") {
         if (shoot === "plan" && leader) {
-          // Modo plan con líder: solo el líder recibe la misión (y no toca nada).
+          // Modo plan con líder: solo el líder recibe la misión (y no toca nada). Lo que cree
+          // queda en espera hasta que apruebes el plan.
+          await teamPlan("hold");
           const p = panelForAgent(layout.panels, leader);
           if (p?.sessionId) {
             await termWrite(p.sessionId, `${buildPlanPrompt(flat, leader)}\r`);
@@ -1308,6 +1350,7 @@ export function CommandCenter() {
               : `📋 Guardado para ${leader}; abre su terminal para que lo reciba.`,
           );
         } else if (shoot === "plan") {
+          await teamPlan("hold");
           const typed = await pushPlan(flat, "");
           clear();
           refresh();
@@ -1317,6 +1360,7 @@ export function CommandCenter() {
               : "📋 Publicado en el feed (sin terminales de agentes abiertas).",
           );
         } else {
+          if (state?.plan_hold) await teamPlan("free");
           const typed = await pushBroadcast(flat, leader);
           clear();
           refresh();
@@ -1332,6 +1376,9 @@ export function CommandCenter() {
       // Mensaje directo a un agente.
       const name = target.name;
       const prompt = shoot === "plan" ? buildPlanPrompt(flat, leader) : flat;
+      if (shoot === "plan") await teamPlan("hold");
+      // Hablarle a otro agente no cierra el plan del líder; hablarle al líder sin modo plan, sí.
+      else if (state?.plan_hold && name === leader) await teamPlan("free");
       const p = panelForAgent(layout.panels, name);
       if (p?.sessionId) await termWrite(p.sessionId, `${prompt}\r`);
       await teamDm(name, shoot === "plan" ? `📋 (modo plan) ${body}` : body);
@@ -1913,6 +1960,8 @@ export function CommandCenter() {
   const stallInRef = useRef({ prompts: termPrompts, notifyOn });
   stallInRef.current = { prompts: termPrompts, notifyOn };
   const stallWarned = useRef(new Set<string>());
+  /** Avisos automáticos por tarea: cuántos, el último y si ya se avisó al líder. */
+  const nudges = useRef<Record<number, { n: number; last: number; escalated: boolean }>>({});
   useEffect(() => {
     const check = () => {
       const cur = latestRef.current;
@@ -1953,6 +2002,31 @@ export function CommandCenter() {
             kind: "late",
           });
       }
+      // Quien acabó su turno sin entregar no vuelve solo: se le despierta; si no basta, al líder.
+      for (const s of Object.values(next)) {
+        const sid = panelForAgent(cur.panels, s.agent)?.sessionId;
+        if (!sid) continue;
+        const h = nudges.current[s.taskId] ?? { n: 0, last: 0, escalated: false };
+        const busy = now - termLastBusyMs(sid) < 5_000 || liveRef.current.some((l) => l.name === s.agent && l.busy);
+        const act = stallAction(s, { now, busy, nudged: h.n, lastNudgeMs: h.last, escalated: h.escalated }, cfg);
+        if (!act) continue;
+        if (act.kind === "nudge") {
+          nudges.current[s.taskId] = { ...h, n: act.n, last: now };
+          void termWrite(sid, `${nudgePrompt(s)}\r`)
+            .then(() => say(`⏰ ${agentLabel(s.agent)} llevaba ${s.minutes} min parado en #${s.taskId}: le pedí que siga.`))
+            .catch(() => {});
+          continue;
+        }
+        nudges.current[s.taskId] = { ...h, escalated: true };
+        const title = cur.tasks.find((t) => t.id === s.taskId)?.title ?? "";
+        const lead = cur.leader && cur.leader !== s.agent ? panelForAgent(cur.panels, cur.leader)?.sessionId : undefined;
+        if (lead) void termWrite(lead, `${escalatePrompt(s, title)}\r`).catch(() => {});
+        say(
+          `⚠ ${agentLabel(s.agent)} sigue parado en #${s.taskId} tras ${AUTO_NUDGES} avisos` +
+            (lead ? `: se lo pasé al líder para que la reasigne.` : `: pásala a otro desde el tablero.`),
+          true,
+        );
+      }
     };
     const first = window.setTimeout(check, 5_000);
     const id = window.setInterval(check, STALL_CHECK_MS);
@@ -1989,6 +2063,76 @@ export function CommandCenter() {
     const id = window.setInterval(check, 60_000);
     return () => window.clearInterval(id);
   }, [hasOpenCode]);
+
+  // Aviso al llegar al 80 % (y al 95 %) de un límite de uso: a tiempo de repartir a otro agente.
+  const quotaSeen = useRef(new Set<string>());
+  const limitsNow = state?.limits;
+  useEffect(() => {
+    if (!limitsNow) return;
+    for (const a of quotaAlerts(limitsNow, quotaSeen.current)) {
+      const when = a.resetsAt ? `; se reinicia ${fmtReset(a.resetsAt)}` : "";
+      const text = `${agentLabel(a.agent)} va por el ${a.pct} % de su límite «${a.window}»${when}.`;
+      say(`⚠ ${text}`, a.threshold >= 95);
+      if (notifyOn) notify(`${agentLabel(a.agent)}: ${a.pct} % de su límite`, text, { agent: a.agent, kind: "info" });
+    }
+  }, [limitsNow, notifyOn, say]);
+
+  // ---- Tareas programadas: cada 30 s se mira a cuál le toca (con la hora local) y se crea su tarea,
+  // que el despacho reparte. Si quien la ejecuta ya va por el 80 % de su límite, se salta.
+  const schedRef = useRef<{ schedules: TeamSchedule[]; limits: TeamState["limits"]; project: string }>({
+    schedules: [],
+    limits: undefined,
+    project: "",
+  });
+  schedRef.current = { schedules: state?.schedules ?? [], limits: state?.limits, project: project ?? "" };
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let running = false;
+    const tick = async () => {
+      const { schedules, limits, project: proj } = schedRef.current;
+      if (!proj || running) return;
+      running = true;
+      try {
+        const now = Date.now();
+        const key = projectKey(proj);
+        for (const s of schedules) {
+          if (!isDue(s, now, key)) continue;
+          const lim = s.assign ? limits?.[s.assign.toLowerCase()] : undefined;
+          const top = Math.max(0, ...(lim?.windows ?? []).map((w) => w.used_pct));
+          const skip = top >= 80 ? `${agentLabel(s.assign)} va por el ${Math.round(top)} % de su límite` : undefined;
+          try {
+            const tid = await teamScheduleFire(s.id, dayKey(now), skip);
+            if (tid) say(`📅 «${s.title}»: creada la tarea #${tid}.`);
+          } catch (e) {
+            say(`Programación P${s.id}: ${errMsg(e)}`, true);
+          }
+        }
+      } finally {
+        running = false;
+      }
+    };
+    const first = window.setTimeout(() => void tick(), 8_000);
+    const id = window.setInterval(() => void tick(), 30_000);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(id);
+    };
+  }, [say]);
+
+  /** Desde el tablero: aprobar, pausar, reanudar, borrar o «ejecutar ahora» una programación. */
+  const scheduleAction = async (id: number, op: "approve" | "pause" | "resume" | "delete" | "run") => {
+    try {
+      if (op === "run") {
+        const tid = await teamScheduleFire(id, dayKey(Date.now()), undefined, true);
+        say(tid ? `📅 Creada la tarea #${tid}: el despacho la reparte.` : "No se creó: mira el motivo en la programación.", !tid);
+      } else {
+        await teamScheduleOp(id, op);
+      }
+      refresh();
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  };
 
   const [usageScreens, setUsageScreens] = useState<Record<string, string>>({});
   /** Antigravity solo lo dice con /usage: se le pide, se lee de su pantalla y se cierra el panel. */
@@ -2169,7 +2313,7 @@ export function CommandCenter() {
         const maxDone = Math.max(0, ...cur.tasks.filter((t) => t.status === "done").map((t) => t.id));
         Object.assign(c, { key: cleanKey, doneUpTo: saved >= 0 ? saved : maxDone });
       }
-      const active = cur.tasks.some((t) => ["open", "claimed", "review", "draft"].includes(t.status));
+      const active = cur.tasks.some((t) => ["open", "claimed", "review", "draft", "plan"].includes(t.status));
       const maxDone = Math.max(0, ...cur.tasks.filter((t) => t.status === "done").map((t) => t.id));
       const missionOver = !active && maxDone > c.doneUpTo;
       if (!missionOver && !(c.pending && !active)) return;
@@ -2690,6 +2834,7 @@ export function CommandCenter() {
               questions={state?.questions}
               onAnswer={answerQuestion}
               onPrompt={(a, keys) => void answerPrompt(a, keys)}
+              onPlan={decidePlan}
               skills={skillLib}
               onSkill={skillFromChat}
               empty={
@@ -2898,6 +3043,8 @@ export function CommandCenter() {
 
       {overlay === "tasks" && (
         <TasksDrawer
+          schedules={(state?.schedules ?? []).filter((s) => !s.project || !project || projectKey(s.project) === projectKey(project))}
+          onSchedule={(id, op) => void scheduleAction(id, op)}
           tasks={chatTasks}
           earlier={earlierTasks}
           allTasks={tasks}

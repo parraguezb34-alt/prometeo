@@ -20,6 +20,7 @@ Decisiones: <qué elegiste y por qué, lo que no se debe deshacer>
 Falta: <siguientes pasos concretos, en orden>
 Ojo: <trampas, comandos que fallan, supuestos sin comprobar>
 ```
+- Separa lo comprobado de lo supuesto: lo que no verificaste (leyéndolo, ejecutándolo o con una prueba) va marcado `[tentativo]`, también en «Hecho». Quien te releve se fiará de lo que no lleve la marca.
 - Rutas y nombres exactos; nada de pegar código.
 - Pon `task_id` si tienes tarea y `files` con lo que tocaste.
 

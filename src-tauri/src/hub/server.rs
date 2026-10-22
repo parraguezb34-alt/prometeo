@@ -99,6 +99,8 @@ fn handle(mut request: tiny_http::Request, app: &AppHandle) {
         ("POST", "/ctx") => cmd_ctx(app, &payload),
         ("GET", "/state") => cmd_state(app, &query),
         ("GET", "/feed") => cmd_feed(app, &query),
+        ("POST", "/feed/search") => cmd_feed_search(app, &payload),
+        ("POST", "/schedule") => cmd_schedule(app, &payload),
         ("POST", "/task") => cmd_task(app, &payload),
         ("POST", "/memory") => cmd_memory(app, &payload),
         ("POST", "/claim") => cmd_claim(app, &payload),
@@ -550,6 +552,46 @@ fn cmd_state(app: &AppHandle, query: &std::collections::HashMap<String, String>)
     hub::with_inner(app, |inner| hub::snapshot(inner, limit)).ok_or("hub no inicializado".into())
 }
 
+/// Tareas programadas: `create` (queda pendiente de tu OK) o `list`.
+fn cmd_schedule(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let sid = payload["session_id"].as_str().unwrap_or("").to_string();
+    let out = hub::with_inner(app, |inner| -> Result<Value, String> {
+        let (agent, sid) = hub::agent_label(inner, &sid, payload["agent"].as_str());
+        match payload["op"].as_str().unwrap_or("") {
+            "create" => {
+                let s = hub::schedule::create(
+                    inner,
+                    &agent,
+                    &sid,
+                    payload["title"].as_str().unwrap_or(""),
+                    payload["notes"].as_str().unwrap_or(""),
+                    payload["every"].as_str().unwrap_or(""),
+                    payload["assign"].as_str().unwrap_or(""),
+                    payload["level"].as_str().unwrap_or(""),
+                    payload["model"].as_str().unwrap_or(""),
+                    payload["daily_cap"].as_u64().unwrap_or(0) as u32,
+                )?;
+                hub::persist(inner);
+                Ok(json!({ "schedule": s }))
+            }
+            "list" => Ok(json!({ "schedules": inner.schedules })),
+            other => Err(format!("operación desconocida: {other}")),
+        }
+    })
+    .ok_or("hub no inicializado")??;
+    hub::notify_ui();
+    Ok(out)
+}
+
+/// Busca en todo el historial del proyecto (el feed vivo y su archivo), no solo en lo último.
+fn cmd_feed_search(app: &AppHandle, payload: &Value) -> Result<Value, String> {
+    let query = payload["query"].as_str().unwrap_or("");
+    let agent = payload["agent"].as_str().unwrap_or("");
+    let limit = payload["limit"].as_u64().unwrap_or(20).clamp(1, 50) as usize;
+    let events = hub::with_inner(app, |inner| hub::search_feed(inner, query, agent, limit)).ok_or("hub no inicializado")?;
+    Ok(json!({ "events": events }))
+}
+
 fn cmd_feed(app: &AppHandle, query: &std::collections::HashMap<String, String>) -> Result<Value, String> {
     let since = query
         .get("since_seq")
@@ -581,34 +623,122 @@ fn cmd_feed(app: &AppHandle, query: &std::collections::HashMap<String, String>) 
     Ok(out)
 }
 
+/// Rutas de una carpeta aislada pasadas a las del proyecto (para el feed y la entrega).
+struct WsPaths {
+    ws: String,
+    root: String,
+}
+
+impl WsPaths {
+    fn map_path(&self, f: &str) -> String {
+        let norm = |s: &str| s.replace('/', "\\").to_lowercase();
+        let (f_n, ws_n) = (norm(f), norm(self.ws.trim_end_matches(['\\', '/'])));
+        if f_n.starts_with(&ws_n) && f.len() >= self.ws.trim_end_matches(['\\', '/']).len() {
+            let rest = &f[self.ws.trim_end_matches(['\\', '/']).len()..];
+            format!("{}{}", self.root.trim_end_matches(['\\', '/']), rest)
+        } else {
+            f.to_string()
+        }
+    }
+}
+
+enum IsoStep {
+    /// Entregada para revisión: aún no se une; el líder ve el diff de la copia.
+    Review { diff: String, files: WsPaths },
+    /// Unida al proyecto: rutas absolutas que cambiaron.
+    Merged { project: String, files: Vec<String> },
+}
+
+/// Lo que toca hacer con la carpeta aislada de la tarea al entregarla o al decidir sobre ella.
+/// Lo que el camino normal rechazaría (entrega ajena, sin resumen, revisión de quien no lidera) no
+/// se une: se deja pasar para que dé su error de siempre.
+fn isolated_step(app: &AppHandle, op: &str, id: u64, sid: &str, payload: &Value, summary: &str) -> Result<Option<IsoStep>, String> {
+    let pre = hub::with_inner(app, |inner| {
+        let (agent, _) = hub::agent_label(inner, sid, payload["agent"].as_str());
+        let t = inner.tasks.iter().find(|t| t.id == id)?;
+        if t.workspace.is_empty() {
+            return None;
+        }
+        let reviewer = t.research.is_empty() && hub::reviewer_for(inner, &agent).is_some();
+        let leads = agent == "tú" || inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(&agent));
+        Some((inner.project.clone()?, t.workspace.clone(), reviewer, leads, t.status.clone(), t.owner.clone(), agent))
+    })
+    .flatten();
+    let Some((project, ws, reviewer, leads, status, owner, agent)) = pre else {
+        return Ok(None);
+    };
+    if op == "done" {
+        if matches!(status.as_str(), "review" | "done") || (!owner.is_empty() && owner != agent) || summary.is_empty() {
+            return Ok(None);
+        }
+        if reviewer {
+            let diff = crate::workspace::diff(&project, id, 6000).unwrap_or_default();
+            return Ok(Some(IsoStep::Review { diff, files: WsPaths { ws, root: project } }));
+        }
+        let files = hub::merge_workspace(&project, id, &ws)?;
+        return Ok(Some(IsoStep::Merged { project, files }));
+    }
+    let verdict = payload["verdict"].as_str().unwrap_or("").trim().to_lowercase();
+    if !leads || status != "review" || !matches!(verdict.as_str(), "ok" | "aprobar" | "aprobada") {
+        return Ok(None);
+    }
+    let files = hub::merge_workspace(&project, id, &ws).map_err(|e| {
+        format!("No se puede aprobar aún: {e} Devuélvela con verdict «fix» para que su dueño lo resuelva.")
+    })?;
+    Ok(Some(IsoStep::Merged { project, files }))
+}
+
+/// Al tomar una tarea con las carpetas aisladas activadas: su copia del proyecto (la crea la primera
+/// vez; si ya la tenía, de un traspaso o una corrección, la misma). None si no toca.
+fn claim_workspace(app: &AppHandle, id: u64) -> Option<Result<String, String>> {
+    let (project, existing, wanted) = hub::with_inner(app, |inner| {
+        let t = inner.tasks.iter().find(|t| t.id == id)?;
+        Some((inner.project.clone()?, t.workspace.clone(), inner.isolate && t.research.is_empty()))
+    })
+    .flatten()?;
+    if !existing.is_empty() && crate::workspace::exists(&project, id) {
+        return Some(Ok(existing));
+    }
+    if !wanted {
+        return None;
+    }
+    let made = crate::workspace::create(&project, id);
+    if let Ok(ws) = &made {
+        hub::with_inner(app, |inner| {
+            if let Some(t) = inner.tasks.iter_mut().find(|t| t.id == id) {
+                t.workspace = ws.clone();
+            }
+            hub::persist(inner);
+        });
+    }
+    Some(made)
+}
+
 fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     let op = payload["op"].as_str().unwrap_or("").to_string();
     let sid = payload["session_id"].as_str().unwrap_or("").to_string();
     let id = payload["id"].as_u64().unwrap_or(0);
-    let title: String = payload["title"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .chars()
-        .take(200)
-        .collect();
-    // Las notas son el encargo completo (objetivo, archivos, criterio de hecho…).
-    let notes: String = payload["notes"].as_str().unwrap_or("").chars().take(4000).collect();
+    let title: String = hub::redact::redact(payload["title"].as_str().unwrap_or("").trim()).chars().take(200).collect();
+    // Las notas son el encargo completo (objetivo, archivos, criterio de hecho…). Sin secretos:
+    // el tablero se guarda en disco y lo leen todos.
+    let notes: String = hub::redact::redact(payload["notes"].as_str().unwrap_or("")).chars().take(4000).collect();
     let parents_in: Vec<u64> = payload["parents"]
         .as_array()
         .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
         .unwrap_or_default();
     // Entrega al cerrar: resumen (o las notas de siempre), archivos y evidencia.
-    let summary: String = payload["summary"]
-        .as_str()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or(payload["notes"].as_str().unwrap_or(""))
-        .trim()
-        .chars()
-        .take(1500)
-        .collect();
-    let evidence: String = payload["evidence"].as_str().unwrap_or("").trim().chars().take(500).collect();
-    let files_in: Vec<String> = payload["files"]
+    let summary: String = hub::redact::redact(
+        payload["summary"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(payload["notes"].as_str().unwrap_or(""))
+            .trim(),
+    )
+    .chars()
+    .take(1500)
+    .collect();
+    let evidence: String = hub::redact::redact(payload["evidence"].as_str().unwrap_or("").trim()).chars().take(500).collect();
+    let mut files_in: Vec<String> = payload["files"]
         .as_array()
         .map(|a| {
             a.iter()
@@ -618,6 +748,21 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 .collect()
         })
         .unwrap_or_default();
+
+    // Carpetas aisladas: unir la copia al proyecto (al entregar sin revisión, o al aprobar) o sacar su
+    // diff para el líder. Va fuera del cerrojo del hub: git puede tardar unos segundos.
+    let iso = if matches!(op.as_str(), "done" | "review") { isolated_step(app, &op, id, &sid, payload, &summary)? } else { None };
+    let (ws_diff, merged) = match iso {
+        Some(IsoStep::Review { diff, files }) => {
+            files_in = files_in.iter().map(|f| files.map_path(f)).collect();
+            (Some(diff), None)
+        }
+        Some(IsoStep::Merged { project, files }) => {
+            files_in = files.clone();
+            (None, Some((project, files)))
+        }
+        None => (None, None),
+    };
 
     let out = hub::with_inner(app, |inner| -> Result<Value, String> {
         let (agent, sid) = hub::agent_label(inner, &sid, payload["agent"].as_str());
@@ -631,6 +776,10 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 let mut task = hub::Task::new(inner.task_seq, title.clone(), notes, parents);
                 task.level = hub::task_level(payload["level"].as_str().unwrap_or(""));
                 task.assign = hub::resolve_agent(inner, payload["assign"].as_str().unwrap_or(""));
+                // Modo plan: la tarea espera tu aprobación antes de que nadie la empiece.
+                if inner.plan_hold {
+                    task.status = "plan".into();
+                }
                 inner.tasks.push(task.clone());
                 let mut text = format!("#{} creada: {}", task.id, title);
                 if !task.parents.is_empty() {
@@ -642,6 +791,12 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 }
                 hub::push_event(inner, &agent, &sid, "task", &text, vec![], None);
                 hub::persist(inner);
+                if task.status == "plan" {
+                    return Ok(json!({
+                        "task": task,
+                        "note": "Modo plan: la tarea espera la aprobación del usuario; nadie la empieza hasta entonces.",
+                    }));
+                }
                 Ok(json!({ "task": task }))
             }
             "comment" => {
@@ -663,10 +818,53 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 hub::persist(inner);
                 Ok(json!({ "ok": msg }))
             }
+            "handoff" => {
+                let msg = hub::handoff_task(
+                    inner,
+                    id,
+                    &agent,
+                    &sid,
+                    payload["assign"].as_str().unwrap_or(""),
+                    payload["notes"].as_str().unwrap_or(""),
+                )?;
+                hub::persist(inner);
+                Ok(json!({ "ok": msg }))
+            }
+            "plan_approve" => {
+                // Solo el líder, y solo si el usuario habló después de que se propusiera el plan
+                // (su «sí», «dale» o «sigue»): un agente no se aprueba su propio plan.
+                if !inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(&agent)) {
+                    return Err("solo el líder aprueba el plan, y solo cuando el usuario lo dice".into());
+                }
+                let first = inner.tasks.iter().filter(|t| t.status == "plan").map(|t| t.created_ms).min();
+                let Some(first) = first else {
+                    return Err("no hay ningún plan esperando aprobación".into());
+                };
+                let user_spoke = inner
+                    .events
+                    .iter()
+                    .any(|e| e.agent == "tú" && e.ts_ms > first && matches!(e.kind.as_str(), "message" | "broadcast" | "answer"));
+                if !user_spoke {
+                    return Err("el usuario aún no ha contestado al plan: espera su aprobación".into());
+                }
+                let ids = hub::approve_plan(inner, &agent, &sid);
+                hub::persist(inner);
+                Ok(json!({ "ok": format!("Plan aprobado: {} tareas listas para repartir.", ids.len()) }))
+            }
             "review" => {
                 let verdict = payload["verdict"].as_str().unwrap_or("");
                 hub::set_focus(inner, &agent, id);
-                let msg = hub::review_task(inner, id, &agent, &sid, verdict, payload["notes"].as_str().unwrap_or(""))?;
+                let mut msg = hub::review_task(inner, id, &agent, &sid, verdict, payload["notes"].as_str().unwrap_or(""))?;
+                if let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) {
+                    if let Some((project, files)) = merged.clone() {
+                        // Aprobada: lo de la copia ya está en el proyecto.
+                        task.workspace = String::new();
+                        let (title, by) = (task.title.clone(), task.owner.clone());
+                        hub::after_merge(project, id, title, by, files);
+                    } else if !task.workspace.is_empty() && task.owner == agent {
+                        msg.push_str(&format!(" Trabaja en su carpeta aislada: {}", task.workspace));
+                    }
+                }
                 hub::persist(inner);
                 Ok(json!({ "ok": msg }))
             }
@@ -686,6 +884,23 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                         }
                         if snapshot.status == "review" {
                             return Err(format!("la tarea #{id} está en revisión del líder; espera su decisión"));
+                        }
+                        if snapshot.status == "plan" {
+                            return Err(format!(
+                                "la tarea #{id} es parte de un plan que el usuario aún no aprueba: no empieces hasta su OK"
+                            ));
+                        }
+                        // Modo director: con una entrega tuya en revisión, espera el veredicto (puede
+                        // volverte para corregir) en vez de empezar otra por delante.
+                        if let Some(r) = inner
+                            .tasks
+                            .iter()
+                            .find(|t| t.status == "review" && t.owner == agent && t.id != id)
+                        {
+                            return Err(format!(
+                                "tu entrega #{} está en revisión del líder: espera su veredicto antes de tomar otra (acaba tu turno; lienzo te avisará)",
+                                r.id
+                            ));
                         }
                         if snapshot.status == "draft" {
                             return Err(format!("la tarea #{id} aún no tiene encargo: espera a que el líder lo escriba"));
@@ -734,7 +949,12 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                     None
                 };
                 // Lo que verá el líder: los cambios frente a la copia de cada archivo al reservarlo.
-                let diff = if reviewer.is_some() { hub::delivery_diff(inner, &files_in) } else { String::new() };
+                let diff = match (&reviewer, &ws_diff) {
+                    // Con carpeta aislada, lo que cambió en la copia frente a su base.
+                    (Some(_), Some(d)) => d.clone(),
+                    (Some(_), None) => hub::delivery_diff(inner, &files_in),
+                    _ => String::new(),
+                };
                 if op == "done" && reviewer.is_none() {
                     hub::drop_bases(inner, &files_in);
                 }
@@ -757,6 +977,10 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                                 ts_ms: hub::now_ms(),
                                 diff,
                             });
+                            // Ya unida al proyecto: la copia sobra (se borra tras guardar el historial).
+                            if merged.is_some() {
+                                task.workspace = String::new();
+                            }
                         }
                         _ => {
                             task.status = "open".into();
@@ -792,7 +1016,8 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 };
                 hub::push_event(inner, &agent, &sid, "task", &text, ev_files, None);
                 // Historial: copia de sus archivos tal como los entrega (para verlos y deshacerlos).
-                if op == "done" {
+                // Con carpeta aislada lo guarda `after_merge` al unirla (y en revisión aún no se unió).
+                if op == "done" && ws_diff.is_none() && merged.is_none() {
                     if let Some(project) = inner.project.clone() {
                         let title = if task.fix_rounds > 0 {
                             format!("{} · corrección {}", task.title, task.fix_rounds)
@@ -809,6 +1034,14 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 }
                 if let Some(leader) = &reviewer {
                     hub::ask_review(inner, task.id, leader);
+                }
+                if let (true, Some((project, files))) = (op == "done", merged.clone()) {
+                    let title = if task.fix_rounds > 0 {
+                        format!("{} · corrección {}", task.title, task.fix_rounds)
+                    } else {
+                        task.title.clone()
+                    };
+                    hub::after_merge(project, task.id, title, agent.clone(), files);
                 }
                 hub::persist(inner);
 
@@ -845,6 +1078,18 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
         }
     })
     .ok_or("hub no inicializado")??;
+    let mut out = out;
+    if op == "claim" {
+        match claim_workspace(app, id) {
+            Some(Ok(ws)) => {
+                let root = hub::with_inner(app, |i| i.project.clone()).flatten().unwrap_or_default();
+                out["workspace"] = json!(ws);
+                out["project_root"] = json!(root);
+            }
+            Some(Err(e)) => out["workspace_error"] = json!(e),
+            None => {}
+        }
+    }
     hub::notify_ui();
     Ok(out)
 }
@@ -906,6 +1151,38 @@ fn cmd_memory(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     Ok(out)
 }
 
+/// Ruta completa: con unidad (`C:\…`, `C:/…`), de red (`\\servidor\…`) o de Unix (`/…`).
+fn is_absolute_path(p: &str) -> bool {
+    let p = p.trim();
+    let b = p.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/'))
+        || p.starts_with("\\\\")
+        || p.starts_with('/')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_absolute_path, WsPaths};
+
+    #[test]
+    fn workspace_paths_map_back_to_the_project() {
+        let m = WsPaths { ws: r"C:\p\.lienzo\tareas\7".into(), root: r"C:\p".into() };
+        assert_eq!(m.map_path(r"C:\p\.lienzo\tareas\7\src\a.md"), r"C:\p\src\a.md");
+        assert_eq!(m.map_path("c:/p/.lienzo/tareas/7/src/a.md"), r"C:\p/src/a.md");
+        assert_eq!(m.map_path(r"C:\otro\x.md"), r"C:\otro\x.md", "lo de fuera se queda igual");
+    }
+
+    #[test]
+    fn claims_need_full_paths() {
+        for p in [r"C:\Users\x\revision\arbol.md", "c:/a/b.md", r"\\nas\share\a.md", "/home/a.md"] {
+            assert!(is_absolute_path(p), "{p}");
+        }
+        for p in ["revision/arbol.md", r"propuestas\hermes\a.md", "./a.md", "C:", "C:a.md", ""] {
+            assert!(!is_absolute_path(p), "{p}");
+        }
+    }
+}
+
 fn cmd_claim(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     let sid = payload["session_id"].as_str().unwrap_or("").to_string();
     let files: Vec<String> = payload["files"]
@@ -923,8 +1200,15 @@ fn cmd_claim(app: &AppHandle, payload: &Value) -> Result<Value, String> {
         let now = hub::now_ms();
         let mut granted: Vec<String> = vec![];
         let mut conflicts: Vec<Value> = vec![];
+        let mut relative: Vec<String> = vec![];
         for f in &files {
-            let key = f.to_lowercase();
+            // Cada CLI tiene su carpeta de trabajo: «revision/arbol.md» puede ser cualquiera de
+            // varias carpetas y no chocaría con la misma reserva escrita con su ruta completa.
+            if !is_absolute_path(f) {
+                relative.push(f.clone());
+                continue;
+            }
+            let key = hub::claim_key(f);
             let taken = inner.claims.get(&key).filter(|c| {
                 c.session_id != sid && inner.agents.contains_key(&c.session_id)
             });
@@ -956,7 +1240,7 @@ fn cmd_claim(app: &AppHandle, payload: &Value) -> Result<Value, String> {
             hub::snapshot_bases(inner, &granted);
             hub::persist(inner);
         }
-        json!({ "granted": granted, "conflicts": conflicts })
+        json!({ "granted": granted, "conflicts": conflicts, "relative": relative })
     })
     .ok_or("hub no inicializado")?;
     if out["granted"].as_array().map(|a| !a.is_empty()).unwrap_or(false) {
@@ -981,7 +1265,7 @@ fn cmd_release(app: &AppHandle, payload: &Value) -> Result<Value, String> {
         let (agent, sid) = hub::agent_label(inner, &sid, payload["agent"].as_str());
         let mut released: Vec<String> = vec![];
         for f in &files {
-            let key = f.to_lowercase();
+            let key = hub::claim_key(f);
             let owned = inner
                 .claims
                 .get(&key)

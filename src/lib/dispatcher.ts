@@ -111,6 +111,33 @@ export function unmetParents(task: DTask, tasks: DTask[]): number[] {
   return task.parents.filter((id) => tasks.some((t) => t.id === id && t.status !== "done"));
 }
 
+type HubEvent = { agent: string; kind: string; text: string; ts_ms: number };
+
+const VERDICT_RE = /^#\d+ (aprobada|la asume)\b|^🔧 Corrige/;
+/** Margen tras la respuesta del líder para que se vea antes de que alguien empiece otra cosa. */
+export const VERDICT_READ_MS = 3_000;
+/** Si el líder no llega a contestar, el reparto no espera más que esto. */
+export const VERDICT_MAX_MS = 60_000;
+
+/**
+ * Hasta cuándo frenar el reparto tras el último veredicto del líder (aprobar, mandar corregir o
+ * asumir una entrega): hasta que acaba su turno y cuenta lo que decidió, más un margen para leerlo.
+ * 0 = no hay nada que esperar.
+ */
+export function verdictHold(events: HubEvent[], leader: string, now: number): number {
+  if (!leader) return 0;
+  let verdict = 0;
+  for (const e of events)
+    if (e.agent === leader && (e.kind === "task" || e.kind === "message") && VERDICT_RE.test(e.text))
+      verdict = Math.max(verdict, e.ts_ms);
+  if (!verdict || now - verdict > VERDICT_MAX_MS) return 0;
+  let said = 0;
+  for (const e of events)
+    if (e.agent === leader && (e.kind === "reply" || e.kind === "stop") && e.ts_ms >= verdict)
+      said = said ? Math.min(said, e.ts_ms) : e.ts_ms;
+  return said ? said + VERDICT_READ_MS : verdict + VERDICT_MAX_MS;
+}
+
 /** Tarea lista para despachar: abierta, sin dueño y sin padres pendientes. */
 export function isReady(task: DTask, tasks: DTask[]): boolean {
   return task.status === "open" && !task.owner && unmetParents(task, tasks).length === 0;
@@ -183,6 +210,8 @@ export function tick(
     director?: boolean;
     /** Cuándo se abrió Prometeo (ms epoch); sin él no se recuerdan tareas a medias. */
     bootMs?: number;
+    /** Hasta cuándo no se reparte nada (el líder acaba de dar un veredicto y aún lo cuenta). */
+    holdUntil?: number;
   },
   cfg: DispatchConfig = DISPATCH_CONFIG,
 ): DispatchResult {
@@ -235,8 +264,9 @@ export function tick(
     );
   }
 
-  // 2) Frenos globales.
-  if (now - state.lastSentAny < cfg.globalGapMs) return { state, send: null, remind: null, notes };
+  // 2) Frenos globales. Tras un veredicto del líder, primero lo lees tú y luego se reparte.
+  if (now - state.lastSentAny < cfg.globalGapMs || now < (input.holdUntil ?? 0))
+    return { state, send: null, remind: null, notes };
 
   // 2b) Tareas que quedaron a medias al cerrar Prometeo: su dueño volvió pero no trabaja en
   //     ellas. Se le recuerdan una vez, en vez de dejarlas «tomadas» para siempre.
@@ -256,7 +286,8 @@ export function tick(
 
   // 4) Agentes libres: en línea, con terminal, sin trabajo en curso ni aviso en vuelo.
   const busy = new Set<string>();
-  for (const t of tasks) if (t.status === "claimed" && t.owner) busy.add(t.owner);
+  // Con una entrega en revisión tampoco está libre: espera el veredicto (puede tocarle corregir).
+  for (const t of tasks) if ((t.status === "claimed" || t.status === "review") && t.owner) busy.add(t.owner);
   for (const p of Object.values(state.pending)) busy.add(p.agent);
   const free = agents.filter(
     (a) =>

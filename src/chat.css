@@ -1025,6 +1025,46 @@ ol.md-list li::marker {
   min-width: 0;
 }
 
+/* modo plan: tareas que esperan tu OK */
+.cv-planbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 28px 10px;
+  padding: 10px 12px 10px 14px;
+  border-radius: 14px;
+  color: var(--text-soft);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line-soft));
+  animation: cv-jump-in 0.25s var(--ease-out) both;
+}
+.cv-planbar > .ic {
+  color: var(--accent);
+}
+.cv-planbar-tx {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12.5px;
+}
+.cv-planbar-tx small {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.cv-planbar button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+@media (max-width: 640px) {
+  .cv-planbar {
+    margin-inline: 14px;
+  }
+}
+
 /* pide permiso */
 .cv-ask {
   display: flex;
@@ -1537,6 +1577,10 @@ ol.md-list li::marker {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   animation: cv-jump-in 0.25s var(--ease-out) both;
 }
+/* Con la barra del plan abajo, el «ir al final» queda por encima. */
+.cv-jump[data-raised="1"] {
+  bottom: 86px;
+}
 @keyframes cv-jump-in {
   from {
     opacity: 0;
@@ -1572,7 +1616,8 @@ ol.md-list li::marker {
 :root[data-motion="off"] .cv-lightbox,
 :root[data-motion="off"] .cv-lightbox-stage img,
 :root[data-motion="off"] .cv-tile img,
-:root[data-motion="off"] .cv-jump {
+:root[data-motion="off"] .cv-jump,
+:root[data-motion="off"] .cv-planbar {
   animation: none;
 }
 :root[data-motion="off"] .cv-av[data-live="1"]::before,
