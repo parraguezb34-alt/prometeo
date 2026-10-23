@@ -223,14 +223,23 @@
     mo-pop var(--d-slow) var(--ease-spring),
     mo-beat 2.4s 0.5s var(--ease-io) infinite;
 }
+/* Solo escala y opacidad (sin repintar): está siempre a la vista en la barra de arriba. */
 @keyframes mo-beat {
   0%,
   100% {
-    box-shadow: 0 0 0 2px var(--surface), 0 0 0 2px color-mix(in srgb, var(--accent) 0%, transparent);
+    transform: scale(1);
+    opacity: 1;
   }
   50% {
-    box-shadow: 0 0 0 2px var(--surface), 0 0 0 5px color-mix(in srgb, var(--accent) 22%, transparent);
+    transform: scale(1.35);
+    opacity: 0.6;
   }
+}
+:root[data-away="1"] .cc-gear-dot {
+  animation-play-state: paused !important;
+}
+:root[data-motion="off"] .cc-gear-dot {
+  animation: none !important;
 }
 
 /* La app en vivo aparece con un fundido al cargar. */

@@ -2526,6 +2526,24 @@ ol.md-list li::marker {
   animation: none;
 }
 
+/* Sin el foco (Prometeo detrás de otras ventanas): lo que se repite sin fin se queda quieto. */
+:root[data-away="1"] .cv-receipt-av,
+:root[data-away="1"] .cv-av::before,
+:root[data-away="1"] .cv-pulse,
+:root[data-away="1"] .cv-spin,
+:root[data-away="1"] .cv-dots i,
+:root[data-away="1"] .cv-shimmer,
+:root[data-away="1"] .cv-think-orb,
+:root[data-away="1"] .cv-tile,
+:root[data-away="1"] .cv-type .md > .md-h:last-child::after,
+:root[data-away="1"] .qa-ic,
+:root[data-away="1"] .tp-ic,
+:root[data-away="1"] .ap-led,
+:root[data-away="1"] .rs-dots i,
+:root[data-away="1"] .rs-steps li > i {
+  animation-play-state: paused !important;
+}
+
 /* Movimiento reducido (Ajustes o Windows): nada que se repita sin fin. */
 :root[data-motion="off"] .cv-receipt-av,
 :root[data-motion="off"] .cv-av::before,

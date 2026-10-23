@@ -179,7 +179,20 @@ export function applyMotion(mode: MotionMode = current.ui.motion) {
   document.documentElement.dataset.motion = off ? "off" : "on";
 }
 
+/**
+ * Marca en <html> si la ventana está en segundo plano (`data-away="1"`): sin el foco, las
+ * animaciones que se repiten sin fin se pausan. Una sola a la vista obliga a producir 60
+ * fotogramas por segundo, y Prometeo pasa casi todo el día detrás de otras ventanas.
+ */
+function applyAway() {
+  document.documentElement.dataset.away = document.hasFocus() && !document.hidden ? "0" : "1";
+}
+
 if (typeof document !== "undefined") {
+  applyAway();
+  window.addEventListener("focus", applyAway);
+  window.addEventListener("blur", applyAway);
+  document.addEventListener("visibilitychange", applyAway);
   applyMotion();
   listeners.add(() => applyMotion());
   try {

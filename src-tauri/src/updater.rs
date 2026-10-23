@@ -186,11 +186,11 @@ pub fn script(pid: u32, setup: &str, exe: &str, want: &str) -> String {
          $log = Join-Path $env:APPDATA 'lienzo\\actualizar.log'\r\n\
          function Say($m) {{ Add-Content -Path $log -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + '  ' + $m) -Encoding UTF8 }}\r\n\
          function Installed {{ (Get-Item -LiteralPath {exe}).VersionInfo.ProductVersion }}\r\n\
-         function CloseAll {{ Get-Process lienzo, lienzo-mcp -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '*\\Prometeo\\*' }} | Stop-Process -Force }}\r\n\
+         function Ours {{ Get-Process lienzo, lienzo-mcp -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '*\\Prometeo\\*' }} }}\r\n\
+         function CloseAll {{ Ours | Stop-Process -Force; $t = 0; while ((Ours) -and $t -lt 40) {{ Start-Sleep -Milliseconds 250; $t++ }}; Start-Sleep -Milliseconds 500 }}\r\n\
          Say ('Actualizar a ' + {want} + ' desde ' + (Installed) + ' con ' + {setup})\r\n\
          Wait-Process -Id {pid} -Timeout 30\r\n\
          CloseAll\r\n\
-         Start-Sleep -Milliseconds 800\r\n\
          $ok = $false\r\n\
          foreach ($n in 1..2) {{\r\n\
          \x20 $p = Start-Process -FilePath {setup} -ArgumentList '/S' -Wait -PassThru\r\n\
@@ -235,7 +235,8 @@ pub async fn update_apply(app: tauri::AppHandle) -> Result<(), String> {
         .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| format!("No se pudo lanzar la actualización: {e}"))?;
-    crate::errlog::log("update", "Actualizando Prometeo", &info.setup);
+    // Sin apunte en Errores: actualizar no es un fallo (cada paso queda en actualizar.log, y si
+    // la instalación falla, el script sí lo apunta allí).
     // Un respiro para que la interfaz guarde lo que tenga pendiente.
     std::thread::sleep(std::time::Duration::from_millis(300));
     app.exit(0);
