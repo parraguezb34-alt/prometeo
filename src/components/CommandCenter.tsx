@@ -198,14 +198,34 @@ export function CommandCenter() {
     flashTimer.current = window.setTimeout(() => setFlash(null), 8000);
   }, []);
 
+  // Mientras los agentes trabajan, el hub avisa varias veces por segundo: las recargas se juntan
+  // (una en marcha y, como mucho, otra al acabar) para no pedir y repintar el estado entero a cada evento.
+  const refreshBusy = useRef(false);
+  const refreshAgain = useRef(false);
   const refresh = useCallback(() => {
+    if (refreshBusy.current) {
+      refreshAgain.current = true;
+      return;
+    }
+    refreshBusy.current = true;
+    const done = () =>
+      window.setTimeout(() => {
+        refreshBusy.current = false;
+        if (refreshAgain.current) {
+          refreshAgain.current = false;
+          refreshRef.current();
+        }
+      }, 250);
     teamState()
       .then((s) => {
         setState(s);
         setHubOk(true);
       })
-      .catch(() => setHubOk(false));
+      .catch(() => setHubOk(false))
+      .finally(done);
   }, []);
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
 
   const refreshDetect = useCallback(() => {
     teamDetect().then(setDetect).catch(() => {});
@@ -216,13 +236,13 @@ export function CommandCenter() {
     refreshDetect();
     teamDetails().then((d) => setHubUrl(d.url)).catch(() => {});
     const unlisten = onTeamUpdate(refresh);
-    // El estado del equipo se refresca cada 4 s; los CLIs instalados, cada ~30 s.
+    // Los cambios llegan por evento; esto es solo el respaldo (cada 10 s) y los CLIs instalados (~30 s).
     let tick = 0;
     const interval = window.setInterval(() => {
       refresh();
       tick += 1;
-      if (tick % 8 === 0) refreshDetect();
-    }, 4000);
+      if (tick % 3 === 0) refreshDetect();
+    }, 10_000);
     return () => {
       unlisten.then((f) => f());
       window.clearInterval(interval);
@@ -870,7 +890,7 @@ export function CommandCenter() {
       for (const p of getLayout().panels) {
         if (p.kind !== "terminal" || !p.cmd || !p.sessionId) continue;
         try {
-          if (needsLogin(await termScrollback(p.sessionId))) found.push(agentKeyFromCmd(p.cmd));
+          if (needsLogin(await termScrollback(p.sessionId, 4096))) found.push(agentKeyFromCmd(p.cmd));
         } catch {
           /* sin sesión: nada que mirar */
         }
@@ -934,7 +954,7 @@ export function CommandCenter() {
         const sid = panelForAgent(getLayout().panels, name)?.sessionId;
         if (!sid) continue;
         try {
-          next[name] = tailText(await termScrollback(sid));
+          next[name] = tailText(await termScrollback(sid, 16_384));
         } catch {
           /* sin sesión: no hay nada que mostrar */
         }
@@ -2109,10 +2129,16 @@ export function CommandCenter() {
         relayAt.current[agent] = now;
         const from = info.from.map(agentLabel).join(", ");
         const n = info.unread === 1 ? "1 mensaje" : `${info.unread} mensajes`;
-        void termWrite(
-          panel.sessionId,
-          `📬 Tienes ${n} de ${from} en tu buzón: léelos con team_inbox y responde solo si hace falta.\r`,
-        ).catch(() => {});
+        // Claude Code recibe el contenido con este mismo aviso (su hook lo adjunta): pedirle que
+        // llame a team_inbox le costaría otra petición entera. Las entregas a revisar se dicen como tales.
+        const hooked = agent === "claude";
+        const onlyReviews = info.from.length > 0 && info.from.every((f) => f === "lienzo");
+        const line = !hooked
+          ? `📬 Tienes ${n} de ${from} en tu buzón: léelos con team_inbox y responde solo si hace falta.`
+          : onlyReviews
+            ? `🔎 Tienes ${info.unread === 1 ? "1 entrega" : `${info.unread} entregas`} para revisar: el detalle y el diff van adjuntos a este aviso; decide con team_task_review.`
+            : `📬 Tienes ${n} de ${from}: van adjuntos a este aviso (no hace falta team_inbox); responde solo si hace falta.`;
+        void termWrite(panel.sessionId, `${line}\r`).catch(() => {});
       }
     }, 5000);
     return () => window.clearInterval(id);

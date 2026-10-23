@@ -150,6 +150,8 @@ pub fn run() {
             // Al cerrar lienzo, la app en vivo (npm run dev…) se cierra con él.
             if let tauri::RunEvent::Exit = ev {
                 devapp::stop();
+                // Lo que el hub aún no había guardado (guarda como mucho una vez por segundo).
+                hub::flush_pending();
             }
         });
 }

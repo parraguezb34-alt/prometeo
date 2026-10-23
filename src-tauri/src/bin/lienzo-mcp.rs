@@ -192,7 +192,8 @@ fn context_sections(state: &Value, me: &str) -> Vec<(&'static str, String)> {
             if leader.eq_ignore_ascii_case(me) {
                 lead.push_str(&format!(
                     "Modo director: diriges tú. Divide el trabajo en encargos cerrados con team_task_create (notes, level, assign), \
-revisa cada entrega con team_task_review (máx. {rounds} rondas de fix) y haz tú solo lo difícil. Pauta: skill lienzo-director.\n"
+revisa cada entrega con team_task_review (máx. {rounds} rondas de fix) y haz tú solo lo difícil. Pauta: skill lienzo-director.\n\
+Ahorro: el aviso 🔎 de cada entrega ya trae su diff; para comprobar algo más usa Grep o Read con offset/limit, nunca un archivo entero.\n"
                 ));
             } else {
                 lead.push_str(&format!(
@@ -601,6 +602,36 @@ Cuando tu contexto esté muy lleno, guarda tu memoria con team_handover_save (in
         "serverInfo": { "name": "lienzo-team", "version": "0.1.0" },
         "instructions": instructions
     })
+}
+
+/// Herramientas que casi nunca hacen falta: con el servidor en `alwaysLoad` (Claude Code), estas
+/// siguen tras el buscador de herramientas para no ocupar contexto en cada petición.
+const RARE_TOOLS: &[&str] = &[
+    "team_schedule_create",
+    "team_schedule_list",
+    "team_feed_search",
+    "team_task_handoff",
+    "team_plan_approve",
+    "team_memory_list",
+    "team_memory_propose",
+    "team_memory_save",
+    "team_memory_resolve",
+    "team_memory_forget",
+    "team_skill_list",
+    "team_skill_propose",
+];
+
+/// Marca las herramientas raras para que Claude Code las difiera (`_meta` es estándar en MCP: los
+/// demás clientes lo ignoran).
+fn with_load_hints(mut catalog: Value) -> Value {
+    if let Some(list) = catalog.as_array_mut() {
+        for t in list {
+            if t["name"].as_str().is_some_and(|n| RARE_TOOLS.contains(&n)) {
+                t["_meta"] = json!({ "anthropic/alwaysLoad": false });
+            }
+        }
+    }
+    catalog
 }
 
 fn tools_catalog() -> Value {
@@ -1592,7 +1623,7 @@ fn mcp_mode() {
             | "notifications/cancelled"
             | "notifications/roots/list_changed" => None,
             "ping" => Some(Ok(json!({}))),
-            "tools/list" => Some(Ok(json!({ "tools": tools_catalog() }))),
+            "tools/list" => Some(Ok(json!({ "tools": with_load_hints(tools_catalog()) }))),
             "tools/call" => match &client {
                 Some(c) => {
                     let sid = session.lock().map(|s| s.clone()).unwrap_or_default();
@@ -2637,6 +2668,23 @@ mod tests {
                 let r = req.as_str().unwrap_or("");
                 assert!(props.contains_key(r), "{name}: «{r}» es obligatorio pero no está en properties");
             }
+        }
+    }
+
+    #[test]
+    fn only_rare_tools_stay_behind_tool_search() {
+        let tools = with_load_hints(tools_catalog());
+        let list = tools.as_array().expect("lista");
+        for name in RARE_TOOLS {
+            assert!(list.iter().any(|t| t["name"] == *name), "{name} no existe en el catálogo");
+        }
+        for t in list {
+            let rare = RARE_TOOLS.contains(&t["name"].as_str().unwrap_or(""));
+            assert_eq!(t["_meta"]["anthropic/alwaysLoad"] == json!(false), rare, "{}", t["name"]);
+        }
+        // Lo que más usan el líder y los trabajadores va siempre cargado.
+        for core in ["team_task_review", "team_task_create", "team_task_claim", "team_task_done", "team_message"] {
+            assert!(list.iter().any(|t| t["name"] == core && t.get("_meta").is_none()));
         }
     }
 

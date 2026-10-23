@@ -320,10 +320,15 @@ fn connect_claude(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>
     if !mcp.is_object() {
         mcp = json!({});
     }
+    // `alwaysLoad`: las herramientas del equipo van siempre cargadas. Si no, Claude Code las deja
+    // tras su buscador y cada sesión gasta varias peticiones enteras (con todo su contexto) solo en
+    // ToolSearch. Las que se usan poco las sigue dejando diferidas el propio servidor (`_meta`).
+    let mut entry = mcp_server_entry(exe, "claude");
+    entry["alwaysLoad"] = json!(true);
     mcp.as_object_mut()
         .unwrap()
         .entry("mcpServers")
-        .or_insert_with(|| json!({}))["lienzo-team"] = mcp_server_entry(exe, "claude");
+        .or_insert_with(|| json!({}))["lienzo-team"] = entry;
     write_json_pretty(&mcp_path, &mcp)?;
     files.push(mcp_path.display().to_string());
     notes.push("Claude pedirá una vez aprobar el servidor MCP del proyecto.".into());
@@ -532,7 +537,8 @@ fn is_connected(id: &str, project: Option<&Path>) -> bool {
             .unwrap_or(false)
     };
     match id {
-        "claude" => project.is_some_and(|p| ok(p.join(".mcp.json"), "lienzo-team")),
+        // Sin `alwaysLoad` (conectado con una versión anterior) se vuelve a conectar una vez.
+        "claude" => project.is_some_and(|p| ok(p.join(".mcp.json"), "lienzo-team") && ok(p.join(".mcp.json"), "\"alwaysLoad\"")),
         "codex" => ok(home().join(".codex").join("config.toml"), "mcp_servers.lienzo-team"),
         "opencode" => project.is_some_and(|p| ok(p.join("opencode.json"), "lienzo-team")),
         "antigravity" => {

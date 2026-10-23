@@ -827,7 +827,65 @@ fn write_state_to(main: &std::path::Path, raw: &str) -> std::io::Result<()> {
     result
 }
 
+/// Hay cambios sin guardar (los guarda el hilo de `persist`).
+static DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static FLUSHER: std::sync::Once = std::sync::Once::new();
+/// Una sola escritura a la vez (el hilo y el cierre de la app comparten el temporal).
+static WRITING: Mutex<()> = Mutex::new(());
+
+/// Pide guardar el estado. Mientras los agentes trabajan llegan varios eventos por segundo, y
+/// escribir cada vez ~1 MB (con su copia) frenaba el hub: se marca y un hilo lo guarda como
+/// mucho una vez por segundo, ya sin el hub bloqueado. Al cerrar se guarda lo pendiente
+/// (`flush_pending`). En las pruebas (o antes de arrancar la app) se guarda al momento.
 pub fn persist(inner: &HubInner) {
+    if cfg!(test) || APP.get().is_none() {
+        persist_now(inner);
+        return;
+    }
+    DIRTY.store(true, std::sync::atomic::Ordering::SeqCst);
+    FLUSHER.call_once(|| {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            flush_pending();
+        });
+    });
+}
+
+/// Guarda ya lo pendiente, si hay algo (el hilo de `persist` y el cierre de la app).
+pub fn flush_pending() {
+    if !DIRTY.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let Some(app) = APP.get() else { return };
+    let hub = app.state::<Hub>();
+    // Solo la foto se hace con el hub bloqueado; el disco, después.
+    let raw = match hub.0.lock() {
+        Ok(inner) => state_json(&inner),
+        Err(_) => {
+            DIRTY.store(true, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
+    };
+    if let Some(raw) = raw {
+        write_state(&raw);
+    }
+}
+
+fn write_state(raw: &str) {
+    let _w = WRITING.lock();
+    if let Err(e) = write_state_to(&state_file(), raw) {
+        crate::errlog::log("hub", "No se pudo guardar el estado del equipo", &e.to_string());
+    }
+}
+
+/// Guarda el estado al momento.
+pub fn persist_now(inner: &HubInner) {
+    if let Some(raw) = state_json(inner) {
+        write_state(&raw);
+    }
+}
+
+fn state_json(inner: &HubInner) -> Option<String> {
     let state = PersistedState {
         events: inner.events.iter().cloned().collect(),
         tasks: inner.tasks.clone(),
@@ -853,11 +911,7 @@ pub fn persist(inner: &HubInner) {
         projects: inner.projects.clone(),
         limits: inner.limits.clone(),
     };
-    if let Ok(raw) = serde_json::to_string(&state) {
-        if let Err(e) = write_state_to(&state_file(), &raw) {
-            crate::errlog::log("hub", "No se pudo guardar el estado del equipo", &e.to_string());
-        }
-    }
+    serde_json::to_string(&state).ok()
 }
 
 /// Notify the UI that team state changed.

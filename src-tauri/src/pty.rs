@@ -445,12 +445,15 @@ pub async fn term_list(state: State<'_, PtyManager>) -> Result<Vec<SessionInfo>,
         .collect())
 }
 
-/// Full scrollback (base64) used to repaint a re-attached terminal.
+/// Scrollback (base64): entero para repintar una terminal re-adjuntada, o solo los últimos
+/// `max` bytes para quien solo mira el final (¿pide login?, ¿qué pregunta?): así no viajan
+/// 512 KB por terminal cada pocos segundos.
 #[tauri::command]
-pub async fn term_scrollback(state: State<'_, PtyManager>, id: String) -> Result<String, String> {
+pub async fn term_scrollback(state: State<'_, PtyManager>, id: String, max: Option<usize>) -> Result<String, String> {
     let map = state.0.lock().map_err(|e| e.to_string())?;
     let session = map.get(&id).ok_or("session not found")?;
     let buffer = session.buffer.lock().map_err(|e| e.to_string())?;
-    let bytes: Vec<u8> = buffer.iter().copied().collect();
+    let skip = max.map(|m| buffer.len().saturating_sub(m)).unwrap_or(0);
+    let bytes: Vec<u8> = buffer.iter().skip(skip).copied().collect();
     Ok(B64.encode(&bytes))
 }

@@ -48,8 +48,9 @@ export const termKill = (id: string) => invoke<void>("term_kill", { id });
 
 export const termList = () => invoke<SessionInfo[]>("term_list");
 
-export const termScrollback = (id: string) =>
-  invoke<string>("term_scrollback", { id });
+/** El historial de una terminal (base64); con `max`, solo sus últimos bytes (para mirar el final). */
+export const termScrollback = (id: string, max?: number) =>
+  invoke<string>("term_scrollback", { id, max: max ?? null });
 
 /** Las últimas líneas legibles de una terminal (sin colores ni cajas), para saber qué está pidiendo. */
 export function tailText(b64: string, maxLines = 4): string {
