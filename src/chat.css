@@ -59,20 +59,27 @@
     transform: rotate(360deg);
   }
 }
+/* Las animaciones que se repiten sin fin solo cambian opacidad y tamaño: eso lo mueve la tarjeta
+   gráfica sin volver a pintar. Animar una sombra o un degradado obligaba a repintar 60 veces por
+   segundo mientras estaban a la vista (unos puntos de CPU, todo el rato). */
 @keyframes cv-shine {
-  to {
-    background-position: -200% 0;
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
   }
 }
 @keyframes cv-breathe {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ac) 55%, transparent);
-  }
-  70% {
-    box-shadow: 0 0 0 7px color-mix(in srgb, var(--ac) 0%, transparent);
-  }
+  0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ac) 0%, transparent);
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(0.9);
   }
 }
 @keyframes cv-bounce {
@@ -1283,19 +1290,8 @@ ol.md-list li::marker {
 }
 .cv-shimmer {
   white-space: nowrap;
-  background: linear-gradient(
-    90deg,
-    var(--muted) 0%,
-    var(--muted) 40%,
-    var(--text-strong) 50%,
-    var(--muted) 60%,
-    var(--muted) 100%
-  );
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: cv-shine 2.4s linear infinite;
+  color: var(--text-soft, var(--muted));
+  animation: cv-shine 2.4s ease-in-out infinite;
 }
 .cv-think-orb {
   flex: none;
@@ -1384,7 +1380,7 @@ ol.md-list li::marker {
 }
 .cv-tile[data-ready="0"] {
   cursor: default;
-  animation: cv-shine 1.4s linear infinite;
+  animation: cv-shine 1.4s ease-in-out infinite;
 }
 .cv-tile[data-ready="1"]:hover {
   border-color: var(--line-strong);
@@ -2528,4 +2524,18 @@ ol.md-list li::marker {
 :root[data-motion="off"] .tp-opt,
 :root[data-motion="off"] .cv-type .md > *::after {
   animation: none;
+}
+
+/* Movimiento reducido (Ajustes o Windows): nada que se repita sin fin. */
+:root[data-motion="off"] .cv-receipt-av,
+:root[data-motion="off"] .cv-av::before,
+:root[data-motion="off"] .cv-pulse,
+:root[data-motion="off"] .cv-spin,
+:root[data-motion="off"] .cv-dots i,
+:root[data-motion="off"] .cv-shimmer,
+:root[data-motion="off"] .cv-think-orb,
+:root[data-motion="off"] .cv-tile,
+:root[data-motion="off"] .qa-ic,
+:root[data-motion="off"] .tp-ic {
+  animation: none !important;
 }
