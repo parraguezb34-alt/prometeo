@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { addAgentTerminal, getLayout, removePanel, setRespawnResolver, useLayout } from "../store";
@@ -41,7 +41,6 @@ import {
 } from "../lib/team";
 import type { DetectResult, ModelCatalog, QAnswer, TeamAgent, TeamEvent, TeamSchedule, TeamState, TeamTask } from "../lib/team";
 import { chatAt, dayKey, isDue } from "../lib/schedule";
-import { ScheduleTab } from "./ScheduleTab";
 import { withOlder } from "../lib/chatsDisk";
 import { findSkill, riskNotice, skillsInstall, skillsList, skillsSet } from "../lib/skills";
 import type { Skill } from "../lib/skills";
@@ -75,8 +74,6 @@ import { ChatView } from "./ChatView";
 import type { LiveAgent } from "./ChatView";
 import { ChatsSidebar } from "./ChatsSidebar";
 import { DestPicker } from "./DestPicker";
-import { HistoryTab } from "./HistoryTab";
-import { ResearchTab } from "./ResearchTab";
 import { WindowControls } from "./WindowControls";
 import { SlidingPill } from "./SlidingPill";
 import { BrandIcon, BrandWordmark } from "./Brand";
@@ -91,11 +88,9 @@ import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import { NewChatMenu } from "./NewChatMenu";
 import type { NewChatChoice } from "./NewChatMenu";
-import { AppTab } from "./AppTab";
 import { TasksDrawer } from "./TasksDrawer";
 import { TeamModal, TeamStrip, agentState } from "./TeamModal";
 import type { AgentState } from "./TeamModal";
-import { SettingsModal } from "./SettingsModal";
 import type { SettingsSection } from "./SettingsModal";
 import { TerminalPanel } from "./TerminalPanel";
 import {
@@ -122,7 +117,13 @@ import type { DispatchLatest } from "./command/useDispatchLoop";
 import { useOlderEvents } from "./command/useOlderEvents";
 import { UpdateChip } from "./command/UpdateChip";
 import { NewsCard } from "./command/NewsCard";
-import { exportChatFile } from "./command/exportChatFile";
+
+// Lo que no se ve al abrir se carga la primera vez que se usa: el arranque procesa menos código.
+const ScheduleTab = lazy(() => import("./ScheduleTab").then((m) => ({ default: m.ScheduleTab })));
+const HistoryTab = lazy(() => import("./HistoryTab").then((m) => ({ default: m.HistoryTab })));
+const ResearchTab = lazy(() => import("./ResearchTab").then((m) => ({ default: m.ResearchTab })));
+const AppTab = lazy(() => import("./AppTab").then((m) => ({ default: m.AppTab })));
+const SettingsModal = lazy(() => import("./SettingsModal").then((m) => ({ default: m.SettingsModal })));
 
 /**
  * Centro de Mando: vista principal. A la izquierda el equipo (agentes con sus
@@ -2350,7 +2351,8 @@ export function CommandCenter() {
    */
   /** Exporta un chat entero (también lo que ya salió del feed vivo) a Markdown o a una página HTML. */
   const exportChat = (chat: Chat) =>
-    exportChatFile(chat, chats.chats, project)
+    import("./command/exportChatFile")
+      .then((m) => m.exportChatFile(chat, chats.chats, project))
       .then((msg) => msg && say(msg))
       .catch((e) => say(errMsg(e), true));
 
@@ -2742,86 +2744,94 @@ export function CommandCenter() {
           )}
 
           {view === "research" && (
-            <ResearchTab
-              project={project}
-              tasks={tasks}
-              online={online.filter((a) => !!panelForAgent(layout.panels, a.name)?.sessionId).map((a) => a.name)}
-              leader={leader}
-              dispatchOn={dispatchOn}
-              onDispatchOn={() => toggleDispatch(true)}
-              onSay={say}
-              onAsk={(text) => {
-                setDraft(text);
-                setView("feed");
-              }}
-            />
+            <Suspense fallback={null}>
+              <ResearchTab
+                project={project}
+                tasks={tasks}
+                online={online.filter((a) => !!panelForAgent(layout.panels, a.name)?.sessionId).map((a) => a.name)}
+                leader={leader}
+                dispatchOn={dispatchOn}
+                onDispatchOn={() => toggleDispatch(true)}
+                onSay={say}
+                onAsk={(text) => {
+                  setDraft(text);
+                  setView("feed");
+                }}
+              />
+            </Suspense>
           )}
 
           {view === "schedule" && (
-            <ScheduleTab
-              schedules={state?.schedules ?? []}
-              tasks={tasks}
-              chats={chats.chats}
-              activeChat={currentTeamChat(chats.chats)}
-              project={project}
-              agents={[...new Set(agents.map((a) => a.name))]}
-              onSave={async (id, d) => {
-                try {
-                  const s = await teamScheduleSave(id, d);
-                  say(id ? `📅 P${s.id} guardada.` : `📅 P${s.id} creada y activa: ${s.every}.`);
-                  refresh();
-                  return s;
-                } catch (e) {
-                  say(errMsg(e), true);
-                  return null;
-                }
-              }}
-              onOp={(id, op) => void scheduleAction(id, op)}
-              onOpenChat={(id) => {
-                const c = chats.chats.find((x) => x.id === id);
-                if (c) activateChat(c);
-              }}
-              onOpenTask={(id) => {
-                setDiffTask(id);
-                setView("history");
-              }}
-              onAsk={(text) => {
-                setDraft(text);
-                setView("feed");
-              }}
-            />
+            <Suspense fallback={null}>
+              <ScheduleTab
+                schedules={state?.schedules ?? []}
+                tasks={tasks}
+                chats={chats.chats}
+                activeChat={currentTeamChat(chats.chats)}
+                project={project}
+                agents={[...new Set(agents.map((a) => a.name))]}
+                onSave={async (id, d) => {
+                  try {
+                    const s = await teamScheduleSave(id, d);
+                    say(id ? `📅 P${s.id} guardada.` : `📅 P${s.id} creada y activa: ${s.every}.`);
+                    refresh();
+                    return s;
+                  } catch (e) {
+                    say(errMsg(e), true);
+                    return null;
+                  }
+                }}
+                onOp={(id, op) => void scheduleAction(id, op)}
+                onOpenChat={(id) => {
+                  const c = chats.chats.find((x) => x.id === id);
+                  if (c) activateChat(c);
+                }}
+                onOpenTask={(id) => {
+                  setDiffTask(id);
+                  setView("history");
+                }}
+                onAsk={(text) => {
+                  setDraft(text);
+                  setView("feed");
+                }}
+              />
+            </Suspense>
           )}
 
           {view === "history" && (
-            <HistoryTab
-              project={project}
-              tasks={tasks}
-              events={state?.events ?? []}
-              focusTask={diffTask}
-              onFocusTask={setDiffTask}
-              onCount={onDiffCount}
-              onSay={say}
-              onTaskNote={(id, text) => void teamTaskComment(id, text).then(refresh).catch(() => {})}
-              onOpenFile={(rel) => {
-                setPreviewRel(rel);
-                setView("app");
-              }}
-            />
+            <Suspense fallback={null}>
+              <HistoryTab
+                project={project}
+                tasks={tasks}
+                events={state?.events ?? []}
+                focusTask={diffTask}
+                onFocusTask={setDiffTask}
+                onCount={onDiffCount}
+                onSay={say}
+                onTaskNote={(id, text) => void teamTaskComment(id, text).then(refresh).catch(() => {})}
+                onOpenFile={(rel) => {
+                  setPreviewRel(rel);
+                  setView("app");
+                }}
+              />
+            </Suspense>
           )}
 
           {view === "app" && (
-            <AppTab
-              project={project}
-              events={state?.events ?? []}
-              openRel={previewRel}
-              onChooseProject={() => openSettings("general")}
-              onSay={say}
-              onAsk={(text) => {
-                // Al compositor, para que lo revises y elijas a quién mandarlo.
-                setDraft(text);
-                setView("feed");
-              }}
-            />
+            <Suspense fallback={null}>
+              <AppTab
+                project={project}
+                events={state?.events ?? []}
+                openRel={previewRel}
+                onChooseProject={() => openSettings("general")}
+                onSay={say}
+                onAsk={(text) => {
+                  // Al compositor, para que lo revises y elijas a quién mandarlo.
+                  setDraft(text);
+                  setView("feed");
+                }}
+              />
+            </Suspense>
           )}
 
           {view === "term" &&
@@ -3046,40 +3056,42 @@ export function CommandCenter() {
       <InAppAvisos onOpen={openAviso} />
 
       {overlay === "settings" && (
-        <SettingsModal
-          initial={settingsAt}
-          state={state}
-          detect={detect}
-          info={info}
-          hubOk={hubOk}
-          catalogs={catalogs}
-          prefs={prefs}
-          opening={opening}
-          autoStart={autoStart}
-          shoot={shoot}
-          chatsMin={chatsMin}
-          dispatchOn={dispatchOn}
-          dispatchState={dispatchView}
-          notifyOn={notifyOn}
-          onClose={() => setOverlay(null)}
-          say={say}
-          onPref={setPref}
-          onAutoStart={toggleAutoStart}
-          onShoot={setShootMode}
-          onChatsMin={(m) => {
-            setChatsMin(m);
-            saveFlag(CHATS_MIN_KEY, m);
-          }}
-          onDispatch={toggleDispatch}
-          onDispatchClear={clearDispatch}
-          onNotify={setNotify}
-          onProject={(p) => (p ? switchProject(p) : saveProject(null))}
-          onConnect={connectAgent}
-          onOpenAgent={(id) => {
-            void launchAgent(id, agentLabel(id), { selectTerm: false });
-          }}
-          onTeamRules={saveTeamRules}
-        />
+        <Suspense fallback={null}>
+          <SettingsModal
+            initial={settingsAt}
+            state={state}
+            detect={detect}
+            info={info}
+            hubOk={hubOk}
+            catalogs={catalogs}
+            prefs={prefs}
+            opening={opening}
+            autoStart={autoStart}
+            shoot={shoot}
+            chatsMin={chatsMin}
+            dispatchOn={dispatchOn}
+            dispatchState={dispatchView}
+            notifyOn={notifyOn}
+            onClose={() => setOverlay(null)}
+            say={say}
+            onPref={setPref}
+            onAutoStart={toggleAutoStart}
+            onShoot={setShootMode}
+            onChatsMin={(m) => {
+              setChatsMin(m);
+              saveFlag(CHATS_MIN_KEY, m);
+            }}
+            onDispatch={toggleDispatch}
+            onDispatchClear={clearDispatch}
+            onNotify={setNotify}
+            onProject={(p) => (p ? switchProject(p) : saveProject(null))}
+            onConnect={connectAgent}
+            onOpenAgent={(id) => {
+              void launchAgent(id, agentLabel(id), { selectTerm: false });
+            }}
+            onTeamRules={saveTeamRules}
+          />
+        </Suspense>
       )}
     </div>
   );

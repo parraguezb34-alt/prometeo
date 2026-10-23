@@ -391,7 +391,9 @@ export function ChatView({
   const ticking = busy.size > 0 || (!!lastUser && Date.now() - lastUser.e.ts_ms < 10 * 60_000);
   useEffect(() => {
     if (!ticking) return;
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    // Cada 5 s basta para los acuses («Enviado», «Recibido»…); el cronómetro de «Pensando…» va
+    // en su propio componente y es lo único que se repinta cada segundo.
+    const id = window.setInterval(() => setNow(Date.now()), 5000);
     return () => window.clearInterval(id);
   }, [ticking]);
 
@@ -783,7 +785,7 @@ export function ChatView({
         <span className="cv-shimmer" key={label} title={l.status || l.lastAction}>
           {label}
         </span>
-        <span className="cv-think-clock">{clock(now - l.since)}</span>
+        <LiveClock since={l.since} />
         <span className="cv-grow" />
       {l.hasTerminal && (
         <>
@@ -1183,4 +1185,14 @@ export function ChatView({
       )}
     </div>
   );
+}
+
+/** Cronómetro que se repinta solo él cada segundo (no todo el chat). */
+function LiveClock({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  return <span className="cv-think-clock">{clock(now - since)}</span>;
 }

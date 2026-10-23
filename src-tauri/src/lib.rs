@@ -1,4 +1,9 @@
 mod aviso;
+
+/// Argumentos del visor web (los mismos en `tauri.conf.json` y en la ventana de avisos): los de
+/// Tauri por defecto, una caché de 20 MB (sin tope llegó a ~180 MB para una app local) y sin las
+/// descargas de componentes de Edge que no hacen falta aquí (Widevine, filtro de anuncios).
+pub const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disk-cache-size=20971520 --disable-component-update";
 mod chatstore;
 mod devapp;
 pub mod errlog;
@@ -154,6 +159,16 @@ pub fn run() {
                 hub::flush_pending();
             }
         });
+}
+
+#[cfg(test)]
+mod webview_args_tests {
+    #[test]
+    fn la_ventana_principal_y_la_de_avisos_arrancan_igual() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["app"]["windows"][0]["additionalBrowserArgs"], super::WEBVIEW_ARGS);
+        assert!(super::WEBVIEW_ARGS.contains("msWebOOUI"), "sin perder los de Tauri por defecto");
+    }
 }
 
 #[cfg(test)]

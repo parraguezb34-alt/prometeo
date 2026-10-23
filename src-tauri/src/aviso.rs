@@ -55,6 +55,9 @@ pub async fn aviso_push(app: AppHandle, item: Aviso) -> Result<(), String> {
         return Ok(());
     }
     let win = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("index.html?aviso=1".into()))
+        // Las ventanas comparten el mismo WebView2: tienen que arrancar con los mismos argumentos
+        // que la principal (tauri.conf.json), o esta no se crea.
+        .additional_browser_args(crate::WEBVIEW_ARGS)
         .title("Avisos de Prometeo")
         .inner_size(WIDTH, 110.0)
         .decorations(false)
