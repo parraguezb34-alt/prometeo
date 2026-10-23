@@ -1,4 +1,5 @@
 mod aviso;
+mod cleanup;
 
 /// Argumentos del visor web (los mismos en `tauri.conf.json` y en la ventana de avisos): los de
 /// Tauri por defecto, una caché de 20 MB (sin tope llegó a ~180 MB para una app local) y sin las
@@ -28,6 +29,8 @@ unsafe extern "C" {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Antes de que exista el visor web: lo que su perfil guardó y ya sobra.
+    cleanup::at_startup();
     tauri::Builder::default()
         // Una sola Prometeo: abrirla otra vez (p. ej. con ella en la bandeja) trae la que ya está.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
