@@ -59,6 +59,54 @@ export function quotaAlerts(limits: Record<string, AgentLimits>, seen: Set<strin
   return out;
 }
 
+/** Gasto rápido: cuánto puede subir una ventana en `BURN_MS` antes de avisar, aunque no llegue al
+ * 80 %. La semanal, 4 puntos (el 4 % de toda la semana en media hora no es trabajo normal: suele
+ * ser un banco de pruebas o subagentes lanzando el modelo una y otra vez); la de 5 h, 35. */
+export const BURN_MS = 30 * 60_000;
+export function burnLimit(w: LimitWindow): number {
+  return /week|semana|seven|7\s*d/i.test(`${w.key} ${w.label}`) ? 4 : 35;
+}
+
+export type BurnSample = { ms: number; pct: number };
+export type BurnAlert = { key: string; agent: string; window: string; rise: number; pct: number; minutes: number };
+
+/**
+ * Avisos de gasto rápido. `history` guarda, por agente y ventana, lo visto en los últimos
+ * `BURN_MS`; `last`, cuándo se avisó de cada una (no se repite antes de `BURN_MS`). Se actualizan aquí.
+ */
+export function burnAlerts(
+  limits: Record<string, AgentLimits>,
+  history: Map<string, BurnSample[]>,
+  last: Map<string, number>,
+  now: number,
+): BurnAlert[] {
+  const out: BurnAlert[] = [];
+  for (const [agent, l] of Object.entries(limits)) {
+    if (!l.exact) continue; // solo con datos exactos (los leídos de pantalla saltan a ratos)
+    l.windows.forEach((w, i) => {
+      const key = `${agent}|${w.key || i}`;
+      const arr = (history.get(key) ?? []).filter((s) => now - s.ms <= BURN_MS);
+      arr.push({ ms: now, pct: w.used_pct });
+      history.set(key, arr);
+      // Desde el punto más bajo de la media hora: si la ventana se reinició, cuenta desde ahí.
+      const low = arr.reduce((a, b) => (b.pct < a.pct ? b : a));
+      const rise = w.used_pct - low.pct;
+      const prev = last.get(key);
+      if (rise < burnLimit(w) || (prev !== undefined && now - prev < BURN_MS)) return;
+      last.set(key, now);
+      out.push({
+        key,
+        agent,
+        window: windowLabel(w, i),
+        rise: Math.round(rise),
+        pct: Math.round(w.used_pct),
+        minutes: Math.max(1, Math.round((now - low.ms) / 60_000)),
+      });
+    });
+  }
+  return out;
+}
+
 /** Nombre para mostrar de una ventana: si no trae palabras (p. ej. «[ ]»), «Límite N». */
 export function windowLabel(w: LimitWindow, i: number): string {
   return /[a-záéíóúñ]{2,}/i.test(w.label) ? w.label : `Límite ${i + 1}`;

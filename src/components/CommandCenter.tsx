@@ -78,7 +78,8 @@ import { WindowControls } from "./WindowControls";
 import { SlidingPill } from "./SlidingPill";
 import { BrandIcon, BrandWordmark } from "./Brand";
 import { LimitsChip } from "./LimitsChip";
-import { fmtReset, level as limitLevel, opencodeGoUsage, parseUsagePanel, quotaAlerts, teamLimitsSet, windowLabel } from "../lib/limits";
+import { burnAlerts, fmtReset, level as limitLevel, opencodeGoUsage, parseUsagePanel, quotaAlerts, teamLimitsSet, windowLabel } from "../lib/limits";
+import type { BurnSample } from "../lib/limits";
 import { InAppAvisos, Toast } from "./Avisos";
 import { listen } from "@tauri-apps/api/event";
 import { taskPaths } from "../lib/history";
@@ -1904,6 +1905,8 @@ export function CommandCenter() {
 
   // Aviso al llegar al 80 % (y al 95 %) de un límite de uso: a tiempo de repartir a otro agente.
   const quotaSeen = useRef(new Set<string>());
+  const burnHist = useRef(new Map<string, BurnSample[]>());
+  const burnLast = useRef(new Map<string, number>());
   const limitsNow = state?.limits;
   useEffect(() => {
     if (!limitsNow) return;
@@ -1912,6 +1915,15 @@ export function CommandCenter() {
       const text = `${agentLabel(a.agent)} va por el ${a.pct} % de su límite «${a.window}»${when}.`;
       say(`⚠ ${text}`, a.threshold >= 95);
       if (notifyOn) notify(`${agentLabel(a.agent)}: ${a.pct} % de su límite`, text, { agent: a.agent, kind: "info" });
+    }
+    // Gasto rápido: la cuota sube mucho en poco rato aunque no llegue al 80 % (un banco de pruebas
+    // o unos subagentes lanzando el modelo en bucle se comen la semana sin que se vea en el chat).
+    for (const b of burnAlerts(limitsNow, burnHist.current, burnLast.current, Date.now())) {
+      const text =
+        `La cuota «${b.window}» de ${agentLabel(b.agent)} ha subido ${b.rise} puntos en ${b.minutes} min (va por el ${b.pct} %). ` +
+        "Si no es lo que esperabas, mira qué está lanzando el equipo (pruebas que llaman al modelo, subagentes…).";
+      say(`⚠ ${text}`, true);
+      if (notifyOn) notify(`${agentLabel(b.agent)} gasta su cuota muy deprisa`, text, { agent: b.agent, kind: "info" });
     }
   }, [limitsNow, notifyOn, say]);
 

@@ -17,6 +17,7 @@ Si la petición deja decisiones abiertas, pregunta con un solo `team_ask_user`:
 - Hasta 4 preguntas, 2–4 opciones concretas cada una, la recomendada primero y con su porqué en `description`.
 - Pregunta lo que cambia el plan: alcance, destino de los archivos, estilo, tecnología, prioridades, qué incluir.
 - No preguntes lo que puedes averiguar leyendo el proyecto.
+- Si el plan lanza un modelo de pago muchas veces (bancos de pruebas con `claude -p`, comparativas), pregunta antes: cuántas ejecuciones, con qué modelo y la alternativa con los modelos gratis del equipo (`opencode run`).
 - Si no contesta a tiempo, acaba tu turno: la respuesta te llegará escrita.
 
 **Si tu pregunta se quedó sin respuesta a la vista** (se reinició tu sesión mientras esperabas): la respuesta llega entera, escrita en tu terminal, y también aparece completa en `team_feed` como «💬 Respuestas del usuario…». No vuelvas a preguntar lo mismo.

@@ -140,3 +140,36 @@ console.log(`${n} pruebas de límites OK`);
   assert.equal(quotaAlerts(lim(97), fresh).length, 0);
   console.log("ok - avisos de cuota al 80 y al 95 %");
 }
+
+{
+  const { burnAlerts } = await import("./lib/limits.js");
+  const lim = (week, session = 10, exact = true) => ({
+    claude: { windows: [{ key: "session", label: "Sesión (5 h)", used_pct: session, resets_at: null }, { key: "week", label: "Semana", used_pct: week, resets_at: null }], exact, note: "", ts_ms: 0 },
+  });
+  const h = new Map();
+  const last = new Map();
+  const min = 60_000;
+  assert.equal(burnAlerts(lim(40), h, last, 0).length, 0);
+  assert.equal(burnAlerts(lim(42), h, last, 10 * min).length, 0, "2 puntos de la semana en 10 min: normal");
+  const a = burnAlerts(lim(45, 20), h, last, 20 * min);
+  assert.equal(a.length, 1, "5 puntos de la semana en 20 min: aviso");
+  assert.equal(a[0].window, "Semana");
+  assert.equal(a[0].rise, 5);
+  assert.equal(a[0].minutes, 20);
+  assert.equal(burnAlerts(lim(49, 25), h, last, 25 * min).length, 0, "no se repite enseguida");
+  // La de 5 h aguanta más: 15 puntos en media hora es trabajo normal; 40, no.
+  const h2 = new Map();
+  const l2 = new Map();
+  burnAlerts(lim(10, 10), h2, l2, 0);
+  assert.equal(burnAlerts(lim(10, 25), h2, l2, 20 * min).length, 0);
+  const b = burnAlerts(lim(10, 50), h2, l2, 25 * min);
+  assert.equal(b.length, 1);
+  assert.equal(b[0].window, "Sesión (5 h)");
+  // Lo antiguo sale de la media hora y no cuenta; los datos leídos de pantalla, tampoco.
+  const h3 = new Map();
+  const l3 = new Map();
+  burnAlerts(lim(10), h3, l3, 0);
+  assert.equal(burnAlerts(lim(16), h3, l3, 60 * min).length, 0, "6 puntos en una hora: fuera de la ventana");
+  assert.equal(burnAlerts(lim(99, 10, false), new Map(), new Map(), 0).length, 0);
+  console.log("ok - aviso de gasto rápido de la cuota");
+}

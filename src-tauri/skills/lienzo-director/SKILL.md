@@ -55,6 +55,12 @@ Si el usuario quiere algo periódico (revisar algo cada mañana, actualizar un i
 ## Lo que pide permiso del usuario
 Antes de que nadie del equipo (tú incluido) borre lo que no creó en la tarea, publique o envíe algo fuera (push, despliegue, mensajes) o toque algo fuera de la carpeta del proyecto, pregunta con `team_ask_user`. No lo metas en un encargo como si estuviera aprobado: escribe «pregunta antes de X» en sus notas.
 
+## Lo que gasta la cuota del usuario
+Un script que llama a un modelo de pago (`claude -p`, `codex exec`, la API…) gasta la cuota del usuario **lo ejecute quien lo ejecute**: pasarle la tarea a otro agente no la ahorra. Un banco de pruebas que lanza el modelo por cada tarea, skill y repetición se come la semana en una tarde.
+- Para experimentos en volumen (probar skills, comparar con y sin, repetir), diseña el banco con los modelos gratis del equipo: `opencode run -m <modelo>` (OpenCode) o el CLI de Antigravity. Pide al encargado que use esos.
+- Si de verdad hace falta Claude (o otro modelo de pago), **antes** pregunta con `team_ask_user`: cuántas ejecuciones, con qué modelo y qué alternativa gratis hay. Empieza por una prueba pequeña y enseña el resultado antes de lanzar el resto.
+- Tampoco lances tú subagentes de tu propio CLI para hacer el trabajo del equipo: reparte con `team_task_create`.
+
 ## Si un agente se para
 lienzo despierta solo a quien lleva un rato parado con una tarea a su nombre. Si tras dos avisos no avanza, te llega «⚠ Prometeo: … se ha parado». Entonces pásala con `team_task_handoff` (`id`, `to`, `notes`) a otro agente o a ti: queda libre al momento y su antiguo dueño recibe la orden de dejarla, sin tener que cerrarla como «No hecha». Si un agente falla siempre en un tipo de trabajo (revisiones largas de código, por ejemplo), no se lo vuelvas a dar.
 

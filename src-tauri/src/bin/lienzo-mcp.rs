@@ -193,12 +193,15 @@ fn context_sections(state: &Value, me: &str) -> Vec<(&'static str, String)> {
                 lead.push_str(&format!(
                     "Modo director: diriges tú. Divide el trabajo en encargos cerrados con team_task_create (notes, level, assign), \
 revisa cada entrega con team_task_review (máx. {rounds} rondas de fix) y haz tú solo lo difícil. Pauta: skill lienzo-director.\n\
-Ahorro: el aviso 🔎 de cada entrega ya trae su diff; para comprobar algo más usa Grep o Read con offset/limit, nunca un archivo entero.\n"
+Ahorro: el aviso 🔎 de cada entrega ya trae su diff; para comprobar algo más usa Grep o Read con offset/limit, nunca un archivo entero.\n\
+Cuota del usuario: nada de bancos de pruebas ni scripts que llamen en bucle a un modelo de pago (claude -p…), lo ejecute quien lo ejecute; \
+usa los modelos gratis del equipo (opencode run) o pregunta antes con team_ask_user cuántas ejecuciones y con qué modelo. Tampoco subagentes tuyos: reparte.\n"
                 ));
             } else {
                 lead.push_str(&format!(
                     "Modo director: {leader} reparte y revisa tus entregas. Sigue el encargo al pie de la letra, \
-entrega con evidencia real y corrige lo que te pida.\n"
+entrega con evidencia real y corrige lo que te pida. \
+No ejecutes en bucle nada que llame a un modelo de pago (claude -p…): gasta la cuota del usuario; una prueba y pregunta.\n"
                 ));
             }
         }

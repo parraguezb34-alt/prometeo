@@ -30,6 +30,7 @@ Para lo general de coordinación (buzón, feed, canales y reservas), sigue `lien
 - Si algo es ambiguo o imposible, pregunta al líder (`to: "líder"`) antes de improvisar. Una frase con la duda y la ruta.
 - Si la decisión es del usuario (gusto, alcance, prioridades), usa `team_ask_user` con opciones concretas.
 - **Pregunta siempre antes de** borrar archivos o carpetas que no creaste tú en esta tarea, publicar o enviar algo fuera (push, subir, desplegar, mandar mensajes) o tocar algo fuera de la carpeta del proyecto (salvo lo que el encargo nombre). Aunque parezca obvio: es difícil de deshacer.
+- **Cuota del usuario:** no ejecutes en bucle nada que llame a un modelo de pago (`claude -p`, `codex exec`, una API) aunque esté en el encargo: cada llamada gasta la cuota del usuario. Si el encargo lo pide, haz una sola prueba y pregunta al líder antes del resto; si se puede, usa los modelos gratis del equipo (`opencode run`).
 - No preguntes lo que puedes averiguar leyendo el proyecto o las entregas previas.
 
 ## 4. Comprobar
