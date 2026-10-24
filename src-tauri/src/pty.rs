@@ -17,6 +17,50 @@ use tauri::{AppHandle, Emitter, State};
 /// Maximum bytes kept per session for re-attach repaints.
 const SCROLLBACK_LIMIT: usize = 512 * 1024;
 
+/// Cada cuánto, como mucho, se manda a la interfaz lo que escribió una terminal (~60 por segundo).
+const FLUSH_MS: u64 = 16;
+
+/// Lo que una terminal escribió y aún no se mandó a la interfaz.
+#[derive(Default)]
+struct Outbox {
+    state: Mutex<(Vec<u8>, bool)>,
+    ready: std::sync::Condvar,
+}
+
+impl Outbox {
+    fn push(&self, data: &[u8]) {
+        if let Ok(mut s) = self.state.lock() {
+            s.0.extend_from_slice(data);
+        }
+        self.ready.notify_one();
+    }
+
+    /// La terminal terminó: lo que quede se manda y se acaba.
+    fn close(&self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.1 = true;
+        }
+        self.ready.notify_one();
+    }
+
+    /// Espera a que haya algo, deja `gather` para que se junte lo que viene detrás y lo devuelve
+    /// todo de una vez. None cuando la terminal terminó y no queda nada.
+    fn next_batch(&self, gather: std::time::Duration) -> Option<Vec<u8>> {
+        {
+            let mut s = self.state.lock().ok()?;
+            while s.0.is_empty() && !s.1 {
+                s = self.ready.wait(s).ok()?;
+            }
+            if s.0.is_empty() {
+                return None;
+            }
+        }
+        std::thread::sleep(gather);
+        let mut s = self.state.lock().ok()?;
+        Some(std::mem::take(&mut s.0))
+    }
+}
+
 pub struct PtySession {
     pub writer: Box<dyn Write + Send>,
     pub master: Box<dyn MasterPty + Send>,
@@ -331,6 +375,11 @@ pub async fn term_spawn(
     let thread_buf = buffer.clone();
     let thread_running = running.clone();
     let thread_app = app.clone();
+    // La salida va a la interfaz en paquetes: un agente escribe a trocitos (su animación de espera,
+    // cada línea…) y un mensaje por trozo hacía trabajar a la ventana más que al propio agente.
+    // El lector solo acumula; otro hilo lo manda como mucho cada FLUSH_MS (imperceptible).
+    let outbox = Arc::new(Outbox::default());
+    let reader_box = outbox.clone();
     std::thread::spawn(move || {
         let mut chunk = [0u8; 8192];
         loop {
@@ -339,17 +388,17 @@ pub async fn term_spawn(
                 Ok(n) => {
                     let data = &chunk[..n];
                     append_scrollback(&thread_buf, data);
-                    let _ = thread_app.emit(
-                        "pty://data",
-                        DataPayload {
-                            id: thread_id.clone(),
-                            data: B64.encode(data),
-                        },
-                    );
+                    reader_box.push(data);
                 }
             }
         }
         thread_running.store(false, Ordering::SeqCst);
+        reader_box.close();
+    });
+    std::thread::spawn(move || {
+        while let Some(data) = outbox.next_batch(std::time::Duration::from_millis(FLUSH_MS)) {
+            let _ = thread_app.emit("pty://data", DataPayload { id: thread_id.clone(), data: B64.encode(&data) });
+        }
         let _ = thread_app.emit("pty://exit", ExitPayload { id: thread_id.clone() });
     });
 
@@ -456,4 +505,34 @@ pub async fn term_scrollback(state: State<'_, PtyManager>, id: String, max: Opti
     let skip = max.map(|m| buffer.len().saturating_sub(m)).unwrap_or(0);
     let bytes: Vec<u8> = buffer.iter().skip(skip).copied().collect();
     Ok(B64.encode(&bytes))
+}
+
+#[cfg(test)]
+mod outbox_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn junta_los_trozos_y_termina_con_lo_que_quede() {
+        let ob = Arc::new(Outbox::default());
+        let w = ob.clone();
+        let writer = std::thread::spawn(move || {
+            for i in 0..50u8 {
+                w.push(&[i]);
+            }
+            std::thread::sleep(Duration::from_millis(80));
+            w.push(b"fin");
+            w.close();
+        });
+        let mut batches = Vec::new();
+        while let Some(b) = ob.next_batch(Duration::from_millis(20)) {
+            batches.push(b);
+        }
+        writer.join().unwrap();
+        let all: Vec<u8> = batches.concat();
+        let mut want: Vec<u8> = (0..50u8).collect();
+        want.extend_from_slice(b"fin");
+        assert_eq!(all, want, "nada se pierde ni se desordena");
+        assert!(batches.len() <= 3, "50 trozos seguidos salen juntos: {} paquetes", batches.len());
+    }
 }

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { watchSubmit } from "./activity";
 
 export type SessionInfo = {
@@ -16,6 +17,37 @@ export function base64ToBytes(b64: string): Uint8Array {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes;
+}
+
+/** Quien recibe la salida de las terminales: sus bytes y de qué terminal son. */
+export type PtyDataFn = (bytes: Uint8Array, id: string) => void;
+
+const dataFns = new Set<PtyDataFn>();
+let bus: Promise<unknown> | null = null;
+
+/**
+ * Un único receptor de la salida de todas las terminales: cada paquete se descodifica una vez y
+ * se reparte a quien escucha (cada terminal y el detector de actividad). Antes cada uno tenía su
+ * propio receptor y descodificaba todos los paquetes de todas las terminales.
+ */
+export async function onPtyData(fn: PtyDataFn): Promise<() => void> {
+  if (!bus) {
+    bus = listen<PtyDataEvent>("pty://data", (e) => {
+      if (dataFns.size === 0) return;
+      let bytes: Uint8Array;
+      try {
+        bytes = base64ToBytes(e.payload.data);
+      } catch {
+        return;
+      }
+      for (const f of dataFns) f(bytes, e.payload.id);
+    });
+  }
+  await bus;
+  dataFns.add(fn);
+  return () => {
+    dataFns.delete(fn);
+  };
 }
 
 export const termSpawn = (

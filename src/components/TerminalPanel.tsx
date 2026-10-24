@@ -6,13 +6,14 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 import {
   base64ToBytes,
+  onPtyData,
   termKill,
   termResize,
   termScrollback,
   termSpawn,
   termWrite,
 } from "../lib/pty";
-import type { PtyDataEvent, PtyExitEvent } from "../lib/pty";
+import type { PtyExitEvent } from "../lib/pty";
 import { registerScreen } from "../lib/screens";
 import { respawnCmd, setPanelSession } from "../store";
 import type { Panel } from "../store";
@@ -91,18 +92,16 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
       // preguntan al terminal por sus capacidades nada más arrancar y esperan la respuesta; si
       // esa primera salida se perdía por escuchar tarde, se quedaban esperando hasta que alguien
       // abría la terminal y se repintaba el historial.
-      const early: PtyDataEvent[] = [];
+      const early: { id: string; bytes: Uint8Array }[] = [];
       let live = false;
       await addUn(
-        listen<PtyDataEvent>("pty://data", (e) => {
+        onPtyData((bytes, id) => {
           if (disposedRef.current) return;
           if (!live) {
-            early.push(e.payload);
+            early.push({ id, bytes });
             return;
           }
-          if (e.payload.id === sessionRef.current) {
-            term.write(base64ToBytes(e.payload.data));
-          }
+          if (id === sessionRef.current) term.write(bytes);
         }),
       );
       await addUn(
@@ -156,7 +155,7 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
       // incluidas): en una sesión nueva se entrega entero; en una re-adjuntada ya iba en el historial.
       if (!reattached) {
         for (const ev of early) {
-          if (ev.id === sid) term.write(base64ToBytes(ev.data));
+          if (ev.id === sid) term.write(ev.bytes);
         }
       }
       early.length = 0;

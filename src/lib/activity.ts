@@ -1,8 +1,6 @@
-import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
-import { base64ToBytes } from "./pty";
+import { onPtyData } from "./pty";
 import { SUBMIT_CHECK_MS, cleanTerm, needsResubmit } from "./submit";
-import type { PtyDataEvent } from "./pty";
 
 /**
  * Qué está haciendo cada agente ahora mismo, leído de su terminal. Al ponerse
@@ -75,14 +73,14 @@ export function useTermActivity(): Map<string, Activity> {
     // Fuera de la app de escritorio (Vite en un navegador) no hay terminales que escuchar.
     if (!("__TAURI_INTERNALS__" in window)) return;
     const decoder = new TextDecoder();
-    const un = listen<PtyDataEvent>("pty://data", (e) => {
+    const un = onPtyData((bytes, sid) => {
       let text = "";
       try {
-        text = decoder.decode(base64ToBytes(e.payload.data));
+        text = decoder.decode(bytes);
       } catch {
         return;
       }
-      const t = tracks.current.get(e.payload.id) ?? {
+      const t = tracks.current.get(sid) ?? {
         tail: "",
         lastMs: 0,
         since: 0,
@@ -94,9 +92,9 @@ export function useTermActivity(): Map<string, Activity> {
       if (MARKER.test(cleanTerm(t.tail.slice(-120) + text))) t.armed = true;
       t.tail = (t.tail + text).slice(-TAIL);
       t.lastMs = Date.now();
-      if (t.armed) lastBusy.set(e.payload.id, t.lastMs);
-      lastTail.set(e.payload.id, t.tail);
-      tracks.current.set(e.payload.id, t);
+      if (t.armed) lastBusy.set(sid, t.lastMs);
+      lastTail.set(sid, t.tail);
+      tracks.current.set(sid, t);
     });
     const id = window.setInterval(() => {
       const now = Date.now();
