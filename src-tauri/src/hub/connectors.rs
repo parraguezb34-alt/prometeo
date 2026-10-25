@@ -370,23 +370,15 @@ fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>)
     let mut files = vec![];
     let notes = vec!["Codex lee su MCP global; reinícialo si estaba abierto.".to_string()];
 
-    // Global MCP config (~/.codex/config.toml).
+    // Global MCP config (~/.codex/config.toml). Si ya estaba pero con otro puente (una
+    // compilación de desarrollo, otra instalación), se cambia el bloque entero.
     let cfg = home().join(".codex").join("config.toml");
     let existing = std::fs::read_to_string(&cfg).unwrap_or_default();
-    if !existing.contains("mcp_servers.lienzo-team") {
+    if !existing.contains("mcp_servers.lienzo-team") || !uses_bridge(&existing, exe) {
         if let Some(parent) = cfg.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let block = format!(
-            "\n# lienzo team (auto-generado)\n[mcp_servers.lienzo-team]\ncommand = \"{}\"\nargs = []\n\n[mcp_servers.lienzo-team.env]\nLIENZO_AGENT = \"codex\"\n",
-            exe.replace('\\', "\\\\")
-        );
-        let merged = if existing.trim().is_empty() {
-            block.trim_start().to_string()
-        } else {
-            format!("{}\n{}", existing.trim_end(), block)
-        };
-        std::fs::write(&cfg, merged).map_err(|e| e.to_string())?;
+        std::fs::write(&cfg, codex_config(&existing, exe)).map_err(|e| e.to_string())?;
     }
     files.push(cfg.display().to_string());
 
@@ -401,6 +393,36 @@ fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>)
     write_managed_block(&p, &team_block())?;
     files.push(p.display().to_string());
     Ok((files, notes))
+}
+
+/// `config.toml` de Codex con el bloque de lienzo-team apuntando a `exe`: quita el anterior
+/// (sus tablas `[mcp_servers.lienzo-team…]` y el comentario de encima) y pone el nuevo al final.
+fn codex_config(existing: &str, exe: &str) -> String {
+    let mut kept: Vec<&str> = vec![];
+    let mut ours = false;
+    for line in existing.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            let name = t.trim_start_matches('[').trim_end_matches(']').trim();
+            ours = name == "mcp_servers.lienzo-team" || name.starts_with("mcp_servers.lienzo-team.");
+            if ours && kept.last().is_some_and(|l| l.trim() == "# lienzo team (auto-generado)") {
+                kept.pop();
+            }
+        }
+        if !ours {
+            kept.push(line);
+        }
+    }
+    let rest = kept.join("\n");
+    let block = format!(
+        "# lienzo team (auto-generado)\n[mcp_servers.lienzo-team]\ncommand = \"{}\"\nargs = []\n\n[mcp_servers.lienzo-team.env]\nLIENZO_AGENT = \"codex\"\n",
+        exe.replace('\\', "\\\\")
+    );
+    if rest.trim().is_empty() {
+        block
+    } else {
+        format!("{}\n\n{}", rest.trim_end(), block)
+    }
 }
 
 fn connect_opencode(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>), String> {
@@ -1249,6 +1271,21 @@ mod tests {
         // Otro puente (la compilación de desarrollo) no cuenta como conectado.
         let dev = r#"{"command":"C:\Users\yo\Projects\lienzo\src-tauri\target\debug\lienzo-mcp.exe"}"#;
         assert!(!uses_bridge(dev, exe));
+    }
+
+    #[test]
+    fn codex_cambia_el_puente_viejo() {
+        let old = "model = \"gpt\"\n\n# lienzo team (auto-generado)\n[mcp_servers.lienzo-team]\ncommand = \"C:\\\\dev\\\\target\\\\debug\\\\lienzo-mcp.exe\"\nargs = []\n\n[mcp_servers.lienzo-team.env]\nLIENZO_AGENT = \"codex\"\n\n[tui]\nx = true\n";
+        let exe = r"C:\Users\yo\AppData\Local\Prometeo\lienzo-mcp.exe";
+        let new = codex_config(old, exe);
+        assert!(!new.contains("debug"), "{new}");
+        assert!(uses_bridge(&new, exe), "{new}");
+        assert_eq!(new.matches("[mcp_servers.lienzo-team]").count(), 1);
+        assert_eq!(new.matches("# lienzo team").count(), 1);
+        assert!(new.contains("model = \"gpt\"") && new.contains("[tui]\nx = true"), "{new}");
+        // Lo que ya está bien se queda igual al volver a escribirlo.
+        assert_eq!(codex_config(&new, exe), new);
+        assert!(codex_config("", exe).starts_with("# lienzo team"));
     }
 
     #[test]

@@ -21,6 +21,7 @@ Para escribir un buen encargo lees casi lo mismo que para hacer el cambio. Deleg
 3. Divide en tareas pequeñas: cada una cabe en 1–3 archivos y se comprueba sola. Lo independiente va sin `parents`, para que corra en paralelo; dos tareas que tocan el mismo archivo, nunca a la vez.
 4. Pon `level`: `simple` (mecánico y acotado), `media` (lógica nueva con especificación clara), `dificil` (diseño, causa incierta, seguridad, muchas piezas: divídela o hazla tú).
 5. **Reparte con `assign`** mirando «Agentes en línea» en `team_context`: solo a agentes conectados, repartiendo la carga y dando a cada uno tareas del mismo tema (comparte contexto). Las difíciles, a tu nombre. Sin `assign`, lienzo la da a quien esté libre.
+   - **Quién hace qué:** OpenCode y Antigravity (gratis), lo `simple` y el volumen. **Codex** (modelo fuerte, con su propia cuota de ChatGPT, aparte de la de Claude), lo `media` largo y lo `dificil` que no haga falta que hagas tú; también una segunda revisión de los cambios delicados (seguridad, datos, migraciones). Su cuota es corta: mira su uso en `team_context` y, si pasa del 80 %, pásale lo que quede a otro.
 6. **Publica el plan** en un `team_update`: tarea → agente → orden, y las suposiciones que hiciste.
 - Si te llega 📝 con una tarea que creó el usuario, escribe su encargo con `team_task_brief`: hasta entonces no se reparte.
 

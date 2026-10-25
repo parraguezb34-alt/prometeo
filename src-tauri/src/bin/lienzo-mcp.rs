@@ -1570,6 +1570,7 @@ fn mcp_mode() {
             std::thread::spawn(move || {
                 let mut win_cache: Option<(String, u64)> = None;
                 let mut last: Option<(u64, u64)> = None;
+                let mut last_limits: Option<Vec<Value>> = None;
                 // Último mensaje de OpenCode ya sumado (-1 = aún sin línea base: lo anterior a
                 // que arrancara el puente no se cuenta).
                 let mut usage_mark: i64 = -1;
@@ -1588,6 +1589,11 @@ fn mcp_mode() {
                     let Some(sample) = sample_telemetry(&agent_name, &cwd, &mut win_cache) else {
                         continue;
                     };
+                    // Codex trae los límites de la suscripción en cada turno: al hub si cambian.
+                    if !sample.limits.is_empty() && last_limits.as_ref() != Some(&sample.limits) {
+                        let _ = c.post("/limits", &json!({ "agent": agent_name, "windows": sample.limits, "exact": true }));
+                        last_limits = Some(sample.limits.clone());
+                    }
                     if last == Some((sample.used, sample.window)) {
                         continue;
                     }
@@ -2339,6 +2345,8 @@ struct CtxSample {
     model: Option<String>,
     used: u64,
     window: u64,
+    /// Ventanas de límite de la suscripción (solo Codex: `rate_limits` de su rollout).
+    limits: Vec<Value>,
 }
 
 fn home_dir() -> Option<std::path::PathBuf> {
@@ -2433,7 +2441,7 @@ fn opencode_ctx(cwd: &str, win_cache: &mut Option<(String, u64)>) -> Option<CtxS
         }
         None => 200_000,
     };
-    Some(CtxSample { model, used, window })
+    Some(CtxSample { model, used, window, limits: vec![] })
 }
 
 /// Gasto de los mensajes nuevos de OpenCode en este directorio, desde `mark` (rowid).
@@ -2548,7 +2556,9 @@ fn codex_ctx(cwd: &str) -> Option<CtxSample> {
         if p["type"].as_str() != Some("token_count") {
             continue;
         }
-        let used = p["info"]["last_token_usage"]["total_tokens"].as_u64()?;
+        let Some(used) = p["info"]["last_token_usage"]["total_tokens"].as_u64() else {
+            continue;
+        };
         if used == 0 {
             continue;
         }
@@ -2556,9 +2566,57 @@ fn codex_ctx(cwd: &str) -> Option<CtxSample> {
             .as_u64()
             .filter(|w| *w > 0)
             .unwrap_or(200_000);
-        return Some(CtxSample { model, used, window });
+        let ts = v["timestamp"].as_str().and_then(iso_secs);
+        let limits = codex_rate_windows(&p["rate_limits"], ts);
+        return Some(CtxSample { model, used, window, limits });
     }
     None
+}
+
+/// Las ventanas de `rate_limits` de un `token_count` de Codex (`primary`: 5 h, `secondary`:
+/// la semana) con la forma de `/limits`. `ts` (segundos) sirve para las versiones que mandan
+/// `resets_in_seconds` en vez de `resets_at`.
+fn codex_rate_windows(rl: &Value, ts: Option<u64>) -> Vec<Value> {
+    ["primary", "secondary"]
+        .iter()
+        .filter_map(|k| {
+            let w = &rl[*k];
+            let pct = w["used_percent"].as_f64()?;
+            let mins = w["window_minutes"].as_u64().unwrap_or(0);
+            let (key, label) = match mins {
+                m if m >= 7 * 24 * 60 - 60 => ("week".to_string(), "Semana".to_string()),
+                m if (240..=360).contains(&m) => ("session".to_string(), "Sesión (5 h)".to_string()),
+                0 => (k.to_string(), if *k == "primary" { "Sesión".to_string() } else { "Semana".to_string() }),
+                m if m % 60 == 0 => (k.to_string(), format!("{} h", m / 60)),
+                m => (k.to_string(), format!("{m} min")),
+            };
+            let reset = w["resets_at"]
+                .as_u64()
+                .or_else(|| Some(ts? + w["resets_in_seconds"].as_u64()?))
+                .map(|s| s * 1000);
+            Some(json!({ "key": key, "label": label, "used_pct": pct, "resets_at": reset }))
+        })
+        .collect()
+}
+
+/// `2026-10-06T21:58:42.867Z` → segundos Unix (UTC). Solo esa forma.
+fn iso_secs(s: &str) -> Option<u64> {
+    let b = s.as_bytes();
+    if b.len() < 19 || b[4] != b'-' || b[10] != b'T' {
+        return None;
+    }
+    let n = |a: usize, z: usize| s.get(a..z)?.parse::<i64>().ok();
+    let (y, mo, d) = (n(0, 4)?, n(5, 7)?, n(8, 10)?);
+    let (h, mi, se) = (n(11, 13)?, n(14, 16)?, n(17, 19)?);
+    // Días desde 1970 (algoritmo de Howard Hinnant).
+    let y2 = if mo <= 2 { y - 1 } else { y };
+    let era = y2.div_euclid(400);
+    let yoe = y2 - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days * 86_400 + h * 3600 + mi * 60 + se).ok()
 }
 
 /// El .jsonl más reciente bajo un árbol de carpetas (profundidad acotada).
@@ -2620,6 +2678,24 @@ fn ack_pending(client: &HubClient, agent: &str, session: &str, seq: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_lee_sus_limites() {
+        let rl = json!({
+            "primary": { "used_percent": 93.0, "window_minutes": 300, "resets_at": 1791330799u64 },
+            "secondary": { "used_percent": 91.5, "window_minutes": 10080, "resets_in_seconds": 60 },
+        });
+        let ts = iso_secs("2026-10-06T21:58:42.867Z");
+        assert_eq!(ts, Some(1791323922));
+        let w = codex_rate_windows(&rl, ts);
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0]["key"], "session");
+        assert_eq!(w[0]["used_pct"], 93.0);
+        assert_eq!(w[0]["resets_at"], 1791330799000u64);
+        assert_eq!(w[1]["label"], "Semana");
+        assert_eq!(w[1]["resets_at"], (1791323922u64 + 60) * 1000);
+        assert!(codex_rate_windows(&Value::Null, ts).is_empty(), "con clave de API no hay límites");
+    }
 
     /// Herramientas que atiende `call_tool`: los nombres de sus ramas (`"team_x" =>`, `"a" | "b" =>`).
     fn handled_tools() -> std::collections::BTreeSet<String> {
