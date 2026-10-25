@@ -1753,14 +1753,20 @@ fn hook_mode(args: &[String]) {
     }
 
     // Los hooks del proyecto también saltan en sesiones abiertas fuera de lienzo: esas no
-    // publican nada ni reciben el contexto del equipo.
-    if outside_lienzo() {
+    // publican nada ni reciben el contexto del equipo. Codex es aparte: sus hooks los lanza su
+    // servicio (app-server), que no hereda el entorno de la terminal, así que se mira quién abrió
+    // la conversación.
+    let codex = agent == "codex";
+    if outside_lienzo() && !codex {
         return;
     }
 
     let mut raw = String::new();
     let _ = std::io::stdin().read_to_string(&mut raw);
     let payload: Value = serde_json::from_str(raw.trim()).unwrap_or_else(|_| json!({}));
+    if codex && outside_lienzo() && codex_from_desktop(payload["transcript_path"].as_str().unwrap_or("")) {
+        return;
+    }
 
     let client = match HubClient::discover() {
         Some(c) => c,
@@ -1874,7 +1880,11 @@ fn hook_mode(args: &[String]) {
                     if i > 0 {
                         std::thread::sleep(std::time::Duration::from_millis(250));
                     }
-                    transcript_reply(path)
+                    if codex {
+                        read_tail(std::path::Path::new(path), 512 * 1024).and_then(|t| codex_reply(&t))
+                    } else {
+                        transcript_reply(path)
+                    }
                 })
             });
         if let Some(reply) = reply {
@@ -2523,6 +2533,61 @@ fn opencode_window(con: &rusqlite::Connection, model_id: &str) -> Option<u64> {
     None
 }
 
+/// ¿La conversación de Codex la abrió su app de escritorio? (`originator` de la primera línea del
+/// rollout). Esa no es el agente del equipo aunque trabaje en la misma carpeta.
+fn codex_from_desktop(rollout: &str) -> bool {
+    if rollout.is_empty() {
+        return false;
+    }
+    read_first_line(std::path::Path::new(rollout))
+        .and_then(|l| serde_json::from_str::<Value>(&l).ok())
+        .and_then(|m| m["payload"]["originator"].as_str().map(|o| o.to_lowercase().contains("desktop")))
+        .unwrap_or(false)
+}
+
+/// La respuesta del último turno en un rollout de Codex: su último mensaje al usuario, siempre que
+/// vaya después del último mensaje del usuario (si aún no está escrito, `None` y se reintenta).
+fn codex_reply(tail: &str) -> Option<String> {
+    for line in tail.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let p = &v["payload"];
+        if v["type"].as_str() != Some("response_item") || p["type"].as_str() != Some("message") {
+            continue;
+        }
+        let text = |kind: &str| -> String {
+            p["content"]
+                .as_array()
+                .map(|c| {
+                    c.iter()
+                        .filter(|x| x["type"].as_str() == Some(kind))
+                        .filter_map(|x| x["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default()
+        };
+        match p["role"].as_str() {
+            Some("assistant") => {
+                let t = text("output_text");
+                if !t.trim().is_empty() {
+                    return Some(trunc(t.trim(), 6000));
+                }
+            }
+            // Las instrucciones (AGENTS.md, entorno) también van como «user»: esas no cuentan.
+            Some("user") => {
+                let t = text("input_text");
+                if !t.trim_start().starts_with('<') && !t.trim_start().starts_with("# AGENTS.md") {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Contexto real de Codex: el rollout vivo más reciente cuyo cwd coincide,
 /// con el último `token_count` (prompt + salida del último turno).
 fn codex_ctx(cwd: &str) -> Option<CtxSample> {
@@ -2678,6 +2743,21 @@ fn ack_pending(client: &HubClient, agent: &str, session: &str, seq: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_respuesta_del_turno() {
+        let user = |t: &str| json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":t}]}}).to_string();
+        let bot = |t: &str| json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":t}]}}).to_string();
+        let ev = json!({"type":"event_msg","payload":{"type":"task_complete"}}).to_string();
+        let log = [user("# AGENTS.md instructions"), user("hola"), bot("¡Hola! ¿En qué te ayudo?"), ev].join("\n");
+        assert_eq!(codex_reply(&log).as_deref(), Some("¡Hola! ¿En qué te ayudo?"));
+        // Turno nuevo sin respuesta escrita todavía: nada (no la del turno anterior).
+        let pending = [log.clone(), user("otra cosa")].join("\n");
+        assert_eq!(codex_reply(&pending), None);
+        // Lo que inyecta el entorno como «user» no corta la búsqueda.
+        let env = [log, user("<environment_context>…</environment_context>")].join("\n");
+        assert_eq!(codex_reply(&env).as_deref(), Some("¡Hola! ¿En qué te ayudo?"));
+    }
 
     #[test]
     fn codex_lee_sus_limites() {
