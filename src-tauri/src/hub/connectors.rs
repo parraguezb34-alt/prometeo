@@ -374,11 +374,20 @@ fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>)
     // compilación de desarrollo, otra instalación), se cambia el bloque entero.
     let cfg = home().join(".codex").join("config.toml");
     let existing = std::fs::read_to_string(&cfg).unwrap_or_default();
-    if !existing.contains("mcp_servers.lienzo-team") || !uses_bridge(&existing, exe) {
+    let mut text = existing.clone();
+    if !text.contains("mcp_servers.lienzo-team") || !uses_bridge(&text, exe) {
+        text = codex_config(&text, exe);
+    }
+    // Codex desactiva los hooks de las carpetas en las que no confía: sin esto no llega al chat
+    // ni su respuesta ni lo que hace. Si el usuario ya la marcó (confiada o no), se respeta.
+    if !codex_project_listed(&text, project) {
+        text = format!("{}\n\n{}", text.trim_end(), codex_trust_block(project));
+    }
+    if text != existing {
         if let Some(parent) = cfg.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&cfg, codex_config(&existing, exe)).map_err(|e| e.to_string())?;
+        std::fs::write(&cfg, text).map_err(|e| e.to_string())?;
     }
     files.push(cfg.display().to_string());
 
@@ -393,6 +402,36 @@ fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>)
     write_managed_block(&p, &team_block())?;
     files.push(p.display().to_string());
     Ok((files, notes))
+}
+
+/// La carpeta como la guarda Codex en `[projects.'…']` (en Windows, en minúsculas).
+fn codex_project_key(project: &Path) -> String {
+    let s = project.display().to_string();
+    if cfg!(windows) {
+        s.to_lowercase()
+    } else {
+        s
+    }
+}
+
+/// ¿Tiene la carpeta su tabla `[projects.…]` en la config de Codex (confiada o no)?
+fn codex_project_listed(cfg: &str, project: &Path) -> bool {
+    let key = codex_project_key(project).to_lowercase();
+    cfg.lines().any(|l| {
+        let t = l.trim().to_lowercase();
+        t.starts_with("[projects.")
+            && (t.contains(&format!("'{key}'")) || t.contains(&format!("\"{}\"", key.replace('\\', "\\\\"))))
+    })
+}
+
+fn codex_trust_block(project: &Path) -> String {
+    let key = codex_project_key(project);
+    let quoted = if key.contains('\'') {
+        format!("\"{}\"", key.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        format!("'{key}'")
+    };
+    format!("# Prometeo: carpeta del equipo (sin confianza, Codex no ejecuta sus hooks)\n[projects.{quoted}]\ntrust_level = \"trusted\"\n")
 }
 
 /// `config.toml` de Codex con el bloque de lienzo-team apuntando a `exe`: quita el anterior
@@ -561,7 +600,11 @@ fn is_connected(id: &str, project: Option<&Path>) -> bool {
     match id {
         // Sin `alwaysLoad` (conectado con una versión anterior) se vuelve a conectar una vez.
         "claude" => project.is_some_and(|p| ok(p.join(".mcp.json"), "lienzo-team") && ok(p.join(".mcp.json"), "\"alwaysLoad\"")),
-        "codex" => ok(home().join(".codex").join("config.toml"), "mcp_servers.lienzo-team"),
+        "codex" => {
+            let cfg = home().join(".codex").join("config.toml");
+            let listed = project.is_none_or(|p| std::fs::read_to_string(&cfg).is_ok_and(|s| codex_project_listed(&s, p)));
+            listed && ok(cfg, "mcp_servers.lienzo-team")
+        }
         "opencode" => project.is_some_and(|p| ok(p.join("opencode.json"), "lienzo-team")),
         "antigravity" => {
             // Antigravity también lee la config global: si existe, tiene que ir bien.
@@ -1286,6 +1329,20 @@ mod tests {
         // Lo que ya está bien se queda igual al volver a escribirlo.
         assert_eq!(codex_config(&new, exe), new);
         assert!(codex_config("", exe).starts_with("# lienzo team"));
+    }
+
+    #[test]
+    fn codex_confia_en_la_carpeta_del_equipo() {
+        let p = Path::new(r"C:\Users\Yo\Escritorio\mejora de skill");
+        let block = codex_trust_block(p);
+        assert!(codex_project_listed(&block, p), "{block}");
+        assert!(!codex_project_listed("[projects.'c:\\otra']\ntrust_level = \"trusted\"\n", p));
+        // Una marcada a mano (con comillas dobles o como no confiada) cuenta como ya decidida.
+        let manual = "[projects.\"c:\\\\users\\\\yo\\\\escritorio\\\\mejora de skill\"]\ntrust_level = \"untrusted\"\n";
+        assert!(codex_project_listed(manual, p), "{manual}");
+        if cfg!(windows) {
+            assert!(block.contains(r"[projects.'c:\users\yo\escritorio\mejora de skill']"), "{block}");
+        }
     }
 
     #[test]
