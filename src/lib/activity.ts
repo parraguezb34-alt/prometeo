@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { onPtyData } from "./pty";
-import { SUBMIT_CHECK_MS, cleanTerm, needsResubmit } from "./submit";
+import { DIALOG, SUBMIT_CHECK_MS, cleanTerm, needsResubmit } from "./submit";
 
 /**
  * Qué está haciendo cada agente ahora mismo, leído de su terminal. Al ponerse
@@ -41,6 +41,19 @@ export function termLastBusyMs(sid: string): number {
 
 /** Lo último que pintó cada terminal (en crudo), para saber si un mensaje se quedó sin enviar. */
 const lastTail = new Map<string, string>();
+
+/** Terminales que pintaron un aviso de los que se cierran con Esc (ver `DIALOG`). */
+const dialogOpen = new Set<string>();
+
+/**
+ * ¿Hay que cerrar un aviso antes de teclear en `sid`? Sí si pintó uno y el agente está libre (con
+ * él trabajando, Esc lo interrumpiría). Se da por cerrado al decirlo: quien llama pulsa Esc.
+ */
+export function takeDialog(sid: string): boolean {
+  if (!dialogOpen.has(sid) || Date.now() - termLastBusyMs(sid) < 4_000) return false;
+  dialogOpen.delete(sid);
+  return true;
+}
 
 /**
  * Tras teclear un mensaje con su Enter: si el agente estaba libre y no arranca, y el texto sigue en
@@ -89,7 +102,9 @@ export function useTermActivity(): Map<string, Activity> {
         status: "",
       };
       // El aviso puede llegar partido entre dos trozos: se mira con un poco de lo anterior.
-      if (MARKER.test(cleanTerm(t.tail.slice(-120) + text))) t.armed = true;
+      const seen = cleanTerm(t.tail.slice(-120) + text);
+      if (MARKER.test(seen)) t.armed = true;
+      if (DIALOG.test(seen)) dialogOpen.add(sid);
       t.tail = (t.tail + text).slice(-TAIL);
       t.lastMs = Date.now();
       if (t.armed) lastBusy.set(sid, t.lastMs);

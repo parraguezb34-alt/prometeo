@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { watchSubmit } from "./activity";
+import { takeDialog, watchSubmit } from "./activity";
 
 export type SessionInfo = {
   id: string;
@@ -65,6 +65,11 @@ export const termSpawn = (
  */
 export async function termWrite(id: string, data: string): Promise<void> {
   if (data.length > 1 && data.endsWith("\r") && !data.startsWith("\x1b")) {
+    // Un aviso abierto (Codex al arrancar con un MCP roto) se comería el mensaje: se cierra antes.
+    if (takeDialog(id)) {
+      await invoke<void>("term_write", { id, data: "\x1b" });
+      await new Promise((ok) => setTimeout(ok, 300));
+    }
     watchSubmit(id, data.slice(0, -1), () => invoke<void>("term_write", { id, data: "\r" }));
     await invoke<void>("term_write", { id, data: data.slice(0, -1) });
     await new Promise((ok) => setTimeout(ok, 180));

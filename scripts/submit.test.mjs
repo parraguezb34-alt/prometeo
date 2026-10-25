@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { needsResubmit, cleanTerm } from "./lib/submit.js";
+import { DIALOG, needsResubmit, cleanTerm } from "./lib/submit.js";
 
 let n = 0;
 function test(name, fn) {
@@ -31,6 +31,12 @@ test("los comandos con «/» y los textos cortos no se repiten", () => {
 
 test("limpia escapes y spinners", () => {
   assert.equal(cleanTerm("\x1b[31m⠋ hola\x1b[0m").trim(), "hola");
+});
+
+test("reconoce el aviso de Codex que se come el teclado", () => {
+  const warn = "Warnings \x1b[2m·\x1b[0m 1 of 1 · MCP · Roblox_Studio\r\n\x1b[1mk\x1b[0m keep & next · \x1b[1mesc\x1b[0m dismiss & close · ctrl+o copy";
+  assert.equal(DIALOG.test(cleanTerm(warn)), true);
+  assert.equal(DIALOG.test(cleanTerm("\x1b[2m esc to interrupt\x1b[0m")), false);
 });
 
 console.log(`${n} pruebas de envío OK`);

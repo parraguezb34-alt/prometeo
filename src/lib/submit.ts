@@ -27,6 +27,13 @@ export function cleanTerm(text: string): string {
 }
 
 /**
+ * Avisos que se quedan con el teclado hasta cerrarlos con Esc. Codex abre uno al arrancar si falla
+ * algún servidor MCP («Warnings · 1 of 1 … esc dismiss & close»): lo que se teclee mientras tanto se
+ * pierde y el mensaje nunca llega.
+ */
+export const DIALOG = /esc\s*dismiss/i;
+
+/**
  * ¿Hay que volver a pulsar Enter? Solo si el agente estaba libre al enviarlo, no se puso a trabajar
  * después y el principio del mensaje sigue en lo último que pintó su terminal. Los comandos con «/»
  * abren paneles en algunos CLIs, y un Enter de más elegiría una opción: con esos no se insiste.
