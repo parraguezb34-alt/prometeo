@@ -272,3 +272,24 @@ test("el freno del veredicto dura hasta la respuesta del líder y un margen", ()
 });
 
 console.log(`\n${n} pruebas pasadas`);
+
+{
+  const { tick: t2, EMPTY_DISPATCH: E } = await import("./lib/dispatcher.js");
+  const NOW2 = 10_000_000;
+  const ag = (name, pace) => ({ name, online: true, hasTerminal: true, blocked: false, lastActivityMs: 0, pace });
+  const hard = [{ id: 1, title: "difícil", notes: "", status: "open", owner: "", parents: [], level: "dificil" }];
+  const send = (agents) => t2(E, { now: NOW2, tasks: hard, agents, leader: "claude", director: true }).send?.agent;
+  assert.equal(send([ag("claude", 0), ag("codex", 0), ag("opencode", 0)]), "codex", "a igualdad, la pareja (no engorda el contexto del líder)");
+  assert.equal(send([ag("claude", -20), ag("codex", 15), ag("opencode", 0)]), "claude", "el líder va mucho más holgado: la hace él");
+  assert.equal(send([ag("claude", 5), ag("codex", 0)]), "codex");
+  assert.equal(send([ag("claude", 0), ag("codex", Infinity)]), "claude", "Codex pasado el 80 %: al líder");
+  assert.equal(send([ag("claude", 30), ag("opencode", 0)]), "claude", "sin Codex, como siempre");
+  // El líder con el ritmo muy por delante no la toma aunque Codex esté ocupado: espera a Codex.
+  const busyCodex = [...hard, { id: 2, title: "otra", notes: "", status: "claimed", owner: "codex", parents: [] }];
+  const r = t2(E, { now: NOW2, tasks: busyCodex, agents: [ag("claude", 30), ag("codex", 0)], leader: "claude", director: true });
+  assert.equal(r.send, null);
+  // Lo simple sigue sin ir al líder; lo asignado, a quien diga.
+  const simple = [{ ...hard[0], level: "simple" }];
+  assert.notEqual(t2(E, { now: NOW2, tasks: simple, agents: [ag("claude", -50), ag("codex", 0)], leader: "claude", director: true }).send?.agent, "claude");
+  console.log("ok - lo difícil se reparte entre el líder y Codex según su cuota");
+}

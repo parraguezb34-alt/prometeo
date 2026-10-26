@@ -18,6 +18,37 @@ pub const FIRST_REVIEWER: &str = "codex";
 pub const FIRST_REVIEWER_MAX_PCT: f64 = 80.0;
 /// Si el primer revisor no decide en este tiempo, la revisión vuelve al líder.
 pub const FIRST_REVIEWER_WAIT_MS: u64 = 20 * 60_000;
+/// Una revisión le cuesta al líder mucho más que a Codex (relee su conversación entera): solo las
+/// hace él si el ritmo de cuota de Codex va al menos esto por delante del suyo.
+pub const REVIEW_PACE_MARGIN: f64 = 25.0;
+
+/// Ritmo de gasto de una cuota (`{ windows: [{ key, label, used_pct, resets_at }] }`): puntos por
+/// encima (+) o por debajo (−) de un gasto parejo en su peor ventana; la de 5 h, que va a rachas,
+/// con 15 de margen. `INFINITY` si alguna pasa del 80 %; 0 si no se sabe. Igual que `quotaPace`.
+pub fn limits_pace(limits: &serde_json::Value, now: u64) -> f64 {
+    const H: u64 = 3_600_000;
+    let Some(ws) = limits["windows"].as_array() else { return 0.0 };
+    let mut worst = f64::NEG_INFINITY;
+    for w in ws {
+        let used = w["used_pct"].as_f64().unwrap_or(0.0);
+        if used >= 80.0 {
+            return f64::INFINITY;
+        }
+        let name = format!("{} {}", w["key"].as_str().unwrap_or(""), w["label"].as_str().unwrap_or("")).to_lowercase();
+        let len = if ["week", "semana", "seven", "7d", "7 d"].iter().any(|k| name.contains(k)) {
+            7 * 24 * H
+        } else if ["session", "sesión", "sesion", "5 h", "5h", "five"].iter().any(|k| name.contains(k)) {
+            5 * H
+        } else {
+            continue;
+        };
+        let Some(reset) = w["resets_at"].as_u64() else { continue };
+        let left = reset.saturating_sub(now).min(len);
+        let ahead = used - 100.0 * (1.0 - left as f64 / len as f64);
+        worst = worst.max(if len < 24 * H { ahead - 15.0 } else { ahead });
+    }
+    if worst == f64::NEG_INFINITY { 0.0 } else { worst }
+}
 
 pub fn fix_limit(inner: &HubInner) -> u32 {
     if inner.fix_limit == 0 { DEFAULT_FIX_LIMIT } else { inner.fix_limit }
@@ -68,6 +99,11 @@ pub fn quota_pct(inner: &HubInner, agent: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Ritmo de la cuota de un agente (ver `limits_pace`).
+pub fn quota_pace(inner: &HubInner, agent: &str) -> f64 {
+    inner.limits.get(&agent.to_lowercase()).map(|l| limits_pace(l, now_ms())).unwrap_or(0.0)
+}
+
 /// ¿Puede el primer revisor ocuparse ahora de una entrega? Conectado y con cuota.
 pub fn first_reviewer_ready(inner: &HubInner) -> bool {
     is_online(inner, FIRST_REVIEWER) && quota_pct(inner, FIRST_REVIEWER) < FIRST_REVIEWER_MAX_PCT
@@ -80,7 +116,9 @@ pub fn reviewer_for_task(inner: &HubInner, agent: &str, id: u64) -> Option<Strin
     let level = inner.tasks.iter().find(|t| t.id == id).map(|t| t.level.as_str()).unwrap_or("");
     let first = FIRST_REVIEWER;
     let light = matches!(level, "simple" | "media");
-    if light && !agent.eq_ignore_ascii_case(first) && !leader.eq_ignore_ascii_case(first) && first_reviewer_ready(inner) {
+    // Que duren las dos cuotas: si la de Codex va muy por delante de la del líder, revisa el líder.
+    let balanced = quota_pace(inner, first) <= quota_pace(inner, &leader) + REVIEW_PACE_MARGIN;
+    if light && !agent.eq_ignore_ascii_case(first) && !leader.eq_ignore_ascii_case(first) && first_reviewer_ready(inner) && balanced {
         Some(first.to_string())
     } else {
         Some(leader)

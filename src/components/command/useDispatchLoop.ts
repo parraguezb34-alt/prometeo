@@ -10,6 +10,8 @@ import type { DAgent, DispatchState } from "../../lib/dispatcher";
 import { termWrite } from "../../lib/pty";
 import { termLastBusyMs } from "../../lib/activity";
 import { dispatchConfig, getSettings } from "../../lib/settings";
+import { quotaPace } from "../../lib/limits";
+import type { AgentLimits } from "../../lib/limits";
 import type { AgentState } from "../TeamModal";
 import { BOOT_MS, WORK_KINDS, claimTimes, panelForAgent } from "./shared";
 
@@ -25,6 +27,8 @@ export type DispatchLatest = {
     events: TeamEvent[];
     states: Map<string, AgentState>;
     inbox: Record<string, InboxInfo>;
+    /** Límites de uso de cada agente (para repartir lo difícil según su cuota). */
+    limits?: Record<string, AgentLimits>;
   };
 
 export function useDispatchLoop({
@@ -74,6 +78,7 @@ export function useDispatchLoop({
             lastActivityMs: cur.lastByAgent.get(a.name)?.ts_ms ?? 0,
             lastWorkMs: lastWork.get(a.name) ?? 0,
             busy: !!sid && now - termLastBusyMs(sid) < 5_000,
+            pace: quotaPace(cur.limits?.[a.name], now),
           });
         }
         const res = dispatchTick(dispatchRef.current, {

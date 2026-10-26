@@ -306,6 +306,28 @@ mod inbox_tests {
     }
 
     #[test]
+    fn el_ritmo_de_las_cuotas_decide_quien_revisa() {
+        let now = now_ms();
+        let h3 = 3_600_000u64;
+        let week = |used: f64, left_h: u64| {
+            serde_json::json!({ "windows": [ { "key": "week", "label": "Semana", "used_pct": used, "resets_at": now + left_h * h3 } ] })
+        };
+        // A mitad de semana: 40 % va 10 por debajo; 70 %, 20 por delante.
+        assert_eq!(limits_pace(&week(40.0, 84), now).round(), -10.0);
+        assert_eq!(limits_pace(&week(70.0, 84), now).round(), 20.0);
+        assert_eq!(limits_pace(&week(85.0, 84), now), f64::INFINITY);
+        let mut h = delivered();
+        with_codex(&mut h, 10.0);
+        h.tasks[0].level = "media".into();
+        h.limits.insert("codex".into(), week(60.0, 84));
+        h.limits.insert("claude".into(), week(40.0, 84));
+        assert_eq!(reviewer_for_task(&h, "opencode", 1).as_deref(), Some("codex"), "20 de diferencia no basta: revisar le cuesta más al líder");
+        h.limits.insert("codex".into(), week(75.0, 120));
+        h.limits.insert("claude".into(), week(5.0, 60));
+        assert_eq!(reviewer_for_task(&h, "opencode", 1).as_deref(), Some("claude"), "Codex va muy por delante y el líder sobrado");
+    }
+
+    #[test]
     fn codex_aprueba_corrige_o_pasa_al_lider() {
         let mut h = delivered();
         with_codex(&mut h, 10.0);

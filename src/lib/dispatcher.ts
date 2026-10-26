@@ -36,7 +36,15 @@ export type DAgent = {
   lastWorkMs?: number;
   /** Su terminal se ve trabajando ahora mismo. */
   busy?: boolean;
+  /** Ritmo de su cuota (ver `quotaPace`): + gasta rápido, − le sobra, Infinity pasado el 80 %. */
+  pace?: number;
 };
+
+/** El otro modelo fuerte del equipo: comparte lo difícil con el líder para que duren las dos cuotas. */
+export const STRONG_PARTNER = "codex";
+/** El líder hace lo difícil solo si su ritmo no va más de esto por delante del de su pareja
+ *  (trabajar le engorda el contexto, que relee en cada revisión: a igualdad, mejor la pareja). */
+export const LEADER_HARD_MARGIN = 10;
 
 export type DispatchState = {
   /** Avisos en vuelo: tarea → a quién se pidió y cuándo. Esperan que la reclamen. */
@@ -157,20 +165,22 @@ export function retryTask(state: DispatchState, taskId: number): DispatchState {
 }
 
 /**
- * ¿Puede `agent` recibir esta tarea? Si va dirigida a alguien, solo ese. En modo director
- * las difíciles son del líder y el resto de los demás (salvo que no haya nadie más).
+ * ¿Puede `agent` recibir esta tarea? Si va dirigida a alguien, solo ese. En modo director las
+ * difíciles son de los modelos fuertes, el líder y su pareja (`strong`, si está disponible): el
+ * líder solo si su cuota no va bastante peor (`leaderHard`). El resto, de los demás (salvo que no
+ * haya nadie más).
  */
 export function eligible(
   task: DTask,
   agent: string,
-  ctx: { leader: string; director: boolean; hasWorkers: boolean },
+  ctx: { leader: string; director: boolean; hasWorkers: boolean; strong?: string; leaderHard?: boolean },
   cfg = DISPATCH_CONFIG,
 ): boolean {
   const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
   if (task.assign) return same(task.assign, agent);
   const isLeader = !!ctx.leader && same(agent, ctx.leader);
   if (ctx.director && ctx.leader) {
-    if (task.level === "dificil") return isLeader;
+    if (task.level === "dificil") return (isLeader && ctx.leaderHard !== false) || (!!ctx.strong && same(agent, ctx.strong));
     return !isLeader || !ctx.hasWorkers;
   }
   return !(cfg.leaderMode === "never" && isLeader);
@@ -304,12 +314,27 @@ export function tick(
   // 5) Primera tarea para la que haya agente: los trabajadores antes que el líder
   //    (que coordina), y entre ellos el que lleva más tiempo sin recibir nada.
   const hasWorkers = agents.some((a) => a.online && a.hasTerminal && a.name !== leader);
-  const ctx = { leader, director, hasWorkers };
+  // Lo difícil se lo reparten el líder y su pareja fuerte según el ritmo de sus cuotas.
+  const partner = agents.find((a) => a.name.toLowerCase() === STRONG_PARTNER && a.name !== leader && a.online && a.hasTerminal);
+  const partnerPace = partner ? (partner.pace ?? 0) : Infinity;
+  const leaderPace = agents.find((a) => a.name === leader)?.pace ?? 0;
+  const ctx = {
+    leader,
+    director,
+    hasWorkers,
+    strong: partner && partnerPace !== Infinity ? partner.name : "",
+    leaderHard: partnerPace === Infinity || leaderPace <= partnerPace + LEADER_HARD_MARGIN,
+  };
+  const hardScore = (a: DAgent) => (a.pace ?? 0) + (a.name === leader ? LEADER_HARD_MARGIN : 0);
   for (const task of ready) {
     const tried = state.triedBy[task.id] ?? [];
     const options = free
       .filter((a) => !tried.includes(a.name) && eligible(task, a.name, ctx, cfg))
       .sort((a, b) => {
+        if (director && task.level === "dificil" && !task.assign) {
+          const d = hardScore(a) - hardScore(b);
+          if (d !== 0) return d;
+        }
         const lead = cfg.leaderMode === "last" ? Number(a.name === leader) - Number(b.name === leader) : 0;
         if (lead !== 0) return lead;
         return (state.lastSentToAgent[a.name] ?? 0) - (state.lastSentToAgent[b.name] ?? 0);

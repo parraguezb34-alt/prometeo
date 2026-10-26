@@ -173,3 +173,24 @@ console.log(`${n} pruebas de límites OK`);
   assert.equal(burnAlerts(lim(99, 10, false), new Map(), new Map(), 0).length, 0);
   console.log("ok - aviso de gasto rápido de la cuota");
 }
+
+{
+  const { quotaPace } = await import("./lib/limits.js");
+  const H = 3_600_000;
+  const now = 1_000 * H;
+  const lim = (week, wLeftH, session = 0, sLeftH = 5) => ({
+    windows: [
+      { key: "session", label: "Sesión (5 h)", used_pct: session, resets_at: now + sLeftH * H },
+      { key: "week", label: "Semana", used_pct: week, resets_at: now + wLeftH * H },
+    ],
+    exact: true, note: "", ts_ms: 0,
+  });
+  // Mitad de la semana (84 h de 168): con el 40 % va 10 puntos por debajo de un gasto parejo.
+  assert.equal(Math.round(quotaPace(lim(40, 84, 0, 5), now)), -10);
+  assert.equal(Math.round(quotaPace(lim(70, 84, 0, 5), now)), 20, "por delante: gasta rápido");
+  // La de 5 h también cuenta (con 15 de margen): 60 % gastado en la primera hora va muy por delante.
+  assert.equal(Math.round(quotaPace(lim(10, 84, 60, 4), now)), 25);
+  assert.equal(quotaPace(lim(85, 84), now), Infinity, "pasado el 80 %, nada pesado");
+  assert.equal(quotaPace(undefined, now), 0, "sin datos, neutro");
+  console.log("ok - ritmo de la cuota");
+}

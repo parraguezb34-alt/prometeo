@@ -1686,6 +1686,7 @@ export function CommandCenter() {
     inbox: state?.inbox ?? {},
     panels: layout.panels,
     lastByAgent,
+    limits: state?.limits,
   };
 
   // Quién trabaja ahora (por su terminal o por sus acciones recientes): su «pensando…» en el chat.

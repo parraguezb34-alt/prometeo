@@ -81,7 +81,7 @@ fn default_strength(name: &str) -> &'static str {
     } else if n.contains("antigravity") || n.contains("agy") || n.contains("gemini") {
         "leer mucho, buscar en la web y contexto largo"
     } else if n.contains("codex") {
-        "código preciso y refactors"
+        "lo difícil junto al líder: código complejo, bugs y refactors (cuota propia)"
     } else {
         ""
     }
@@ -139,7 +139,26 @@ fn team_roster(state: &Value, now: u64) -> String {
             parts.push(m);
         }
         match usage_step(&state["limits"][name.as_str()], now) {
-            Some(u) => parts.push(format!("uso: {u}")),
+            Some(u) => {
+                parts.push(format!("uso: {u}"));
+                // El ritmo (en escalones, para no reinyectar el contexto a cada punto) dice quién
+                // de los fuertes (Claude y Codex) debe llevarse lo difícil para que duren las dos cuotas.
+                let low = name.to_lowercase();
+                let pace = lienzo_lib::hub::limits_pace(&state["limits"][name.as_str()], now);
+                if low.contains("claude") || low.contains("codex") {
+                parts.push(
+                    if pace == f64::INFINITY {
+                        "ritmo: sin margen".into()
+                    } else if pace >= 15.0 {
+                        "ritmo: gasta rápido".into()
+                    } else if pace <= -15.0 {
+                        "ritmo: le sobra".into()
+                    } else {
+                        "ritmo: parejo".to_string()
+                    },
+                );
+                }
+            }
             None if name.to_lowercase().contains("opencode") => parts.push("uso: sin límite (modelos gratis)".into()),
             None => {}
         }
@@ -2874,7 +2893,7 @@ mod tests {
             }
         });
         let r = team_roster(&state, now);
-        assert!(r.contains("- claude · Sonnet 5 · uso: ⛔ Semana casi agotado, se reinicia en 3 días"), "{r}");
+        assert!(r.contains("- claude · Sonnet 5 · uso: ⛔ Semana casi agotado, se reinicia en 3 días: no le des trabajo pesado · ritmo: sin margen"), "{r}");
         assert!(r.contains("se le da bien: diseño, arquitectura y lo difícil"), "{r}");
         assert!(r.contains("- opencode · uso: sin límite (modelos gratis)"), "{r}");
         assert_eq!(r.matches("- opencode").count(), 1, "sin repetidos: {r}");

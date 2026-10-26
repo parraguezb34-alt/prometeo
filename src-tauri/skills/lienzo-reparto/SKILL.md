@@ -8,7 +8,7 @@ description: A qué agente darle cada tarea según para qué sirve cada uno, cu�
 `team_context` lista a cada agente en línea con su modelo, su **uso** (cuánto le queda de su cuota) y lo que **se le da bien**. Con eso decides a quién va cada tarea (`assign` en `team_task_create`).
 
 ## 1. Qué pide la tarea
-- **Difícil o de diseño** (arquitectura, decisiones, bugs raros, revisar el trabajo de otros): el modelo más capaz, normalmente el líder.
+- **Difícil o de diseño** (arquitectura, decisiones, bugs raros, revisar el trabajo de otros): los modelos fuertes, el líder y Codex si está. Entre ellos, el que vaya más holgado de **ritmo** (`team_context`): así duran las dos cuotas.
 - **Mecánica o en volumen** (renombrar, traducir, mover, tests repetitivos, aplicar un patrón conocido en muchos archivos): un modelo barato o gratis.
 - **Leer mucho o buscar fuera** (documentación larga, varios archivos grandes, investigar en la web): el de contexto largo y búsqueda.
 - Si el usuario escribió fortalezas en Ajustes → Equipo, mandan sobre estas pautas.

@@ -59,6 +59,39 @@ export function quotaAlerts(limits: Record<string, AgentLimits>, seen: Set<strin
   return out;
 }
 
+/** Duración de una ventana de límite (ms) si se reconoce: la de 5 h o la semanal. */
+export function windowMs(w: LimitWindow): number | null {
+  const s = `${w.key} ${w.label}`;
+  if (/week|semana|seven|7\s*d/i.test(s)) return 7 * 24 * 3_600_000;
+  if (/session|sesi[oó]n|5\s*h|five/i.test(s)) return 5 * 3_600_000;
+  return null;
+}
+
+/** A partir de este uso, un agente no recibe trabajo pesado. */
+export const PACE_FULL_PCT = 80;
+/** La ventana de 5 h va a rachas: solo cuenta cuando va más de esto por delante. */
+const SESSION_SLACK = 15;
+
+/**
+ * Ritmo de gasto de la cuota: cuántos puntos va por encima (+) o por debajo (−) de un gasto
+ * parejo, en su peor ventana. Con el 40 % gastado a mitad de la semana va a −10: le sobra. La de
+ * 5 h, que va a rachas, cuenta con 15 puntos de margen.
+ * `Infinity` si alguna ventana pasa del 80 %; 0 si no se sabe.
+ */
+export function quotaPace(l: AgentLimits | undefined, now: number): number {
+  if (!l) return 0;
+  let worst = -Infinity;
+  for (const w of l.windows) {
+    if (w.used_pct >= PACE_FULL_PCT) return Infinity;
+    const len = windowMs(w);
+    if (!len || !w.resets_at) continue;
+    const left = Math.min(len, Math.max(0, w.resets_at - now));
+    const ahead = w.used_pct - 100 * (1 - left / len);
+    worst = Math.max(worst, len < 24 * 3_600_000 ? ahead - SESSION_SLACK : ahead);
+  }
+  return worst === -Infinity ? 0 : worst;
+}
+
 /** Gasto rápido: cuánto puede subir una ventana en `BURN_MS` antes de avisar, aunque no llegue al
  * 80 %. La semanal, 4 puntos (el 4 % de toda la semana en media hora no es trabajo normal: suele
  * ser un banco de pruebas o subagentes lanzando el modelo una y otra vez); la de 5 h, 35. */
