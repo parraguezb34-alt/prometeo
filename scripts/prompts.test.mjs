@@ -34,9 +34,65 @@ test("OpenCode: permiso con Allow once / Always allow / Reject (pantalla real)",
   assert.deepEqual(
     p.options.map((o) => [o.label, o.keys, o.tone]),
     [
-      ["Permitir una vez", LEFT + LEFT + "\r", "yes"],
-      ["Permitir siempre", LEFT + LEFT + RIGHT + "\r", "always"],
-      ["Rechazar", LEFT + LEFT + RIGHT + RIGHT + "\r", "no"],
+      // El selector de OpenCode da la vuelta y empieza en «Allow once»: ← va a «Reject».
+      // «Always allow» y «Reject» piden un segundo Enter (confirmar / motivo vacío).
+      ["Permitir una vez", "\r", "yes"],
+      ["Permitir siempre", RIGHT + "\r\r", "always"],
+      ["Rechazar", LEFT + "\r\r", "no"],
+    ],
+  );
+});
+
+test("OpenCode: el segundo paso de «Always allow» (Confirm / Cancel)", () => {
+  const p = detectPrompt([
+    "  △ Always allow",
+    "",
+    "  This will always allow the following patterns for this project.",
+    "  - C:/Users/parra/Projects/lienzo/*",
+    "",
+    "   Confirm   Cancel          ⇆ select  enter confirm  esc cancel",
+  ]);
+  assert.equal(p.title, "¿Permitir siempre?");
+  assert.deepEqual(p.detail, [
+    "This will always allow the following patterns for this project.",
+    "C:/Users/parra/Projects/lienzo/*",
+  ]);
+  assert.deepEqual(
+    p.options.map((o) => [o.label, o.keys]),
+    [
+      ["Confirmar", "\r"],
+      ["Cancelar", RIGHT + "\r"],
+    ],
+  );
+});
+
+test("Codex: «Would you like to run the following command?» con un comando largo en medio", () => {
+  const p = detectPrompt([
+    "• Explored",
+    "  └ Read DESARROLLO.md",
+    "",
+    "  Would you like to run the following command?",
+    "",
+    "  Reason: Necesito leer el repositorio de Prometeo fuera de la carpeta de trabajo",
+    "",
+    "  $ Get-Content -LiteralPath 'C:\\Users\\parra\\Projects\\lienzo\\src-tauri\\src\\hub\\",
+    "  server.rs' | Select-Object -Skip 700 -First 80",
+    "",
+    "› 1. Yes, proceed (y)",
+    "  2. Yes, and don't ask again for commands that start with `Get-Content` (p)",
+    "  3. No, and tell Codex what to do differently (esc)",
+    "",
+    "  Press enter to confirm or esc to cancel",
+  ]);
+  assert.equal(p.title, "Would you like to run the following command?");
+  assert.equal(p.detail[0], "Reason: Necesito leer el repositorio de Prometeo fuera de la carpeta de trabajo");
+  assert.match(p.detail[1], /^\$ Get-Content/);
+  assert.deepEqual(
+    p.options.map((o) => [o.label, o.keys, o.tone]),
+    [
+      ["Sí, adelante", "\r", "yes"],
+      ["Sí, y no volver a preguntar", DOWN + "\r", "always"],
+      ["No, y explicar qué hacer", DOWN + DOWN + "\r", "no"],
     ],
   );
 });
