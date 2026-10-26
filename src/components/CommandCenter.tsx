@@ -2364,22 +2364,28 @@ export function CommandCenter() {
         role="tablist"
         data-pill="1"
         onKeyDown={(e) => {
+          let targetId: CenterView | undefined;
           if (e.key === "ArrowRight" || e.key === "ArrowDown") {
             e.preventDefault();
             const idx = VIEWS.findIndex((v) => v.id === view);
             const next = VIEWS[(idx + 1) % VIEWS.length];
-            if (next) setView(next.id);
+            if (next) targetId = next.id;
           } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
             e.preventDefault();
             const idx = VIEWS.findIndex((v) => v.id === view);
             const prev = VIEWS[(idx - 1 + VIEWS.length) % VIEWS.length];
-            if (prev) setView(prev.id);
+            if (prev) targetId = prev.id;
           } else if (e.key === "Home") {
             e.preventDefault();
-            setView(VIEWS[0].id);
+            targetId = VIEWS[0]?.id;
           } else if (e.key === "End") {
             e.preventDefault();
-            setView(VIEWS[VIEWS.length - 1].id);
+            targetId = VIEWS[VIEWS.length - 1]?.id;
+          }
+          if (targetId) {
+            setView(targetId);
+            const btn = e.currentTarget.querySelector<HTMLButtonElement>(`button[data-view="${targetId}"]`);
+            btn?.focus();
           }
         }}
       >
@@ -2387,6 +2393,7 @@ export function CommandCenter() {
         {VIEWS.map((v) => (
           <button
             key={v.id}
+            data-view={v.id}
             role="tab"
             tabIndex={view === v.id ? 0 : -1}
             aria-selected={view === v.id}

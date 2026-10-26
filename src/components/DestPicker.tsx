@@ -93,8 +93,11 @@ export function DestPicker({
     <div className="dp" ref={ref} onKeyDown={onKey}>
       <button
         className="dp-btn"
+        role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls="dp-listbox"
+        aria-activedescendant={open && hi >= 0 ? `dp-opt-${hi}` : undefined}
         onClick={() => setOpen((o) => !o)}
         title="A quién va el mensaje"
       >
@@ -116,9 +119,9 @@ export function DestPicker({
       {open && (
         <div
           ref={listRef}
+          id="dp-listbox"
           className="dp-menu"
           role="listbox"
-          aria-activedescendant={hi >= 0 ? `dp-opt-${hi}` : undefined}
         >
           {options.map((o, i) => {
             const name = o.kind === "agent" ? o.name : "";

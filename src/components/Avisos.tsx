@@ -26,37 +26,51 @@ function AvisoCard({ a, onOpen, onClose }: { a: Live; onOpen: () => void; onClos
       className="av-card"
       data-kind={a.kind}
       data-leaving={a.leaving ? "1" : "0"}
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
       onAnimationEnd={(e) => {
         if (e.animationName === "av-out") onClose();
       }}
       style={{ ["--av-c" as string]: color, ["--av-life" as string]: `${LIFE_MS[a.kind] ?? 7000}ms` }}
     >
-      <span className="av-avatar" aria-hidden="true">
-        {a.agent ? agentInitial(a.agent) : <PixelFlame size={18} />}
-        {badge && (
-          <i className="av-badge" data-kind={a.kind}>
-            <Icon name={badge} size={10} />
-          </i>
-        )}
-      </span>
-      <span className="av-text">
-        <span className="av-top">
-          <span className="av-app">Prometeo</span>
-          <span className="av-when">ahora</span>
-        </span>
-        <b>{a.title}</b>
-        {a.body && <span className="av-body">{a.body}</span>}
-      </span>
       <button
+        type="button"
+        className="av-main"
+        onClick={onOpen}
+        aria-label={a.body ? `${a.title}: ${a.body}` : a.title}
+        style={{
+          background: "transparent",
+          border: "none",
+          padding: 0,
+          margin: 0,
+          font: "inherit",
+          color: "inherit",
+          textAlign: "left",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 12,
+          flex: 1,
+          minWidth: 0,
+        }}
+      >
+        <span className="av-avatar" aria-hidden="true">
+          {a.agent ? agentInitial(a.agent) : <PixelFlame size={18} />}
+          {badge && (
+            <i className="av-badge" data-kind={a.kind}>
+              <Icon name={badge} size={10} />
+            </i>
+          )}
+        </span>
+        <span className="av-text">
+          <span className="av-top">
+            <span className="av-app">Prometeo</span>
+            <span className="av-when">ahora</span>
+          </span>
+          <b>{a.title}</b>
+          {a.body && <span className="av-body">{a.body}</span>}
+        </span>
+      </button>
+      <button
+        type="button"
         className="av-x"
         aria-label="Cerrar aviso"
         onClick={(e) => {
