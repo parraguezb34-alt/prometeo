@@ -54,7 +54,7 @@ fn tasks_root_in(root: &Path, onedrive: &[String], local: &Path) -> PathBuf {
 /// La carpeta de las copias de las tareas del proyecto (ver `tasks_root_in`).
 pub fn tasks_root(root: &Path) -> PathBuf {
     let local = std::env::var("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
-    tasks_root_in(root, &onedrive_dirs(), &local.join("lienzo").join("tareas"))
+    tasks_root_in(root, &onedrive_dirs(), &local.join(crate::hub::DATA_NAME).join("tareas"))
 }
 
 /// Carpeta aislada de la tarea `task`. Una copia ya empezada en el sitio de antes

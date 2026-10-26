@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ago, errMsg } from "../../lib/team";
-import { updateApply, updateCheck } from "../../lib/update";
+import { appAbout, updateApply, updateCheck } from "../../lib/update";
 import type { UpdateInfo } from "../../lib/update";
 import { Icon } from "../Icon";
 
@@ -11,6 +11,12 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
   const [upd, setUpd] = useState<UpdateInfo | null>(null);
   const [updAsk, setUpdAsk] = useState(false);
   const [updBusy, setUpdBusy] = useState(false);
+  const [dev, setDev] = useState(false);
+  useEffect(() => {
+    void appAbout()
+      .then((a) => setDev(!!a.dev))
+      .catch(() => {});
+  }, []);
   // Se mira al abrir, cada 45 s y al volver a la ventana (es solo comparar fechas de archivos).
   useEffect(() => {
     const check = () => void updateCheck().then(setUpd).catch(() => {});
@@ -32,6 +38,13 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
     }
   };
 
+  // Prometeo Dev no se actualiza (se recompila con npm run dev:app): en su lugar, su etiqueta.
+  if (dev)
+    return (
+      <span className="cc-dev" title="Prometeo Dev: la versión de desarrollo, con sus datos aparte (%APPDATA%\lienzo-dev). Úsala con carpetas de prueba.">
+        DEV
+      </span>
+    );
   if (!upd?.available) return null;
   return (
     <div className="cc-upd">

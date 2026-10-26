@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const names = ["lienzo-mcp.exe", "lienzo.exe", "WebView2Loader.dll"];
-const dirs = ["src-tauri/target/debug", "src-tauri/target/release"];
+const dirs = ["src-tauri/target/debug", "src-tauri/target/release", "src-tauri/target-dev/release"];
 
 /** ¿Está bloqueado el archivo? (se puede abrir para escritura → libre) */
 function locked(path) {

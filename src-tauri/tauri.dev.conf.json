@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Prometeo Dev",
+  "identifier": "dev.lienzo.app.dev",
+  "app": {
+    "windows": [
+      {
+        "title": "Prometeo Dev",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 800,
+        "minHeight": 520,
+        "center": true,
+        "decorations": false,
+        "shadow": true,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disk-cache-size=20971520 --disable-component-update"
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}

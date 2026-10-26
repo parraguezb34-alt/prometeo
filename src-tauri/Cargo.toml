@@ -1,6 +1,6 @@
 [package]
 name = "lienzo"
-version = "1.0.118"
+version = "1.0.119"
 description = "Prometeo: centro de mando para dirigir un equipo de agentes de IA"
 authors = ["Prometeo"]
 edition = "2024"
@@ -8,6 +8,10 @@ edition = "2024"
 default-run = "lienzo"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+# Prometeo Dev (`npm run dev:app`): la versión de desarrollo, con sus datos aparte.
+dev = []
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary

@@ -9,7 +9,15 @@ export const updateApply = () => invoke<void>("update_apply");
 
 export type Change = { hash: string; ts_ms: number; subject: string };
 /** La versión que corre: número, commit, cuándo se compiló y sus últimos commits. */
-export type About = { version: string; commit: string; dirty: boolean; built_ms: number; changes: Change[] };
+export type About = {
+  version: string;
+  commit: string;
+  dirty: boolean;
+  built_ms: number;
+  changes: Change[];
+  /** Es Prometeo Dev (la versión de desarrollo, con sus datos aparte). */
+  dev?: boolean;
+};
 export const appAbout = () => invoke<About>("app_about");
 
 /** Lo que se vio la última vez que se abrió Prometeo (para enseñar las novedades al actualizar). */

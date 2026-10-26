@@ -680,9 +680,15 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Prometeo Dev (compilado con `--features dev`, ver `npm run dev:app`): la versión de desarrollo,
+/// con sus datos aparte para no pisar al Prometeo instalado con el que trabajan los agentes.
+pub const IS_DEV: bool = cfg!(feature = "dev");
+/// Carpeta de sus datos en %APPDATA% (y de las copias de tareas en %LOCALAPPDATA%).
+pub const DATA_NAME: &str = if IS_DEV { "lienzo-dev" } else { "lienzo" };
+
 pub fn data_dir() -> std::path::PathBuf {
     let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
-    let dir = std::path::PathBuf::from(base).join("lienzo");
+    let dir = std::path::PathBuf::from(base).join(DATA_NAME);
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -712,6 +718,8 @@ pub fn terminal_env_vars() -> Vec<(String, String)> {
         Some((url, token)) => vec![
             ("LIENZO_HUB".to_string(), url),
             ("LIENZO_TOKEN".to_string(), token),
+            // De qué Prometeo es el hub: un puente de la otra versión no lo toma por el suyo.
+            ("LIENZO_DATA".to_string(), DATA_NAME.to_string()),
         ],
         None => vec![],
     }

@@ -22,3 +22,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Prometeo Dev (npm run dev:app)
+src-tauri/target-dev
+
+# Lo que escribe Prometeo al conectar a sus agentes a este repo (rutas de esta máquina)
+.mcp.json
+opencode.json
+.codex/
+.agents/
+.claude/
+.opencode/
+.lienzo/

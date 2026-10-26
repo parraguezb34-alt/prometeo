@@ -14,8 +14,13 @@ pub struct HubClient {
 }
 
 impl HubClient {
-    /// Hub from the environment (terminals spawned by lienzo).
+    /// Hub from the environment (terminals spawned by lienzo). Solo si es de este mismo Prometeo
+    /// (`LIENZO_DATA`; sin ella, el normal): un agente abierto desde el otro no se cruza de hub.
     fn from_env() -> Option<HubClient> {
+        let data = std::env::var("LIENZO_DATA").unwrap_or_else(|_| "lienzo".into());
+        if data != super::DATA_NAME {
+            return None;
+        }
         let (Ok(url), Ok(token)) = (std::env::var("LIENZO_HUB"), std::env::var("LIENZO_TOKEN"))
         else {
             return None;
@@ -32,7 +37,7 @@ impl HubClient {
     /// Hub from the discovery file the app rewrites on every launch.
     fn from_file() -> Option<HubClient> {
         let base = std::env::var("APPDATA").ok()?;
-        let path = std::path::PathBuf::from(base).join("lienzo").join("hub.json");
+        let path = std::path::PathBuf::from(base).join(super::DATA_NAME).join("hub.json");
         let raw = std::fs::read_to_string(path).ok()?;
         let v: Value = serde_json::from_str(&raw).ok()?;
         Some(HubClient {

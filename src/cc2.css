@@ -2266,6 +2266,18 @@ button.cc-lead {
   right: 56px;
 }
 
+/* Prometeo Dev: la versión de desarrollo se distingue de un vistazo */
+.cc-dev {
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
 /* Actualizar Prometeo (arriba a la derecha) */
 .cc-upd {
   position: relative;

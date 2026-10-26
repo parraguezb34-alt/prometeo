@@ -1,7 +1,7 @@
 {
   "name": "lienzo",
   "private": true,
-  "version": "1.0.118",
+  "version": "1.0.119",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,6 +10,7 @@
     "test": "node scripts/test-dispatcher.mjs",
     "pretauri": "node scripts/unblock-bins.mjs",
     "release": "node scripts/unblock-bins.mjs && node scripts/version.mjs && tauri build",
+    "dev:app": "node scripts/dev-app.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

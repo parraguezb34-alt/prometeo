@@ -44,7 +44,8 @@ pub fn clean_profile(profile: &Path) -> u64 {
 /// El perfil del visor de esta app: `%LOCALAPPDATA%\<identificador>\EBWebView`.
 fn profile_dir() -> Option<PathBuf> {
     let local = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(local).join("dev.lienzo.app").join("EBWebView"))
+    let id = if crate::hub::IS_DEV { "dev.lienzo.app.dev" } else { "dev.lienzo.app" };
+    Some(PathBuf::from(local).join(id).join("EBWebView"))
 }
 
 /// Se llama al arrancar, antes de crear las ventanas.

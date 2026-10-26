@@ -116,6 +116,10 @@ pub fn check_in(source: &Path, current: &Path) -> UpdateInfo {
 
 #[tauri::command]
 pub async fn update_check() -> UpdateInfo {
+    // Prometeo Dev se recompila con `npm run dev:app`; el instalador es del Prometeo normal.
+    if crate::hub::IS_DEV {
+        return UpdateInfo { reason: "Prometeo Dev no se actualiza: se recompila con npm run dev:app".into(), ..Default::default() };
+    }
     match std::env::current_exe() {
         Ok(cur) => check_in(&source_dir(), &cur),
         Err(e) => UpdateInfo { reason: e.to_string(), ..Default::default() },
@@ -139,6 +143,8 @@ pub struct About {
     dirty: bool,
     built_ms: u64,
     changes: Vec<Change>,
+    /// Es Prometeo Dev (la versión de desarrollo, con sus datos aparte).
+    dev: bool,
 }
 
 /// Las líneas `hash<US>fecha<US>asunto` que deja build.rs.
@@ -162,6 +168,7 @@ pub fn app_about() -> About {
         dirty: !env!("PROMETEO_DIRTY").is_empty(),
         built_ms: env!("PROMETEO_BUILT_MS").parse().unwrap_or(0),
         changes: parse_changes(include_str!(concat!(env!("OUT_DIR"), "/cambios.txt"))),
+        dev: crate::hub::IS_DEV,
     }
 }
 

@@ -144,6 +144,14 @@ fn mcp_exe_path() -> Result<String, String> {
 /// the hub's HTTP API (so scripts can connect agents too).
 pub fn connect_agent(agent: &str, project: &Path) -> Result<(Vec<String>, Vec<String>), String> {
     let exe = mcp_exe_path()?;
+    // Prometeo Dev no se queda los proyectos del Prometeo normal: reescribiría su puente y los
+    // agentes de ese proyecto dejarían de llegar a su equipo.
+    if crate::hub::IS_DEV && foreign_bridge(project, &exe) {
+        return Err(format!(
+            "{} ya está conectada al Prometeo normal: en Prometeo Dev abre una carpeta de pruebas.",
+            project.display()
+        ));
+    }
     let (mut files, notes) = match agent {
         "claude" => connect_claude(project, &exe),
         "codex" => connect_codex(project, &exe),
@@ -153,6 +161,21 @@ pub fn connect_agent(agent: &str, project: &Path) -> Result<(Vec<String>, Vec<St
     }?;
     files.extend(crate::skills::sync_files(project));
     Ok((files, notes))
+}
+
+/// ¿Las configuraciones del proyecto apuntan a otro puente de lienzo (el de otro Prometeo)?
+fn foreign_bridge(project: &Path, exe: &str) -> bool {
+    [
+        project.join(".mcp.json"),
+        project.join("opencode.json"),
+        project.join(".agents").join("mcp_config.json"),
+        project.join(".codex").join("config.toml"),
+        project.join(".codex").join("hooks.json"),
+        project.join(".claude").join("settings.json"),
+    ]
+    .iter()
+    .filter_map(|p| std::fs::read_to_string(p).ok())
+    .any(|s| s.contains("lienzo-mcp") && !uses_bridge(&s, exe))
 }
 
 fn project_of(app: &tauri::AppHandle) -> Option<String> {
@@ -169,6 +192,13 @@ fn read_json(path: &Path) -> Value {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(|| json!({}))
+}
+
+fn write_text(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, text).map_err(|e| e.to_string())
 }
 
 fn write_json_pretty(path: &Path, v: &Value) -> Result<(), String> {
@@ -380,7 +410,16 @@ fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>)
     let cfg = home().join(".codex").join("config.toml");
     let existing = std::fs::read_to_string(&cfg).unwrap_or_default();
     let mut text = existing.clone();
-    if !text.contains("mcp_servers.lienzo-team") || !uses_bridge(&text, exe) {
+    // Prometeo Dev deja la global al Prometeo normal: su servidor va en la del proyecto (que
+    // Codex lee al confiar en la carpeta).
+    let local = project.join(".codex").join("config.toml");
+    if crate::hub::IS_DEV {
+        let mine = std::fs::read_to_string(&local).unwrap_or_default();
+        if !mine.contains("mcp_servers.lienzo-team") || !uses_bridge(&mine, exe) {
+            write_text(&local, &codex_config(&mine, exe))?;
+        }
+        files.push(local.display().to_string());
+    } else if !text.contains("mcp_servers.lienzo-team") || !uses_bridge(&text, exe) {
         text = codex_config(&text, exe);
     }
     // Codex desactiva los hooks de las carpetas en las que no confía: sin esto no llega al chat
@@ -389,10 +428,7 @@ fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>)
         text = format!("{}\n\n{}", text.trim_end(), codex_trust_block(project));
     }
     if text != existing {
-        if let Some(parent) = cfg.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&cfg, text).map_err(|e| e.to_string())?;
+        write_text(&cfg, &text)?;
     }
     files.push(cfg.display().to_string());
 
@@ -689,9 +725,10 @@ fn connect_antigravity(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<St
     write_json_pretty(&ws_path, &ws)?;
     files.push(ws_path.display().to_string());
 
-    // Global config (~/.gemini/config/mcp_config.json) as a fallback.
+    // Global config (~/.gemini/config/mcp_config.json) as a fallback. Prometeo Dev no la toca:
+    // es del Prometeo normal.
     let global_path = home().join(".gemini").join("config").join("mcp_config.json");
-    if global_path.exists() || global_path.parent().map(|p| p.exists()).unwrap_or(false) {
+    if !crate::hub::IS_DEV && (global_path.exists() || global_path.parent().map(|p| p.exists()).unwrap_or(false)) {
         let mut global = read_json(&global_path);
         if !global.is_object() {
             global = json!({});
@@ -724,6 +761,9 @@ fn is_connected(id: &str, project: Option<&Path>) -> bool {
     match id {
         // Sin `alwaysLoad` (conectado con una versión anterior) se vuelve a conectar una vez.
         "claude" => project.is_some_and(|p| ok(p.join(".mcp.json"), "lienzo-team") && ok(p.join(".mcp.json"), "\"alwaysLoad\"")),
+        "codex" if crate::hub::IS_DEV => project.is_some_and(|p| {
+            ok(p.join(".codex").join("config.toml"), "mcp_servers.lienzo-team") && ok(p.join(".codex").join("hooks.json"), "commandWindows")
+        }),
         "codex" => {
             let cfg = home().join(".codex").join("config.toml");
             let listed = project.is_none_or(|p| std::fs::read_to_string(&cfg).is_ok_and(|s| codex_project_listed(&s, p)));
@@ -735,7 +775,7 @@ fn is_connected(id: &str, project: Option<&Path>) -> bool {
         "antigravity" => {
             // Antigravity también lee la config global: si existe, tiene que ir bien.
             let global = home().join(".gemini").join("config").join("mcp_config.json");
-            let global_ok = !std::fs::read_to_string(&global).is_ok_and(|s| s.contains("lienzo-team")) || ok(global, "lienzo-team");
+            let global_ok = crate::hub::IS_DEV || !std::fs::read_to_string(&global).is_ok_and(|s| s.contains("lienzo-team")) || ok(global, "lienzo-team");
             global_ok && project.is_some_and(|p| ok(p.join(".agents").join("mcp_config.json"), "lienzo-team"))
         }
         _ => false,
@@ -1493,6 +1533,19 @@ mod tests {
             { "key": "a:stop:1:0", "command": "otro.exe", "trustStatus": "untrusted", "currentHash": "sha256:3" }
         ] } ] });
         assert_eq!(codex_untrusted_ours(&list, exe), json!({ "a:stop:0:0": { "trusted_hash": "sha256:1" } }));
+    }
+
+    #[test]
+    fn reconoce_un_proyecto_de_otro_prometeo() {
+        let dir = std::env::temp_dir().join(format!("lienzo-foreign-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mine = r"C:\Prometeo Dev\lienzo-mcp.exe";
+        assert!(!foreign_bridge(&dir, mine), "carpeta nueva: libre");
+        std::fs::write(dir.join(".mcp.json"), r#"{"mcpServers":{"lienzo-team":{"command":"C:\\Users\\yo\\AppData\\Local\\Prometeo\\lienzo-mcp.exe"}}}"#).unwrap();
+        assert!(foreign_bridge(&dir, mine), "conectada al Prometeo normal");
+        assert!(!foreign_bridge(&dir, r"C:\Users\yo\AppData\Local\Prometeo\lienzo-mcp.exe"), "la suya no es ajena");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
