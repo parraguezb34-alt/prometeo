@@ -187,11 +187,20 @@ fn project_of(app: &tauri::AppHandle) -> Option<String> {
 // File helpers
 // ---------------------------------------------------------------------------
 
-fn read_json(path: &Path) -> Value {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| json!({}))
+fn read_json(path: &Path) -> Result<Value, String> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => serde_json::from_str(&s).map_err(|e| {
+            format!(
+                "El archivo {} no es un JSON válido o no se pudo leer: {e}",
+                path.display()
+            )
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
+        Err(e) => Err(format!(
+            "No se pudo leer el archivo {}: {e}",
+            path.display()
+        )),
+    }
 }
 
 fn write_text(path: &Path, text: &str) -> Result<(), String> {
@@ -351,7 +360,7 @@ fn connect_claude(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>
 
     // MCP server (project scope).
     let mcp_path = project.join(".mcp.json");
-    let mut mcp = read_json(&mcp_path);
+    let mut mcp = read_json(&mcp_path)?;
     if !mcp.is_object() {
         mcp = json!({});
     }
@@ -364,13 +373,10 @@ fn connect_claude(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>
         .unwrap()
         .entry("mcpServers")
         .or_insert_with(|| json!({}))["lienzo-team"] = entry;
-    write_json_pretty(&mcp_path, &mcp)?;
-    files.push(mcp_path.display().to_string());
-    notes.push("Claude pedirá una vez aprobar el servidor MCP del proyecto.".into());
 
     // Hooks (activity + team context injection) + auto-approve project MCP.
     let settings_path = project.join(".claude").join("settings.json");
-    let mut settings = read_json(&settings_path);
+    let mut settings = read_json(&settings_path)?;
     if !settings.is_object() {
         settings = json!({});
     }
@@ -388,6 +394,11 @@ fn connect_claude(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>
             json!({ "type": "command", "command": format!("\"{exe}\" statusline"), "padding": 0 }),
         );
     }
+
+    write_json_pretty(&mcp_path, &mcp)?;
+    files.push(mcp_path.display().to_string());
+    notes.push("Claude pedirá una vez aprobar el servidor MCP del proyecto.".into());
+
     write_json_pretty(&settings_path, &settings)?;
     files.push(settings_path.display().to_string());
     notes.push("Los hooks inyectan la actividad del equipo en cada prompt.".into());
@@ -491,7 +502,7 @@ fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>)
 
     // Project hooks (same shape as Claude Code).
     let hooks_path = project.join(".codex").join("hooks.json");
-    let mut hooks = read_json(&hooks_path);
+    let mut hooks = read_json(&hooks_path)?;
     merge_hooks(&mut hooks, exe, "codex");
     write_json_pretty(&hooks_path, &hooks)?;
     files.push(hooks_path.display().to_string());
@@ -689,7 +700,7 @@ fn connect_opencode(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<Strin
     ];
 
     let cfg_path = project.join("opencode.json");
-    let mut cfg = read_json(&cfg_path);
+    let mut cfg = read_json(&cfg_path)?;
     if !cfg.is_object() {
         cfg = json!({});
     }
@@ -771,7 +782,7 @@ fn connect_antigravity(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<St
 
     // Workspace config (active project).
     let ws_path = project.join(".agents").join("mcp_config.json");
-    let mut ws = read_json(&ws_path);
+    let mut ws = read_json(&ws_path)?;
     if !ws.is_object() {
         ws = json!({});
     }
@@ -786,7 +797,7 @@ fn connect_antigravity(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<St
     // es del Prometeo normal.
     let global_path = home().join(".gemini").join("config").join("mcp_config.json");
     if !crate::hub::IS_DEV && (global_path.exists() || global_path.parent().map(|p| p.exists()).unwrap_or(false)) {
-        let mut global = read_json(&global_path);
+        let mut global = read_json(&global_path)?;
         if !global.is_object() {
             global = json!({});
         }
@@ -1045,7 +1056,7 @@ pub fn launch_target(agent: &str, opts: &LaunchOpts) -> Option<Value> {
 /// proyecto (`model`, con la variante tras `#`, p. ej. `proveedor/modelo#alto`).
 fn set_opencode_model(project: &Path, model: &str) -> Result<(), String> {
     let cfg_path = project.join("opencode.json");
-    let mut cfg = read_json(&cfg_path);
+    let mut cfg = read_json(&cfg_path)?;
     if !cfg.is_object() {
         cfg = json!({});
     }
@@ -1563,7 +1574,7 @@ mod tests {
         let exe = std::env::var("LIENZO_TEST_EXE").expect("LIENZO_TEST_EXE");
         let p = Path::new(&dir);
         let hooks_path = p.join(".codex").join("hooks.json");
-        let mut hooks = read_json(&hooks_path);
+        let mut hooks = read_json(&hooks_path).unwrap();
         merge_hooks(&mut hooks, &exe, "codex");
         write_json_pretty(&hooks_path, &hooks).unwrap();
         let n = codex_trust_hooks(p, &exe).expect("aprobar");
@@ -1651,6 +1662,51 @@ mod tests {
         assert!(uses_bridge(&global_text, exe));
         assert!(codex_project_listed(&global_text, project));
         assert_eq!(plan_prod.local_write, None);
+    }
+
+    #[test]
+    fn json_invalido_devuelve_error_y_preserva_archivo() {
+        let dir = std::env::temp_dir().join(format!("lienzo-test-broken-json-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 1. Archivo .mcp.json con JSON inválido y contenido reconocible:
+        let mcp_path = dir.join(".mcp.json");
+        let broken_bytes = b"{\n  \"mcpServers\": {\n    \"otro\": { roto sin cerrar ...\n";
+        std::fs::write(&mcp_path, broken_bytes).unwrap();
+
+        // read_json debe fallar con mensaje en español nombrando el archivo
+        let res = read_json(&mcp_path);
+        assert!(res.is_err(), "debe fallar al leer JSON inválido");
+        let err_msg = res.unwrap_err();
+        assert!(
+            err_msg.contains(".mcp.json"),
+            "el mensaje de error debe nombrar el archivo: {err_msg}"
+        );
+
+        // connect_claude debe fallar y devolver ese error
+        let exe = r"C:\Users\yo\AppData\Local\Prometeo\lienzo-mcp.exe";
+        let connect_res = connect_claude(&dir, exe);
+        assert!(connect_res.is_err(), "connect_claude debe fallar si .mcp.json es inválido");
+        let connect_err = connect_res.unwrap_err();
+        assert!(
+            connect_err.contains(".mcp.json"),
+            "el error de connect_claude debe nombrar el archivo: {connect_err}"
+        );
+
+        // El archivo debe quedar con exactamente los mismos bytes (no reemplazado por {})
+        let bytes_after = std::fs::read(&mcp_path).unwrap();
+        assert_eq!(
+            bytes_after, broken_bytes,
+            "el archivo con JSON roto debe permanecer intacto sin sobrescribirse"
+        );
+
+        // 2. Archivo ausente debe devolver Ok({}) sin error
+        let missing = dir.join("no-existe.json");
+        let ok_val = read_json(&missing).expect("archivo ausente debe devolver Ok({})");
+        assert_eq!(ok_val, json!({}));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
