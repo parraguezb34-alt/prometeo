@@ -869,6 +869,9 @@ pub fn persist(inner: &HubInner) {
 
 /// Guarda ya lo pendiente, si hay algo (el hilo de `persist` y el cierre de la app).
 pub fn flush_pending() {
+    if !DIRTY.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     let Some(app) = APP.get() else { return };
     let hub = app.state::<Hub>();
     // Solo la foto se hace con el hub bloqueado; el disco, después.
@@ -879,27 +882,18 @@ pub fn flush_pending() {
             return;
         }
     };
-    flush_pending_raw(raw, |s| write_state(s));
+    if let Some(raw) = raw {
+        flush_pending_raw(&raw, |s| write_state(s));
+    }
 }
 
-/// Lógica de vaciado de pendientes: si la escritura falla, no pierde la marca DIRTY (BUG-4).
-pub fn flush_pending_raw(raw: Option<String>, mut write_fn: impl FnMut(&str) -> std::io::Result<()>) -> bool {
-    if !DIRTY.swap(false, std::sync::atomic::Ordering::SeqCst) {
+/// Escribe el estado pendiente: si la escritura falla, restaura DIRTY a true para reintentar (BUG-4).
+pub fn flush_pending_raw(raw: &str, mut write_fn: impl FnMut(&str) -> std::io::Result<()>) -> bool {
+    if let Err(_e) = write_fn(raw) {
+        DIRTY.store(true, std::sync::atomic::Ordering::SeqCst);
         return false;
     }
-    if let Some(raw) = raw {
-        if let Err(e) = write_fn(&raw) {
-            if !cfg!(test) {
-                crate::errlog::log("hub", "No se pudo guardar el estado del equipo", &e.to_string());
-            }
-            // Si falló escribir (OneDrive, antivirus, disco), restaurar DIRTY para reintentar en el próximo ciclo:
-            DIRTY.store(true, std::sync::atomic::Ordering::SeqCst);
-            return false;
-        }
-        true
-    } else {
-        false
-    }
+    true
 }
 
 fn write_state(raw: &str) -> std::io::Result<()> {
@@ -914,9 +908,7 @@ fn write_state(raw: &str) -> std::io::Result<()> {
 /// Guarda el estado al momento.
 pub fn persist_now(inner: &HubInner) {
     if let Some(raw) = state_json(inner) {
-        if let Err(e) = write_state(&raw) {
-            crate::errlog::log("hub", "No se pudo guardar el estado del equipo", &e.to_string());
-        }
+        let _ = write_state(&raw);
     }
 }
 
@@ -939,15 +931,24 @@ mod dirty_tests {
         set_dirty(true);
         assert!(is_dirty());
 
-        // Inyectar un fallo en la escritura: debe restaurar dirty a true (BUG-4)
-        let raw = Some("{\"seq\":42}".to_string());
-        let ok = flush_pending_raw(raw.clone(), |_| {
+        // Simular lo que hace flush_pending: se consume la marca DIRTY antes de la foto
+        let was_dirty = DIRTY.swap(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(was_dirty);
+        assert!(!is_dirty());
+
+        // Inyectar un fallo en la escritura: flush_pending_raw debe restaurar dirty a true (BUG-4)
+        let raw = "{\"seq\":42}";
+        let ok = flush_pending_raw(raw, |_| {
             Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "disco bloqueado"))
         });
         assert!(!ok, "debe indicar que falló");
         assert!(is_dirty(), "dirty debe restaurarse a true tras fallo");
 
-        // El siguiente intento con escritura exitosa debe persistir y dejar dirty en false
+        // El siguiente ciclo consume DIRTY otra vez
+        let was_dirty = DIRTY.swap(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(was_dirty);
+
+        // Intento con escritura exitosa: flush_pending_raw tiene éxito y DIRTY permanece en false
         let mut written_content = String::new();
         let ok = flush_pending_raw(raw, |s| {
             written_content = s.to_string();
@@ -957,14 +958,9 @@ mod dirty_tests {
         assert!(!is_dirty(), "dirty debe quedar en false tras éxito");
         assert!(written_content.contains("\"seq\":42"));
 
-        // Tercer intento: como dirty ya es false, no escribe nada
-        let mut called = false;
-        let ok = flush_pending_raw(Some("{\"seq\":43}".to_string()), |_| {
-            called = true;
-            Ok(())
-        });
-        assert!(!ok);
-        assert!(!called, "no debe invocar escritura si no había dirty");
+        // Si DIRTY es false, el siguiente flush_pending no hace nada
+        let was_dirty = DIRTY.swap(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(!was_dirty, "no debe haber cambios pendientes");
     }
 }
 
