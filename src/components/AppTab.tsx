@@ -209,11 +209,12 @@ export function AppTab({
     <div className="ap">
       <div className="ap-bar">
         <div className="ap-seg" role="tablist">
-          <button role="tab" data-on={mode === "app" ? "1" : "0"} onClick={() => setMode("app")}>
+          <button role="tab" aria-selected={mode === "app"} data-on={mode === "app" ? "1" : "0"} onClick={() => setMode("app")}>
             App
           </button>
           <button
             role="tab"
+            aria-selected={mode === "file"}
             data-on={mode === "file" ? "1" : "0"}
             onClick={() => setMode("file")}
             title="Ver archivos: web, Markdown, PDF, Word, Excel, PowerPoint, imágenes, vídeo…"

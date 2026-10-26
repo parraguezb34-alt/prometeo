@@ -2359,12 +2359,36 @@ export function CommandCenter() {
           {tasksBtn}
         </div>
       </div>
-      <div className="cc-vtabs" role="tablist" data-pill="1">
+      <div
+        className="cc-vtabs"
+        role="tablist"
+        data-pill="1"
+        onKeyDown={(e) => {
+          if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+            e.preventDefault();
+            const idx = VIEWS.findIndex((v) => v.id === view);
+            const next = VIEWS[(idx + 1) % VIEWS.length];
+            if (next) setView(next.id);
+          } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+            e.preventDefault();
+            const idx = VIEWS.findIndex((v) => v.id === view);
+            const prev = VIEWS[(idx - 1 + VIEWS.length) % VIEWS.length];
+            if (prev) setView(prev.id);
+          } else if (e.key === "Home") {
+            e.preventDefault();
+            setView(VIEWS[0].id);
+          } else if (e.key === "End") {
+            e.preventDefault();
+            setView(VIEWS[VIEWS.length - 1].id);
+          }
+        }}
+      >
         <SlidingPill active={view} />
         {VIEWS.map((v) => (
           <button
             key={v.id}
             role="tab"
+            tabIndex={view === v.id ? 0 : -1}
             aria-selected={view === v.id}
             onClick={() => setView(v.id)}
             title={v.title}

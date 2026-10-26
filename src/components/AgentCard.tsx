@@ -21,6 +21,7 @@ export function AgentQuickCmds({
           className="cc-mini-btn"
           onClick={() => onCmd("\x1b", "Esc (pausar)")}
           title="Envía Esc: pausa o cancela lo que esté haciendo"
+          aria-label="Pausar o cancelar con Esc"
         >
           ⎋ Esc
         </button>
@@ -30,6 +31,7 @@ export function AgentQuickCmds({
           className="cc-mini-select"
           value=""
           title="Cambiar modelo: se escribe el comando en su terminal"
+          aria-label="Cambiar modelo"
           onChange={(e) => {
             const cmd = e.target.value;
             e.target.value = "";
@@ -57,6 +59,7 @@ export function AgentQuickCmds({
         className="cc-mini-btn"
         onClick={() => onCmd(`${HANDOVER_SAVE_PROMPT}\r`, "relevo con memoria")}
         title="Relevo con memoria: guarda su resumen pegado a la tarea y Prometeo compacta su contexto (sin amnesia)."
+        aria-label="Relevo con memoria"
       >
         <Icon name="refresh" size={13} />
       </button>
@@ -68,6 +71,7 @@ export function AgentQuickCmds({
             if (cmd) onCmd(`${cmd}\r`, cmd);
           }}
           title={`Escribe ${cmds.compact ?? "/compact"} en su terminal`}
+          aria-label={`Compactar contexto (${cmds.compact ?? "/compact"})`}
         >
           <Icon name="shrink" size={13} />
         </button>

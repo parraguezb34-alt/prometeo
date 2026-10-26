@@ -28,6 +28,15 @@ export function DestPicker({
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open || !listRef.current) return;
+    const item = listRef.current.querySelector<HTMLElement>(`[data-hi="1"]`);
+    if (item) {
+      item.scrollIntoView({ block: "nearest" });
+    }
+  }, [open, hi]);
   const options: Dest[] = [{ kind: "team" }, ...names.map((name) => ({ kind: "agent" as const, name }))];
   const current =
     dest.kind === "team"
@@ -105,7 +114,12 @@ export function DestPicker({
         </span>
       </button>
       {open && (
-        <div className="dp-menu" role="listbox">
+        <div
+          ref={listRef}
+          className="dp-menu"
+          role="listbox"
+          aria-activedescendant={hi >= 0 ? `dp-opt-${hi}` : undefined}
+        >
           {options.map((o, i) => {
             const name = o.kind === "agent" ? o.name : "";
             const st = name ? states.get(name) : undefined;
@@ -113,6 +127,7 @@ export function DestPicker({
             return (
               <button
                 key={o.kind === "team" ? "@team" : name}
+                id={`dp-opt-${i}`}
                 role="option"
                 aria-selected={sel}
                 className="dp-opt"

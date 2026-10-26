@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ago, errMsg } from "../../lib/team";
 import { appAbout, updateApply, updateCheck } from "../../lib/update";
 import type { UpdateInfo } from "../../lib/update";
@@ -12,6 +12,28 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
   const [updAsk, setUpdAsk] = useState(false);
   const [updBusy, setUpdBusy] = useState(false);
   const [dev, setDev] = useState(false);
+  const popRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!updAsk) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setUpdAsk(false);
+    };
+    const onClick = (e: MouseEvent) => {
+      if (popRef.current && !popRef.current.contains(e.target as Node)) {
+        setUpdAsk(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    const timer = window.setTimeout(() => {
+      window.addEventListener("mousedown", onClick);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onClick);
+    };
+  }, [updAsk]);
   useEffect(() => {
     void appAbout()
       .then((a) => setDev(!!a.dev))
@@ -53,7 +75,7 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
         Actualizar
       </button>
       {updAsk && (
-        <div className="cc-upd-pop" role="dialog" aria-label="Actualizar Prometeo">
+        <div ref={popRef} className="cc-upd-pop" role="dialog" aria-label="Actualizar Prometeo">
           <b>Prometeo {upd.version || "nuevo"} está listo</b>
           <p>
             Compilada hace {ago(upd.built_ms)}. Prometeo se cierra, se instala solo y se vuelve a abrir en unos

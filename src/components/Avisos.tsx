@@ -26,8 +26,15 @@ function AvisoCard({ a, onOpen, onClose }: { a: Live; onOpen: () => void; onClos
       className="av-card"
       data-kind={a.kind}
       data-leaving={a.leaving ? "1" : "0"}
-      role="status"
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
       onAnimationEnd={(e) => {
         if (e.animationName === "av-out") onClose();
       }}

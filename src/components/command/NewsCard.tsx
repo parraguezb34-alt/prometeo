@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ago } from "../../lib/team";
 import { appAbout, loadSeen, newSince, saveSeen } from "../../lib/update";
 import type { Change } from "../../lib/update";
@@ -7,6 +7,8 @@ import { Icon } from "../Icon";
 /** «Novedades»: al abrir una versión nueva, los commits que trae (una vez). */
 export function NewsCard() {
   const [news, setNews] = useState<{ version: string; changes: Change[] } | null>(null);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     appAbout()
       .then((a) => {
@@ -19,9 +21,28 @@ export function NewsCard() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!news) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setNews(null);
+    };
+    const onClick = (e: MouseEvent) => {
+      if (cardRef.current && !cardRef.current.contains(e.target as Node)) {
+        setNews(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onClick);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onClick);
+    };
+  }, [news]);
+
   if (!news) return null;
   return (
-    <div className="cc-news" role="dialog" aria-label="Novedades de Prometeo">
+    <div ref={cardRef} className="cc-news" role="dialog" aria-label="Novedades de Prometeo">
       <header>
         <b>Novedades de Prometeo {news.version}</b>
         <button className="ap-icon" onClick={() => setNews(null)} aria-label="Cerrar" title="Cerrar">
