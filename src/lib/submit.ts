@@ -49,7 +49,7 @@ export function needsResubmit(input: {
   lastBusyMs: number;
 }): boolean {
   const text = input.text.trim();
-  if (input.busyBefore || text.startsWith("/") || text.length < 8) return false;
+  if (input.busyBefore || !isMessage(text)) return false;
   if (input.lastBusyMs >= input.sentMs) return false;
   const key = text.replace(/\s+/g, "").slice(0, 24);
   const seen = cleanTerm(input.tail);
@@ -77,6 +77,12 @@ export function bracketedAfter(before: boolean, chunk: string): boolean {
  * para que el CLI lo tome por un pegado entero. Sin ellas, Codex lo detecta como pegado por la
  * velocidad («paste burst») y el Enter que llega justo después se queda como salto de línea.
  */
+/** ¿Es un mensaje para el agente (y no un comando «/…» o una respuesta corta como «y»)? */
+export function isMessage(text: string): boolean {
+  const t = text.trim();
+  return t.length >= 8 && !t.startsWith("/");
+}
+
 export function asPaste(text: string, bracketed: boolean): string {
   return bracketed ? `\x1b[200~${text}\x1b[201~` : text;
 }

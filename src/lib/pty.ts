@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { takeDialog, termBracketed, watchSubmit } from "./activity";
-import { asPaste } from "./submit";
+import { takeDialog, termBracketed, waitQuiet, watchSubmit } from "./activity";
+import { asPaste, isMessage } from "./submit";
 
 export type SessionInfo = {
   id: string;
@@ -71,12 +71,14 @@ export async function termWrite(id: string, data: string): Promise<void> {
       await invoke<void>("term_write", { id, data: "\x1b" });
       await new Promise((ok) => setTimeout(ok, 300));
     }
-    watchSubmit(id, data.slice(0, -1), () => invoke<void>("term_write", { id, data: "\r" }));
-    // Como pegado entre marcas si el CLI lo admite (Codex, Claude Code): así el Enter de después
-    // no se confunde con parte del pegado. Codex ignora un Enter que llega muy pegado al texto.
-    const paste = termBracketed(id);
-    await invoke<void>("term_write", { id, data: asPaste(data.slice(0, -1), paste) });
-    await new Promise((ok) => setTimeout(ok, paste ? 350 : 180));
+    const text = data.slice(0, -1);
+    watchSubmit(id, text, () => invoke<void>("term_write", { id, data: "\r" }));
+    // Un mensaje va como pegado entre marcas si el CLI lo admite (Codex, Claude Code), y el Enter
+    // cuando la terminal ya lo pintó entero (ver `waitQuiet`). Los comandos («/clear») y las
+    // respuestas cortas («y») se teclean tal cual: pegados, el CLI no los tomaría por comandos.
+    const paste = termBracketed(id) && isMessage(text);
+    await invoke<void>("term_write", { id, data: asPaste(text, paste) });
+    await waitQuiet(id);
     return invoke<void>("term_write", { id, data: "\r" });
   }
   return invoke<void>("term_write", { id, data });
@@ -149,4 +151,24 @@ export function confirmChoice(tail: string): string | null {
     return null;
   }
   return null;
+}
+
+// Solo en Prometeo Dev: las funciones de terminal a mano en `window.__prometeoTest`, para probar
+// de verdad (con el CLI real, desde las herramientas de desarrollo) cómo se le envía un mensaje.
+if ("__TAURI_INTERNALS__" in window) {
+  void invoke<{ dev: boolean }>("app_about")
+    .then((a) => {
+      if (!a.dev) return;
+      (window as unknown as Record<string, unknown>).__prometeoTest = {
+        termSpawn,
+        termWrite,
+        termScrollback,
+        termKill,
+        termBracketed,
+        store: () => import("../store"),
+        screens: () => import("./screens"),
+        prompts: () => import("./prompts"),
+      };
+    })
+    .catch(() => {});
 }

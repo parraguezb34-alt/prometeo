@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { DIALOG, needsResubmit, cleanTerm, bracketedAfter, asPaste } from "./lib/submit.js";
+import { DIALOG, needsResubmit, cleanTerm, bracketedAfter, asPaste, isMessage } from "./lib/submit.js";
 
 let n = 0;
 function test(name, fn) {
@@ -51,6 +51,13 @@ test("pegado «bracketed»: manda la última marca y solo entonces se envuelve e
   assert.equal(bracketedAfter(true, "nada"), true);
   assert.equal(asPaste("hola", true), "\x1b[200~hola\x1b[201~");
   assert.equal(asPaste("hola", false), "hola");
+});
+
+test("solo los mensajes van como pegado: los comandos y las respuestas cortas no", () => {
+  assert.equal(isMessage("📌 Despacho de Prometeo: toma la tarea #105"), true);
+  assert.equal(isMessage("/clear"), false);
+  assert.equal(isMessage("/model gpt-5"), false);
+  assert.equal(isMessage("y"), false);
 });
 
 console.log(`${n} pruebas de envío OK`);

@@ -53,6 +53,29 @@ export function termBracketed(sid: string): boolean {
   return bracketed.has(sid);
 }
 
+/** Cuándo pintó algo cada terminal por última vez (ms epoch). */
+const lastOut = new Map<string, number>();
+
+/**
+ * Espera a que la terminal `sid` deje de pintar (`quiet` ms sin salida): el CLI terminó de recibir
+ * y mostrar lo tecleado. Codex trata lo que llega muy seguido como un pegado y un Enter dentro de
+ * esa ráfaga no envía: medido con Codex 0.164 (26/10/2026), a 350 ms se queda en el cuadro y a
+ * 700 ms ya envía. Por eso no vale un tiempo fijo corto. Sin vigilancia de terminales espera
+ * `fallback`; nunca más de `max`.
+ */
+export async function waitQuiet(sid: string, o: { quiet?: number; min?: number; max?: number; fallback?: number } = {}) {
+  const { quiet = 600, min = 800, max = 3000, fallback = 900 } = o;
+  const start = Date.now();
+  const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
+  if (!lastOut.has(sid)) return sleep(fallback);
+  for (;;) {
+    const now = Date.now();
+    if (now - start >= max) return;
+    if (now - start >= min && now - (lastOut.get(sid) ?? 0) >= quiet) return;
+    await sleep(40);
+  }
+}
+
 /**
  * ¿Hay que cerrar un aviso antes de teclear en `sid`? Sí si pintó uno y el agente está libre (con
  * él trabajando, Esc lo interrumpiría). Se da por cerrado al decirlo: quien llama pulsa Esc.
@@ -121,6 +144,7 @@ export function useTermActivity(): Map<string, Activity> {
       t.lastMs = Date.now();
       if (t.armed) lastBusy.set(sid, t.lastMs);
       lastTail.set(sid, t.tail);
+      lastOut.set(sid, t.lastMs);
       tracks.current.set(sid, t);
     });
     const id = window.setInterval(() => {
