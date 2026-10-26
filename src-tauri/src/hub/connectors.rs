@@ -189,9 +189,11 @@ fn project_of(app: &tauri::AppHandle) -> Option<String> {
 
 fn read_json(path: &Path) -> Result<Value, String> {
     match std::fs::read_to_string(path) {
-        Ok(s) => serde_json::from_str(&s).map_err(|e| {
+        // Vacío o con BOM (Bloc de notas, PowerShell) sigue siendo válido.
+        Ok(s) if s.trim_start_matches('\u{feff}').trim().is_empty() => Ok(json!({})),
+        Ok(s) => serde_json::from_str(s.trim_start_matches('\u{feff}')).map_err(|e| {
             format!(
-                "El archivo {} no es un JSON válido o no se pudo leer: {e}",
+                "El archivo {} no es un JSON válido; arréglalo o bórralo y vuelve a conectar: {e}",
                 path.display()
             )
         }),
@@ -1705,6 +1707,14 @@ mod tests {
         let missing = dir.join("no-existe.json");
         let ok_val = read_json(&missing).expect("archivo ausente debe devolver Ok({})");
         assert_eq!(ok_val, json!({}));
+
+        // 3. Vacío o con BOM (Bloc de notas) se lee bien
+        let empty = dir.join("vacio.json");
+        std::fs::write(&empty, b"  \n").unwrap();
+        assert_eq!(read_json(&empty).unwrap(), json!({}));
+        let bom = dir.join("bom.json");
+        std::fs::write(&bom, "\u{feff}{\"a\": 1}").unwrap();
+        assert_eq!(read_json(&bom).unwrap(), json!({"a": 1}));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
