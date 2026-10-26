@@ -660,36 +660,58 @@ enum IsoStep {
 /// Lo que toca hacer con la carpeta aislada de la tarea al entregarla o al decidir sobre ella.
 /// Lo que el camino normal rechazaría (entrega ajena, sin resumen, revisión de quien no lidera) no
 /// se une: se deja pasar para que dé su error de siempre.
-fn isolated_step(app: &AppHandle, op: &str, id: u64, sid: &str, payload: &Value, summary: &str) -> Result<Option<IsoStep>, String> {
-    let pre = hub::with_inner(app, |inner| {
-        let (agent, _) = hub::agent_label(inner, sid, payload["agent"].as_str());
-        let t = inner.tasks.iter().find(|t| t.id == id)?;
-        if t.workspace.is_empty() {
-            return None;
-        }
-        let reviewer = t.research.is_empty() && hub::reviewer_for(inner, &agent).is_some();
-        let leads = agent == "tú"
-            || inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(&agent))
-            || (!t.reviewer.is_empty() && t.reviewer.eq_ignore_ascii_case(&agent));
-        Some((inner.project.clone()?, t.workspace.clone(), reviewer, leads, t.status.clone(), t.owner.clone(), agent))
-    })
-    .flatten();
-    let Some((project, ws, reviewer, leads, status, owner, agent)) = pre else {
+fn merge_done_if_valid(
+    tasks: &[hub::Task],
+    task: &hub::Task,
+    agent: &str,
+    summary: &str,
+    merge: impl FnOnce() -> Result<Vec<String>, String>,
+) -> Result<Vec<String>, String> {
+    if task.status != "claimed" {
+        return Err(format!("la tarea #{} no está tomada (estado: {})", task.id, task.status));
+    }
+    if task.owner != agent {
+        return Err(format!("la tarea #{} es de {}; no la cierres tú", task.id, task.owner));
+    }
+    if summary.is_empty() {
+        return Err("cierra la tarea con una entrega: pasa `summary`, `files` y `evidence`".into());
+    }
+    let unmet = hub::unmet_parents(tasks, task);
+    if !unmet.is_empty() {
+        let ids = unmet.iter().map(|p| format!("#{p}")).collect::<Vec<_>>().join(", ");
+        return Err(format!("la tarea #{} depende de {ids} que aún no está hecha", task.id));
+    }
+    merge()
+}
+
+/// Valida y fusiona bajo el mismo cerrojo del hub que confirma la entrega.
+fn isolated_step(inner: &hub::HubInner, op: &str, id: u64, sid: &str, payload: &Value, summary: &str) -> Result<Option<IsoStep>, String> {
+    let (agent, _) = hub::agent_label(inner, sid, payload["agent"].as_str());
+    let Some(t) = inner.tasks.iter().find(|t| t.id == id) else {
         return Ok(None);
     };
+    if t.workspace.is_empty() {
+        return Ok(None);
+    }
+    let Some(project) = inner.project.clone() else {
+        return Ok(None);
+    };
+    let ws = t.workspace.clone();
+    let reviewer = t.research.is_empty() && hub::reviewer_for(inner, &agent).is_some();
+    let leads = agent == "tú"
+        || inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(&agent))
+        || (!t.reviewer.is_empty() && t.reviewer.eq_ignore_ascii_case(&agent));
     if op == "done" {
-        if matches!(status.as_str(), "review" | "done") || (!owner.is_empty() && owner != agent) || summary.is_empty() {
-            return Ok(None);
-        }
         if reviewer {
+            merge_done_if_valid(&inner.tasks, t, &agent, summary, || Ok(Vec::new()))?;
             let diff = crate::workspace::diff(&project, id, 6000).unwrap_or_default();
             return Ok(Some(IsoStep::Review { diff, files: WsPaths { ws, root: project } }));
         }
-        let files = hub::merge_workspace(&project, id, &ws)?;
+        let files = merge_done_if_valid(&inner.tasks, t, &agent, summary, || hub::merge_workspace(&project, id, &ws))?;
         return Ok(Some(IsoStep::Merged { project, files }));
     }
     let verdict = payload["verdict"].as_str().unwrap_or("").trim().to_lowercase();
-    if !leads || status != "review" || !matches!(verdict.as_str(), "ok" | "aprobar" | "aprobada") {
+    if !leads || t.status != "review" || !matches!(verdict.as_str(), "ok" | "aprobar" | "aprobada") {
         return Ok(None);
     }
     let files = hub::merge_workspace(&project, id, &ws).map_err(|e| {
@@ -759,22 +781,24 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
         })
         .unwrap_or_default();
 
-    // Carpetas aisladas: unir la copia al proyecto (al entregar sin revisión, o al aprobar) o sacar su
-    // diff para el líder. Va fuera del cerrojo del hub: git puede tardar unos segundos.
-    let iso = if matches!(op.as_str(), "done" | "review") { isolated_step(app, &op, id, &sid, payload, &summary)? } else { None };
-    let (ws_diff, merged) = match iso {
-        Some(IsoStep::Review { diff, files }) => {
-            files_in = files_in.iter().map(|f| files.map_path(f)).collect();
-            (Some(diff), None)
-        }
-        Some(IsoStep::Merged { project, files }) => {
-            files_in = files.clone();
-            (None, Some((project, files)))
-        }
-        None => (None, None),
-    };
-
     let out = hub::with_inner(app, |inner| -> Result<Value, String> {
+        // Validación, fusión y confirmación comparten el cerrojo del hub.
+        let iso = if matches!(op.as_str(), "done" | "review") {
+            isolated_step(inner, &op, id, &sid, payload, &summary)?
+        } else {
+            None
+        };
+        let (ws_diff, merged) = match iso {
+            Some(IsoStep::Review { diff, files }) => {
+                files_in = files_in.iter().map(|f| files.map_path(f)).collect();
+                (Some(diff), None)
+            }
+            Some(IsoStep::Merged { project, files }) => {
+                files_in = files.clone();
+                (None, Some((project, files)))
+            }
+            None => (None, None),
+        };
         let (agent, sid) = hub::agent_label(inner, &sid, payload["agent"].as_str());
         match op.as_str() {
             "create" => {
@@ -1173,6 +1197,27 @@ fn is_absolute_path(p: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{is_absolute_path, WsPaths};
+
+    #[test]
+    fn blocked_isolated_delivery_never_writes_project() {
+        let root = std::env::temp_dir().join(format!("lienzo-blocked-delivery-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let project_file = root.join("proyecto.txt");
+        std::fs::write(&project_file, b"original").unwrap();
+        let mut parent = crate::hub::Task::new(1, "padre".into(), String::new(), vec![]);
+        parent.status = "claimed".into();
+        let mut child = crate::hub::Task::new(2, "hija".into(), String::new(), vec![1]);
+        child.status = "claimed".into();
+        child.owner = "codex".into();
+        let tasks = [parent, child];
+        let result = super::merge_done_if_valid(&tasks, &tasks[1], "codex", "entrega", || {
+            std::fs::write(&project_file, b"cambio").unwrap();
+            Ok(vec![])
+        });
+        assert!(result.unwrap_err().contains("#1"));
+        assert_eq!(std::fs::read(&project_file).unwrap(), b"original");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn workspace_paths_map_back_to_the_project() {
