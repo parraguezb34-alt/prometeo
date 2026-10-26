@@ -254,6 +254,11 @@ fn hook_entry(exe: &str, agent: &str, event: &str, matcher: Option<&str>) -> Val
             "timeout": 15
         } ]
     });
+    // Codex en Windows ejecuta los hooks con PowerShell, que no lanza `"ruta" args` (lo toma por un
+    // texto suelto y falla): con `commandWindows` y el operador `&` sí. Comprobado con Codex 0.164.
+    if agent == "codex" {
+        group["hooks"][0]["commandWindows"] = json!(format!("& {}", hook_command(exe, agent, event)));
+    }
     if let Some(m) = matcher {
         group["matcher"] = json!(m);
     }
@@ -398,10 +403,129 @@ fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>)
     write_json_pretty(&hooks_path, &hooks)?;
     files.push(hooks_path.display().to_string());
 
+    // Codex no ejecuta un hook nuevo o cambiado hasta que alguien lo aprueba en su pantalla; los
+    // nuestros los aprueba Prometeo con el propio Codex (su firma, en su config).
+    let mut notes = notes;
+    match codex_trust_hooks(project, exe) {
+        Ok(_) => {}
+        Err(e) => notes.push(format!("Codex te pedirá aprobar los avisos de Prometeo al abrirlo ({e}).")),
+    }
+
     let p = project.join("AGENTS.md");
     write_managed_block(&p, &team_block())?;
     files.push(p.display().to_string());
     Ok((files, notes))
+}
+
+/// El ejecutable de Codex para hablar con su servidor (`codex app-server`): el binario nativo que
+/// instala npm si está; si no, el `codex` del PATH a través de cmd.
+fn codex_app_server() -> std::process::Command {
+    let native = std::env::var("APPDATA").map(PathBuf::from).unwrap_or_default().join(
+        r"npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe",
+    );
+    let mut cmd = if native.is_file() {
+        std::process::Command::new(native)
+    } else {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/D", "/C", "codex"]);
+        c
+    };
+    cmd.arg("app-server");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
+/// Aprueba en Codex los hooks de Prometeo de `project` que aún no lo estén. Pregunta a Codex por
+/// ellos (`hooks/list`, que da la firma de cada uno) y guarda esa firma como aprobada con
+/// `config/batchWrite`, igual que hace su pantalla cuando el usuario los aprueba. Solo toca los
+/// hooks cuyo comando es el puente `exe`. Devuelve cuántos aprobó.
+fn codex_trust_hooks(project: &Path, exe: &str) -> Result<usize, String> {
+    use std::io::{BufRead, Write};
+    let mut child = codex_app_server()
+        .current_dir(project)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("no se pudo abrir Codex: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or("sin stdin")?;
+    let stdout = child.stdout.take().ok_or("sin stdout")?;
+    let (tx, rx) = std::sync::mpsc::channel::<Value>();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                if tx.send(v).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
+    let mut call = |id: u64, method: &str, params: Value| -> Result<Value, String> {
+        // id 0: notificación (sin respuesta que esperar).
+        let msg = if id == 0 {
+            json!({ "jsonrpc": "2.0", "method": method })
+        } else {
+            json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
+        };
+        writeln!(stdin, "{msg}").and_then(|_| stdin.flush()).map_err(|e| e.to_string())?;
+        if id == 0 {
+            return Ok(Value::Null);
+        }
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let v = rx.recv_timeout(left).map_err(|_| format!("Codex no contestó a {method}"))?;
+            if v["id"].as_u64() == Some(id) {
+                if let Some(err) = v.get("error") {
+                    return Err(format!("{method}: {}", err["message"].as_str().unwrap_or("error")));
+                }
+                return Ok(v["result"].clone());
+            }
+        }
+    };
+    let result = (|| {
+        call(1, "initialize", json!({ "clientInfo": { "name": "prometeo", "title": "Prometeo", "version": env!("CARGO_PKG_VERSION") } }))?;
+        call(0, "initialized", Value::Null)?;
+        let dir = project.display().to_string();
+        let list = call(2, "hooks/list", json!({ "cwds": [dir] }))?;
+        let state = codex_untrusted_ours(&list, exe);
+        let n = state.as_object().map(|o| o.len()).unwrap_or(0);
+        if n > 0 {
+            call(3, "config/batchWrite", json!({ "edits": [ { "keyPath": "hooks.state", "value": state, "mergeStrategy": "upsert" } ] }))?;
+        }
+        Ok(n)
+    })();
+    // Sin entrada, el servidor se cierra solo; si no, se le corta.
+    drop(stdin);
+    for _ in 0..30 {
+        if child.try_wait().ok().flatten().is_some() {
+            return result;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    result
+}
+
+/// De la respuesta de `hooks/list`, los hooks del puente `exe` sin aprobar, como la tabla
+/// `hooks.state` que los aprueba: `{ "<clave>": { "trusted_hash": "<firma>" } }`.
+fn codex_untrusted_ours(list: &Value, exe: &str) -> Value {
+    let mut state = serde_json::Map::new();
+    for group in list["data"].as_array().into_iter().flatten() {
+        for h in group["hooks"].as_array().into_iter().flatten() {
+            let ours = h["command"].as_str().is_some_and(|c| uses_bridge(c, exe));
+            let trusted = h["trustStatus"].as_str() == Some("trusted");
+            if let (true, false, Some(key), Some(hash)) = (ours, trusted, h["key"].as_str(), h["currentHash"].as_str()) {
+                state.insert(key.to_string(), json!({ "trusted_hash": hash }));
+            }
+        }
+    }
+    Value::Object(state)
 }
 
 /// La carpeta como la guarda Codex en `[projects.'…']` (en Windows, en minúsculas).
@@ -603,7 +727,9 @@ fn is_connected(id: &str, project: Option<&Path>) -> bool {
         "codex" => {
             let cfg = home().join(".codex").join("config.toml");
             let listed = project.is_none_or(|p| std::fs::read_to_string(&cfg).is_ok_and(|s| codex_project_listed(&s, p)));
-            listed && ok(cfg, "mcp_servers.lienzo-team")
+            // Hooks de antes de `commandWindows` (PowerShell no los ejecutaba): se vuelven a escribir.
+            let hooks_ok = project.is_none_or(|p| ok(p.join(".codex").join("hooks.json"), "commandWindows"));
+            listed && hooks_ok && ok(cfg, "mcp_servers.lienzo-team")
         }
         "opencode" => project.is_some_and(|p| ok(p.join("opencode.json"), "lienzo-team")),
         "antigravity" => {
@@ -1329,6 +1455,44 @@ mod tests {
         // Lo que ya está bien se queda igual al volver a escribirlo.
         assert_eq!(codex_config(&new, exe), new);
         assert!(codex_config("", exe).starts_with("# lienzo team"));
+    }
+
+    /// De punta a punta con un Codex instalado: `LIENZO_TEST_CODEX_DIR` (carpeta de prueba de confianza)
+    /// y `LIENZO_TEST_EXE` (el puente). Escribe los hooks como `connect_codex` y los aprueba.
+    #[test]
+    #[ignore]
+    fn codex_aprueba_sus_hooks_de_verdad() {
+        let dir = std::env::var("LIENZO_TEST_CODEX_DIR").expect("LIENZO_TEST_CODEX_DIR");
+        let exe = std::env::var("LIENZO_TEST_EXE").expect("LIENZO_TEST_EXE");
+        let p = Path::new(&dir);
+        let hooks_path = p.join(".codex").join("hooks.json");
+        let mut hooks = read_json(&hooks_path);
+        merge_hooks(&mut hooks, &exe, "codex");
+        write_json_pretty(&hooks_path, &hooks).unwrap();
+        let n = codex_trust_hooks(p, &exe).expect("aprobar");
+        assert_eq!(n, 4, "los 4 hooks del puente, aprobados");
+        assert_eq!(codex_trust_hooks(p, &exe).expect("otra vez"), 0, "ya estaban aprobados");
+    }
+
+    #[test]
+    fn codex_hooks_para_powershell_y_su_aprobacion() {
+        let exe = r"C:\Users\yo\AppData\Local\Prometeo\lienzo-mcp.exe";
+        let mut hooks = json!({});
+        merge_hooks(&mut hooks, exe, "codex");
+        let h = &hooks["hooks"]["Stop"][0]["hooks"][0];
+        assert_eq!(h["commandWindows"], format!("& \"{exe}\" hook --agent codex --event stop"));
+        assert_eq!(h["command"], format!("\"{exe}\" hook --agent codex --event stop"));
+        // Claude no lo lleva (lo ejecuta con su propia shell).
+        let mut c = json!({});
+        merge_hooks(&mut c, exe, "claude");
+        assert!(c["hooks"]["Stop"][0]["hooks"][0].get("commandWindows").is_none());
+
+        let list = json!({ "data": [ { "hooks": [
+            { "key": "a:stop:0:0", "command": format!("\"{exe}\" hook --agent codex --event stop"), "trustStatus": "untrusted", "currentHash": "sha256:1" },
+            { "key": "a:stop:0:1", "command": format!("\"{exe}\" hook --agent codex --event tool"), "trustStatus": "trusted", "currentHash": "sha256:2" },
+            { "key": "a:stop:1:0", "command": "otro.exe", "trustStatus": "untrusted", "currentHash": "sha256:3" }
+        ] } ] });
+        assert_eq!(codex_untrusted_ours(&list, exe), json!({ "a:stop:0:0": { "trusted_hash": "sha256:1" } }));
     }
 
     #[test]

@@ -864,6 +864,9 @@ export function CommandCenter() {
         try {
           await teamConnect(a.id, project);
           connected += 1;
+          // Codex lee sus hooks al empezar cada conversación: si su terminal (restaurada al abrir)
+          // arrancó antes de esta reconexión, sigue con los de antes. Se reinicia retomándola.
+          if (a.id === "codex" && panelForAgent(getLayout().panels, a.id)) await reloadAgent(a.id);
         } catch (e) {
           say(`No pude conectar ${a.label}: ${errMsg(e)}`, true);
         }
