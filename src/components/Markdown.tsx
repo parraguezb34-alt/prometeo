@@ -197,21 +197,28 @@ function startsBlock(all: string[], i: number): boolean {
 type Ctx = { onPath: OnPath; reveal: boolean };
 
 function CodeBlock({ code, lang }: { code: string; lang: string }) {
-  const [done, setDone] = useState(false);
+  const [status, setStatus] = useState<"idle" | "done" | "error">("idle");
   const copy = () =>
     navigator.clipboard
       .writeText(code)
       .then(() => {
-        setDone(true);
-        window.setTimeout(() => setDone(false), 1400);
+        setStatus("done");
+        window.setTimeout(() => setStatus("idle"), 1400);
       })
-      .catch(() => {});
+      .catch(() => {
+        setStatus("error");
+        window.setTimeout(() => setStatus("idle"), 2000);
+      });
   return (
     <div className="md-pre" data-bare={lang ? undefined : "1"}>
       <div className="md-pre-bar">
         {lang && <span>{lang}</span>}
-        <button onClick={copy} data-done={done ? "1" : "0"}>
-          {done ? "Copiado" : "Copiar"}
+        <button
+          onClick={copy}
+          data-done={status === "done" ? "1" : status === "error" ? "error" : "0"}
+          title={status === "error" ? "No se pudo acceder al portapapeles" : undefined}
+        >
+          {status === "done" ? "Copiado" : status === "error" ? "No se pudo copiar" : "Copiar"}
         </button>
       </div>
       <pre>

@@ -37,6 +37,7 @@ export function InlineRename({
       value={text}
       maxLength={maxLength}
       aria-label={label}
+      title="Enter para guardar, Esc para cancelar"
       onChange={(e) => setText(e.target.value)}
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}

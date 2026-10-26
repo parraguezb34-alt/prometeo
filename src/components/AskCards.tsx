@@ -22,6 +22,7 @@ export function QuestionCard({
 }) {
   const [picks, setPicks] = useState<Pick[]>(() => q.items.map(() => ({ choices: [], other: "", otherOn: false })));
   const [busy, setBusy] = useState(false);
+  const [warnMissing, setWarnMissing] = useState(false);
   const done = q.answers != null || q.dismissed;
   const who = agentLabel(q.agent);
 
@@ -142,9 +143,17 @@ export function QuestionCard({
                   autoFocus
                   value={picks[i].other}
                   placeholder="Escribe tu respuesta…"
+                  title={ready ? "Pulsa Enter para enviar respuestas" : "Responde a todas las preguntas para poder enviar"}
                   onChange={(e) => setOther(i, { other: e.target.value })}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && ready) submit();
+                    if (e.key === "Enter") {
+                      if (ready) {
+                        submit();
+                      } else {
+                        setWarnMissing(true);
+                        window.setTimeout(() => setWarnMissing(false), 2500);
+                      }
+                    }
                     if (e.key === "Escape") setOther(i, { otherOn: false, other: "" });
                   }}
                   disabled={busy}
@@ -160,8 +169,15 @@ export function QuestionCard({
         </fieldset>
       ))}
       <div className="qa-foot">
-        <span className="qa-hint">
-          {ready ? "Listo para enviar" : `Falta${picks.filter((p) => !p.choices.length && !(p.otherOn && p.other.trim())).length > 1 ? "n respuestas" : " una respuesta"}`}
+        <span
+          className="qa-hint"
+          style={warnMissing ? { color: "var(--warn)", fontWeight: 600 } : undefined}
+        >
+          {warnMissing
+            ? `Faltan respuestas antes de enviar`
+            : ready
+              ? "Listo para enviar"
+              : `Falta${picks.filter((p) => !p.choices.length && !(p.otherOn && p.other.trim())).length > 1 ? "n respuestas" : " una respuesta"}`}
         </span>
         <button className="qa-send" disabled={!ready || busy} onClick={submit}>
           {busy ? "Enviando…" : "Enviar respuestas"}
@@ -205,7 +221,12 @@ export function PromptCard({
         )}
       </div>
       {prompt.detail.length > 0 && (
-        <pre className="tp-detail">{prompt.detail.join("\n")}</pre>
+        <pre
+          className="tp-detail"
+          style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", overflowWrap: "anywhere" }}
+        >
+          {prompt.detail.join("\n")}
+        </pre>
       )}
       <div className="tp-opts">
         {prompt.options.map((o) => (

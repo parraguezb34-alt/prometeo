@@ -448,6 +448,7 @@ function TaskRow({
 }) {
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
+  const [noteBusy, setNoteBusy] = useState(false);
   const [delAsk, setDelAsk] = useState(false);
   useEffect(() => {
     if (!delAsk) return;
@@ -585,18 +586,39 @@ function TaskRow({
                 <time>{since(c.ts_ms)}</time>
               </div>
             ))}
-            <input
-              className="td-noteinput"
-              type="text"
-              placeholder="Nota para quien la lleve…"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter") return;
-                const text = note.trim();
-                if (text) void onComment(t.id, text).then(() => setNote(""));
-              }}
-            />
+            <div className="td-noteinput-wrap" style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <input
+                className="td-noteinput"
+                type="text"
+                placeholder={noteBusy ? "Guardando nota…" : "Nota para quien la lleve…"}
+                value={note}
+                disabled={noteBusy}
+                style={noteBusy ? { opacity: 0.7, paddingRight: 24 } : undefined}
+                onChange={(e) => setNote(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" || noteBusy) return;
+                  const text = note.trim();
+                  if (!text) return;
+                  setNoteBusy(true);
+                  void onComment(t.id, text)
+                    .then(() => setNote(""))
+                    .finally(() => setNoteBusy(false));
+                }}
+              />
+              {noteBusy && (
+                <span
+                  style={{
+                    position: "absolute",
+                    right: 8,
+                    color: "var(--muted)",
+                    display: "flex",
+                    alignItems: "center",
+                  }}
+                >
+                  <Icon name="refresh" size={11} />
+                </span>
+              )}
+            </div>
           </div>
           <div className="td-actions">
             <button

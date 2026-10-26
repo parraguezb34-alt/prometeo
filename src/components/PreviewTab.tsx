@@ -77,6 +77,7 @@ export function PreviewTab({
   const [loading, setLoading] = useState(false);
   const lastSeq = useRef(0);
   const urlRef = useRef<string | null>(null);
+  const reqIdRef = useRef(0);
   // Ampliado: el archivo ocupa toda la ventana (por encima del chat). Se sale con Esc.
   const [full, setFull] = useState(false);
   const [hideList, setHideList] = useState(() => {
@@ -121,6 +122,7 @@ export function PreviewTab({
 
   const open = useCallback(
     (rel: string) => {
+      const id = ++reqIdRef.current;
       setSel(rel);
       setErr(null);
       setLoading(true);
@@ -133,12 +135,18 @@ export function PreviewTab({
             ? fileOffice(project, rel).then((html) => ({ kind: "page", html }))
             : Promise.reject(new Error(""));
       job
-        .then(setLoaded)
+        .then((data) => {
+          if (reqIdRef.current !== id) return;
+          setLoaded(data);
+        })
         .catch((e) => {
+          if (reqIdRef.current !== id) return;
           setLoaded(null);
           setErr(k === "other" ? "" : errMsg(e));
         })
-        .finally(() => setLoading(false));
+        .finally(() => {
+          if (reqIdRef.current === id) setLoading(false);
+        });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [project],
@@ -259,11 +267,37 @@ export function PreviewTab({
     );
   } else if (k === "csv") {
     const rows = parseCsv(data.text);
+    const MAX_CSV_ROWS = 200;
+    const trimmed = rows.length > MAX_CSV_ROWS;
+    const displayRows = trimmed ? rows.slice(0, MAX_CSV_ROWS) : rows;
     body = (
       <div className="vw-table">
+        {trimmed && (
+          <div
+            className="vw-trimmed"
+            style={{
+              padding: "6px 12px",
+              background: "var(--dim)",
+              color: "var(--muted)",
+              fontSize: 12,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <span>
+              Mostrando {MAX_CSV_ROWS} de {rows.length} filas (archivo grande).
+            </span>
+            <button className="hs-btn hs-btn-go" onClick={() => external("open")}>
+              <Icon name="external" size={12} />
+              Abrir completo con su programa
+            </button>
+          </div>
+        )}
         <table>
           <tbody>
-            {rows.map((r, i) => (
+            {displayRows.map((r, i) => (
               <tr key={i}>
                 {r.map((c, j) => (i === 0 ? <th key={j}>{c}</th> : <td key={j}>{c}</td>))}
               </tr>
@@ -310,7 +344,7 @@ export function PreviewTab({
                 </span>
               )}
               <button className="cc-mini-btn" onClick={() => open(sel)} disabled={loading} title="Recargar" aria-label="Recargar">
-                {loading ? "…" : "⟳"}
+                {loading ? "…" : <Icon name="refresh" size={12} />}
               </button>
               <button className="ap-icon" onClick={() => external("reveal")} title="Mostrar en la carpeta" aria-label="Mostrar en la carpeta">
                 <Icon name="folder" size={14} />
@@ -344,7 +378,7 @@ export function PreviewTab({
             Abrir…
           </button>
           <button className="cc-mini-btn" onClick={loadList} title="Volver a buscar archivos en el proyecto" aria-label="Volver a buscar">
-            ⟳
+            <Icon name="refresh" size={12} />
           </button>
         </div>
         <input className="vw-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar archivo…" aria-label="Buscar archivo" />

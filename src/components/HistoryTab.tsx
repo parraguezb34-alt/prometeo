@@ -354,7 +354,22 @@ export function HistoryTab({
                           data-st={f.status}
                           onClick={() => setFile(f.path)}
                           onDoubleClick={() => f.status !== "D" && onOpenFile(f.path)}
-                          title={`${STATUS_ES[f.status] ?? f.status}: ${f.path} (doble clic para abrirlo)`}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && file === f.path && f.status !== "D") {
+                              e.preventDefault();
+                              onOpenFile(f.path);
+                            }
+                          }}
+                          title={
+                            f.status === "D"
+                              ? `${STATUS_ES[f.status] ?? f.status}: ${f.path} (archivo borrado)`
+                              : `${STATUS_ES[f.status] ?? f.status}: ${f.path} (doble clic o Enter para abrir en el visor)`
+                          }
+                          aria-label={
+                            f.status === "D"
+                              ? `${STATUS_ES[f.status] ?? f.status}: ${f.path}`
+                              : `${STATUS_ES[f.status] ?? f.status}: ${f.path} (doble clic o Enter para abrir en el visor)`
+                          }
                         >
                           <i>{f.status}</i>
                           {f.path}
