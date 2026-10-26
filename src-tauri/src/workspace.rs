@@ -308,9 +308,9 @@ pub fn exists(project: &str, task: u64) -> bool {
     root_of(project).map(|r| ws_dir(&r, task).join(".git").exists()).unwrap_or(false)
 }
 
-/// Trae a la copia lo que cambió en el proyecto desde la base. Devuelve los archivos que chocaron
-/// (quedan con marcas `<<<<<<<` en la copia) y deja la base en el estado actual del proyecto.
-fn sync_locked(root: &Path, ws: &Path, task: u64) -> Result<Vec<String>, String> {
+/// Trae a la copia lo que cambió en el proyecto desde la base. En caso de choque, la copia
+/// queda pendiente de resolución y su base avanza al proyecto actual.
+fn sync_locked(root: &Path, ws: &Path, task: u64) -> Result<(Vec<String>, String), String> {
     let base = git(root, &["rev-parse", &base_ref(task)])?.trim().to_string();
     let now = snapshot_project(root)?;
     let mut conflicts = Vec::new();
@@ -340,8 +340,10 @@ fn sync_locked(root: &Path, ws: &Path, task: u64) -> Result<Vec<String>, String>
             }
         }
     }
-    git(root, &["update-ref", &base_ref(task), &now])?;
-    Ok(conflicts)
+    if !conflicts.is_empty() {
+        git(root, &["update-ref", &base_ref(task), &now])?;
+    }
+    Ok((conflicts, now))
 }
 
 /// Resultado de unir una entrega al proyecto.
@@ -355,27 +357,142 @@ pub enum Delivery {
 /// Une al proyecto el trabajo de la copia. Primero la pone al día con el proyecto; si algo choca,
 /// no toca el proyecto.
 pub fn deliver(project: &str, task: u64) -> Result<Delivery, String> {
+    deliver_with(project, task, |_| Ok(()))
+}
+
+/// El callback permite probar un fallo después de aplicar una parte de la entrega.
+fn deliver_with(project: &str, task: u64, mut before_apply: impl FnMut(usize) -> Result<(), String>) -> Result<Delivery, String> {
     let root = root_of(project)?;
     let _g = LOCK.lock().map_err(|e| e.to_string())?;
     let ws = ws_dir(&root, task);
     if !ws.join(".git").exists() {
         return Err(format!("la tarea #{task} no tiene carpeta aislada"));
     }
-    let conflicts = sync_locked(&root, &ws, task)?;
+    let (conflicts, _) = sync_locked(&root, &ws, task)?;
     if !conflicts.is_empty() {
         return Ok(Delivery::Conflict(conflicts));
     }
     let base = git(&root, &["rev-parse", &base_ref(task)])?.trim().to_string();
     let work = snapshot_ws(&root, &ws, task)?;
-    let mut merged = Vec::new();
-    for (st, path) in changes(&root, &base, &work)? {
-        let dest = root.join(&path);
-        let data = if st == 'D' { None } else { read(&ws.join(&path)) };
-        write(&dest, data.as_deref())?;
-        merged.push(dest.display().to_string());
+    let changes = changes(&root, &base, &work)?;
+    let staging = repo_dir(&root).join(format!(
+        "entrega-{task}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos()
+    ));
+    std::fs::create_dir(&staging).map_err(|e| format!("no pude preparar la entrega: {e}"))?;
+    let result = apply_delivery(&root, &ws, task, &work, &changes, &staging, &mut before_apply);
+    // Ante un fallo se conservan los respaldos para poder recuperarlos incluso si
+    // el sistema impidió la reversión automática.
+    if result.is_ok() {
+        let _ = std::fs::remove_dir_all(&staging);
     }
-    git(&root, &["update-ref", &base_ref(task), &work])?;
-    Ok(Delivery::Merged(merged))
+    result.map(Delivery::Merged)
+}
+
+struct PreparedChange {
+    dest: PathBuf,
+    staged: Option<PathBuf>,
+    backup: PathBuf,
+}
+
+fn apply_delivery(
+    root: &Path,
+    ws: &Path,
+    task: u64,
+    work: &str,
+    changes: &[(char, String)],
+    staging: &Path,
+    before_apply: &mut impl FnMut(usize) -> Result<(), String>,
+) -> Result<Vec<String>, String> {
+    // Todas las lecturas y escrituras de temporales terminan antes de tocar el proyecto.
+    let mut plan = Vec::new();
+    for (i, (status, path)) in changes.iter().enumerate() {
+        let staged = if *status == 'D' {
+            None
+        } else {
+            let bytes = std::fs::read(ws.join(path)).map_err(|e| format!("no pude leer {path} de la copia: {e}"))?;
+            let file = staging.join(format!("nuevo-{i}"));
+            std::fs::write(&file, bytes).map_err(|e| format!("no pude preparar {path}: {e}"))?;
+            Some(file)
+        };
+        plan.push(PreparedChange {
+            dest: root.join(path),
+            staged,
+            backup: staging.join(format!("anterior-{i}")),
+        });
+    }
+
+    let mut applied = Vec::new();
+    let mut created_dirs = Vec::new();
+    let attempt = (|| -> Result<(), String> {
+        for (i, change) in plan.iter().enumerate() {
+            before_apply(i)?;
+            if let Some(parent) = change.dest.parent() {
+                let mut missing = Vec::new();
+                let mut dir = parent;
+                while !dir.exists() {
+                    missing.push(dir.to_path_buf());
+                    dir = dir.parent().ok_or("ruta de entrega sin raíz")?;
+                }
+                for dir in missing.into_iter().rev() {
+                    std::fs::create_dir(&dir).map_err(|e| format!("no pude crear {}: {e}", dir.display()))?;
+                    created_dirs.push(dir);
+                }
+            }
+            let existed = match std::fs::symlink_metadata(&change.dest) {
+                Ok(meta) if meta.is_dir() => {
+                    return Err(format!("{} es una carpeta; esperaba un archivo", change.dest.display()));
+                }
+                Ok(_) => true,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                Err(e) => return Err(format!("no pude inspeccionar {}: {e}", change.dest.display())),
+            };
+            if existed {
+                std::fs::rename(&change.dest, &change.backup)
+                    .map_err(|e| format!("no pude guardar {}: {e}", change.dest.display()))?;
+            }
+            applied.push(i);
+            if let Some(staged) = &change.staged {
+                std::fs::rename(staged, &change.dest)
+                    .map_err(|e| format!("no pude instalar {}: {e}", change.dest.display()))?;
+            }
+        }
+        git(root, &["update-ref", &base_ref(task), work])?;
+        Ok(())
+    })();
+    if let Err(error) = attempt {
+        let mut rollback_errors = Vec::new();
+        for &i in applied.iter().rev() {
+            let change = &plan[i];
+            if std::fs::symlink_metadata(&change.dest).is_ok()
+                && let Err(e) = std::fs::remove_file(&change.dest)
+            {
+                rollback_errors.push(format!("{}: {e}", change.dest.display()));
+                continue;
+            }
+            if change.backup.exists()
+                && let Err(e) = std::fs::rename(&change.backup, &change.dest)
+            {
+                rollback_errors.push(format!("{}: {e}", change.dest.display()));
+            }
+        }
+        for dir in created_dirs.iter().rev() {
+            let _ = std::fs::remove_dir(dir);
+        }
+        if rollback_errors.is_empty() {
+            return Err(error);
+        }
+        return Err(format!("{error}; también falló la reversión: {}", rollback_errors.join(", ")));
+    }
+    let mut merged = Vec::new();
+    for change in plan {
+        merged.push(change.dest.display().to_string());
+    }
+    Ok(merged)
 }
 
 /// Los cambios de la copia frente a su base, como diff (para que el líder revise sin unir aún).
@@ -457,6 +574,27 @@ mod tests {
         assert_eq!(files.len(), 3, "{files:?}");
         discard(&proj, 7).unwrap();
         assert!(!ws.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn failed_second_file_rolls_back_project_and_base_ref() {
+        let root = project("rollback");
+        let proj = root.display().to_string();
+        let ws = PathBuf::from(create(&proj, 17).unwrap());
+        std::fs::write(ws.join("b.txt"), b"nuevo b\n").unwrap();
+        std::fs::write(ws.join("src").join("a.txt"), b"nuevo a\n").unwrap();
+        let original_b = std::fs::read(root.join("b.txt")).unwrap();
+        let original_a = std::fs::read(root.join("src").join("a.txt")).unwrap();
+        let before = git(&root, &["rev-parse", &base_ref(17)]).unwrap();
+        let result = deliver_with(&proj, 17, |i| {
+            if i == 1 { Err("fallo inyectado en el segundo archivo".into()) } else { Ok(()) }
+        });
+        assert!(result.err().expect("debía fallar").contains("fallo inyectado"));
+        assert_eq!(std::fs::read(root.join("b.txt")).unwrap(), original_b);
+        assert_eq!(std::fs::read(root.join("src").join("a.txt")).unwrap(), original_a);
+        assert_eq!(git(&root, &["rev-parse", &base_ref(17)]).unwrap(), before);
+        discard(&proj, 17).unwrap();
         let _ = std::fs::remove_dir_all(&root);
     }
 
