@@ -46,6 +46,7 @@ import { findSkill, riskNotice, skillsInstall, skillsList, skillsSet } from "../
 import type { Skill } from "../lib/skills";
 import { EMPTY_DISPATCH, retryTask } from "../lib/dispatcher";
 import type { DispatchState } from "../lib/dispatcher";
+import { leaderRelayDue } from "../lib/leaderBatch";
 import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, savePrefs } from "../lib/agentPrefs";
 import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
@@ -2123,11 +2124,18 @@ export function CommandCenter() {
   // usar una herramienta del equipo.
   const relayed = useRef<Record<string, number>>({});
   const relayAt = useRef<Record<string, number>>({});
+  /** Desde cuándo espera el líder un aviso que se está juntando con otros. */
+  const waitSince = useRef<Record<string, number>>({});
   useEffect(() => {
     const id = window.setInterval(() => {
       const cur = latestRef.current;
       if (!cur || !getSettings().team.relayInbox) return;
       const now = Date.now();
+      // Lo que ya leyó por su cuenta deja de contar como espera.
+      for (const a of Object.keys(waitSince.current)) {
+        const i = cur.inbox[a];
+        if (!i?.direct || (relayed.current[a] ?? 0) >= i.last_seq) delete waitSince.current[a];
+      }
       for (const [agent, info] of Object.entries(cur.inbox)) {
         // Los mensajes a todo el equipo no despiertan a nadie: cada aviso le cuesta un turno entero.
         if (!info.direct) continue;
@@ -2141,6 +2149,14 @@ export function CommandCenter() {
         if (now - (cur.lastByAgent.get(agent)?.ts_ms ?? 0) < 15_000) continue;
         const panel = panelForAgent(cur.panels, agent);
         if (!panel?.sessionId) continue;
+        // Líder en modo director: los avisos de entregas que no corren prisa se juntan y le llegan
+        // de una vez (cada aviso le hace releer su conversación entera).
+        if (cur.director && agent === cur.leader) {
+          const since = (waitSince.current[agent] ??= now);
+          const othersBusy = liveRef.current.some((l) => l.name !== agent && l.busy);
+          if (!leaderRelayDue({ now, waitingSince: since, from: info.from, unread: info.unread, leader: agent, tasks: cur.tasks, othersBusy })) continue;
+        }
+        delete waitSince.current[agent];
         relayed.current[agent] = info.last_seq;
         relayAt.current[agent] = now;
         const from = info.from.map(agentLabel).join(", ");
@@ -2150,7 +2166,9 @@ export function CommandCenter() {
         const hooked = agent === "claude";
         const onlyReviews = info.from.length > 0 && info.from.every((f) => f === "lienzo");
         const line = !hooked
-          ? `📬 Tienes ${n} de ${from} en tu buzón: léelos con team_inbox y responde solo si hace falta.`
+          ? onlyReviews
+            ? `📬 Tienes ${n} de Prometeo en tu buzón (una entrega que revisar trae su diff): léelos con team_inbox y, si es una revisión, decide con team_task_review.`
+            : `📬 Tienes ${n} de ${from} en tu buzón: léelos con team_inbox y responde solo si hace falta.`
           : onlyReviews
             ? `🔎 Tienes ${info.unread === 1 ? "1 entrega" : `${info.unread} entregas`} para revisar: el detalle y el diff van adjuntos a este aviso; decide con team_task_review.`
             : `📬 Tienes ${n} de ${from}: van adjuntos a este aviso (no hace falta team_inbox); responde solo si hace falta.`;

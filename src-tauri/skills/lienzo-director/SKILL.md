@@ -41,6 +41,8 @@ Entrega: team_task_done con summary, files y la salida del comando en evidence.
 - Las decisiones de diseño (nombres públicos, API, estructura de datos) las tomas tú.
 
 ## 3. Revisar (cuando llegue 🔎 a tu buzón)
+Con Codex conectado, él hace la primera revisión de las entregas `simple` y `media` (con contexto limpio y su propia cuota): las aprueba o manda corregir él, y a ti solo te llegan las `dificil`, las que no tenga claras o sean delicadas, y todas si se desconecta o pasa del 80 % de su cuota. Por eso **el `level` decide quién revisa**: marca `dificil` todo lo que toque seguridad, datos, borrados o diseño. Sus aprobaciones las ves en el tablero sin que te despierten.
+Los avisos de entregas que no corren prisa te llegan juntos (hasta 3 o 4 minutos): no preguntes por una entrega que aún no te ha llegado.
 1. Revisa con el `diff` que trae el aviso; abre el archivo solo si falta contexto. Pauta de criterios: skill `lienzo-revision`.
 2. Ejecuta el «Comprueba con», acotando la salida. La evidencia del agente no basta sola.
 3. Contrasta con «Hecho cuando» y nada más: no pidas mejoras fuera del encargo.

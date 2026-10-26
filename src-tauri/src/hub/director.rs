@@ -9,6 +9,16 @@ use tauri::{AppHandle, Emitter, Manager};
 
 pub const DEFAULT_FIX_LIMIT: u32 = 2;
 
+/// Primer revisor de las entregas `simple` y `media`: Codex (modelo fuerte con su propia cuota,
+/// aparte de la de Claude). Revisa con el contexto limpio (encargo + diff) y solo le pasa al líder
+/// lo difícil, lo delicado o lo que no sepa resolver: así no se relee su conversación entera por
+/// cada entrega que acaba en «ok».
+pub const FIRST_REVIEWER: &str = "codex";
+/// Con esta cuota gastada (cualquier ventana), el primer revisor deja de revisar.
+pub const FIRST_REVIEWER_MAX_PCT: f64 = 80.0;
+/// Si el primer revisor no decide en este tiempo, la revisión vuelve al líder.
+pub const FIRST_REVIEWER_WAIT_MS: u64 = 20 * 60_000;
+
 pub fn fix_limit(inner: &HubInner) -> u32 {
     if inner.fix_limit == 0 { DEFAULT_FIX_LIMIT } else { inner.fix_limit }
 }
@@ -48,6 +58,75 @@ pub fn reviewer_for(inner: &HubInner, agent: &str) -> Option<String> {
     (!leader.eq_ignore_ascii_case(agent)).then_some(leader)
 }
 
+/// Lo más gastado de la cuota de un agente (la peor de sus ventanas), 0 si no se sabe.
+pub fn quota_pct(inner: &HubInner, agent: &str) -> f64 {
+    inner
+        .limits
+        .get(&agent.to_lowercase())
+        .and_then(|l| l["windows"].as_array())
+        .map(|ws| ws.iter().filter_map(|w| w["used_pct"].as_f64()).fold(0.0, f64::max))
+        .unwrap_or(0.0)
+}
+
+/// ¿Puede el primer revisor ocuparse ahora de una entrega? Conectado y con cuota.
+pub fn first_reviewer_ready(inner: &HubInner) -> bool {
+    is_online(inner, FIRST_REVIEWER) && quota_pct(inner, FIRST_REVIEWER) < FIRST_REVIEWER_MAX_PCT
+}
+
+/// Quién revisa la entrega de `agent` de la tarea `id`: el primer revisor si es `simple` o
+/// `media`, está libre y no es ni quien la entrega ni el líder; si no, el líder (ver `reviewer_for`).
+pub fn reviewer_for_task(inner: &HubInner, agent: &str, id: u64) -> Option<String> {
+    let leader = reviewer_for(inner, agent)?;
+    let level = inner.tasks.iter().find(|t| t.id == id).map(|t| t.level.as_str()).unwrap_or("");
+    let first = FIRST_REVIEWER;
+    let light = matches!(level, "simple" | "media");
+    if light && !agent.eq_ignore_ascii_case(first) && !leader.eq_ignore_ascii_case(first) && first_reviewer_ready(inner) {
+        Some(first.to_string())
+    } else {
+        Some(leader)
+    }
+}
+
+/// ¿Puede `by` decidir sobre la entrega de la tarea? El líder, tú o quien tiene asignada su revisión.
+fn may_review(inner: &HubInner, task: &Task, by: &str) -> bool {
+    by == "tú"
+        || inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(by))
+        || (!task.reviewer.is_empty() && task.reviewer.eq_ignore_ascii_case(by))
+}
+
+/// Revisiones del primer revisor que deben volver al líder: se desconectó, se quedó sin cuota o
+/// lleva demasiado sin decidir. Devuelve si cambió algo.
+pub fn reroute_reviews(inner: &mut HubInner) -> bool {
+    if !inner.director {
+        return false;
+    }
+    let Some(leader) = inner.leader.clone() else { return false };
+    let ready = first_reviewer_ready(inner);
+    let now = now_ms();
+    let stuck: Vec<(u64, &'static str)> = inner
+        .tasks
+        .iter()
+        .filter(|t| t.status == "review" && !t.reviewer.is_empty() && !t.reviewer.eq_ignore_ascii_case(&leader))
+        .filter_map(|t| {
+            if !ready {
+                Some((t.id, "no está disponible (desconectado o sin cuota)"))
+            } else if now.saturating_sub(t.review_ms) > FIRST_REVIEWER_WAIT_MS {
+                Some((t.id, "lleva 20 min sin decidir"))
+            } else {
+                None
+            }
+        })
+        .collect();
+    for (id, why) in &stuck {
+        let first = inner.tasks.iter().find(|t| t.id == *id).map(|t| t.reviewer.clone()).unwrap_or_default();
+        if let Some(t) = inner.tasks.iter_mut().find(|t| t.id == *id) {
+            t.comments.push(TaskComment { by: "lienzo".into(), text: format!("⤴ La revisión pasa al líder: {first} {why}"), ts_ms: now });
+        }
+        ask_review(inner, *id, &leader);
+    }
+    !stuck.is_empty()
+}
+
 /// El líder acaba de conectarse: si hay entregas esperando su revisión, se lo recuerda en un
 /// solo mensaje (los avisos de antes de reiniciar el hub cuentan como leídos).
 pub fn remind_reviews(inner: &mut HubInner, agent: &str) {
@@ -57,7 +136,7 @@ pub fn remind_reviews(inner: &mut HubInner, agent: &str) {
     let pending: Vec<String> = inner
         .tasks
         .iter()
-        .filter(|t| t.status == "review")
+        .filter(|t| t.status == "review" && (t.reviewer.is_empty() || t.reviewer.eq_ignore_ascii_case(agent)))
         .map(|t| format!("#{} «{}»", t.id, clean_text(&t.title, 60)))
         .collect();
     if pending.is_empty() || inbox_unread(inner, agent).iter().any(|e| e.agent == "lienzo") {
@@ -108,22 +187,44 @@ pub fn drop_bases(inner: &mut HubInner, files: &[String]) {
     }
 }
 
-/// Pide al líder que revise una entrega: le llega como mensaje directo, así que lo despierta.
-pub fn ask_review(inner: &mut HubInner, id: u64, leader: &str) {
-    let Some(task) = inner.tasks.iter().find(|t| t.id == id) else { return };
+/// Pide a `reviewer` (el líder o el primer revisor) que revise una entrega: le llega como mensaje
+/// directo, así que lo despierta. Queda anotado en la tarea quién la revisa y desde cuándo.
+pub fn ask_review(inner: &mut HubInner, id: u64, reviewer: &str) {
+    let is_leader = inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(reviewer));
+    let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) else { return };
     let Some(r) = task.result.clone() else { return };
+    task.reviewer = reviewer.to_string();
+    task.review_ms = now_ms();
+    let task = task.clone();
     let round = if task.fix_rounds > 0 { format!(" (tras la ronda {} de correcciones)", task.fix_rounds) } else { String::new() };
     let files = if r.files.is_empty() { "—".to_string() } else { r.files.join(", ") };
     let evidence = if r.evidence.is_empty() { "sin evidencia".to_string() } else { clean_text(&r.evidence, 300) };
     let diff_note = if r.diff.is_empty() { "" } else { " Los cambios van debajo: no abras los archivos salvo que te falte algo." };
+    let how = if is_leader {
+        "verdict ok, fix (con órdenes concretas) o take (la haces tú).".to_string()
+    } else {
+        // El primer revisor: decide lo claro y le pasa al líder lo que no lo es.
+        let escalated = task
+            .comments
+            .iter()
+            .rev()
+            .find(|c| c.text.starts_with("⤴"))
+            .map(|c| format!(" Nota: {}", clean_text(&c.text, 200)))
+            .unwrap_or_default();
+        format!(
+            "eres el primer revisor (pauta: skill lienzo-revision). verdict ok si cumple el «Hecho cuando» del encargo; \
+             fix con órdenes concretas si falla algo; lider si dudas, si toca algo delicado (seguridad, datos, borrados) \
+             o si tras las rondas sigue mal.{escalated}"
+        )
+    };
     let text = format!(
         "🔎 Revisa la entrega de #{id} «{}» de {}{round}: {} · Archivos: {files} · Evidencia: {evidence}. \
-         Decide con team_task_review: verdict ok, fix (con órdenes concretas) o take (la haces tú).{diff_note}",
+         Decide con team_task_review: {how}{diff_note}",
         clean_text(&task.title, 120),
         r.by,
         clean_text(&r.summary, 500),
     );
-    push_event_full(inner, "lienzo", "hub", "message", &text, r.files, Some(leader.to_string()), Some(id));
+    push_event_full(inner, "lienzo", "hub", "message", &text, r.files, Some(reviewer.to_string()), Some(id));
 }
 
 /// El líder (o tú) completa el encargo de una tarea; un borrador pasa a estar listo para repartir.
@@ -250,18 +351,36 @@ pub fn review_task(
     verdict: &str,
     notes: &str,
 ) -> Result<String, String> {
-    let is_leader = inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(by));
-    if by != "tú" && !is_leader {
-        return Err("solo el líder (o tú) decide sobre las entregas".into());
-    }
+    let leader = inner.leader.clone().unwrap_or_default();
+    let is_leader = !leader.is_empty() && leader.eq_ignore_ascii_case(by);
     let limit = fix_limit(inner);
     let notes = notes.trim().chars().take(2000).collect::<String>();
-    let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) else {
+    let Some(pos) = inner.tasks.iter().position(|t| t.id == id) else {
         return Err("tarea no encontrada".into());
     };
-    if task.status != "review" {
-        return Err(format!("la tarea #{id} no está en revisión (estado: {})", task.status));
+    if !may_review(inner, &inner.tasks[pos], by) {
+        return Err("solo el líder, tú o el revisor de esta entrega deciden sobre ella".into());
     }
+    if inner.tasks[pos].status != "review" {
+        return Err(format!("la tarea #{id} no está en revisión (estado: {})", inner.tasks[pos].status));
+    }
+    // El primer revisor no se queda la tarea: lo que no tiene claro (o pide «take») vuelve al líder.
+    let first = by != "tú" && !is_leader;
+    let verdict_l = verdict.trim().to_lowercase();
+    if first && matches!(verdict_l.as_str(), "lider" | "líder" | "leader" | "escalar" | "take" | "asumir") {
+        if leader.is_empty() {
+            return Err("no hay líder a quien pasársela: decide ok o fix".into());
+        }
+        let why = if notes.is_empty() { String::new() } else { format!(": {notes}") };
+        let now = now_ms();
+        let task = &mut inner.tasks[pos];
+        task.comments.push(TaskComment { by: by.into(), text: format!("⤴ {by} se la pasa al líder{why}"), ts_ms: now });
+        let title = clean_text(&task.title, 100);
+        push_event_full(inner, by, session_id, "task", &format!("#{id} pasa al líder para revisar: {title}"), vec![], None, Some(id));
+        ask_review(inner, id, &leader);
+        return Ok(format!("#{id} pasa a {leader} para que la revise."));
+    }
+    let task = &mut inner.tasks[pos];
     let owner = task.owner.clone();
     let title = clean_text(&task.title, 100);
     let now = now_ms();
@@ -281,10 +400,8 @@ pub fn review_task(
                 return Err("di qué corregir en `notes`: órdenes concretas (archivo, qué cambiar, cómo comprobarlo)".into());
             }
             if task.fix_rounds >= limit {
-                return Err(format!(
-                    "#{id} ya lleva {} rondas de corrección: asúmela (verdict take) o apruébala (ok)",
-                    task.fix_rounds
-                ));
+                let way = if first { "pásasela al líder (verdict lider)" } else { "asúmela (verdict take)" };
+                return Err(format!("#{id} ya lleva {} rondas de corrección: {way} o apruébala (ok)", task.fix_rounds));
             }
             task.fix_rounds += 1;
             let round = task.fix_rounds;
@@ -320,6 +437,7 @@ pub fn review_task(
             );
             Ok(format!("#{id} es tuya ahora: termínala y ciérrala con team_task_done."))
         }
+        other if first => Err(format!("veredicto «{other}» desconocido: usa ok, fix o lider")),
         other => Err(format!("veredicto «{other}» desconocido: usa ok, fix o take")),
     }
 }

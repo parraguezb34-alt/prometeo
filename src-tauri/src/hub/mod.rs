@@ -194,6 +194,12 @@ pub struct Task {
     /// Modelo con el que debe ejecutarse (de su programación), vacío = el del agente.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
+    /// Quién revisa la entrega en curso (modo director): el primer revisor o el líder.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reviewer: String,
+    /// Cuándo se le pidió esa revisión (ms): si el primer revisor tarda demasiado, vuelve al líder.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub review_ms: u64,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -221,6 +227,8 @@ impl Task {
             workspace: String::new(),
             schedule: 0,
             model: String::new(),
+            reviewer: String::new(),
+            review_ms: 0,
         }
     }
 }

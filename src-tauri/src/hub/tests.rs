@@ -276,6 +276,96 @@ mod inbox_tests {
         assert!(unmet_parents(&h.tasks, &h.tasks[1]).is_empty());
     }
 
+    fn with_codex(h: &mut HubInner, used_pct: f64) {
+        join(h, "codex");
+        h.limits.insert(
+            "codex".into(),
+            serde_json::json!({ "windows": [ { "key": "week", "label": "Semana", "used_pct": used_pct } ], "exact": true }),
+        );
+    }
+
+    #[test]
+    fn codex_revisa_primero_lo_simple_y_medio() {
+        let mut h = delivered();
+        with_codex(&mut h, 10.0);
+        h.tasks[0].level = "simple".into();
+        assert_eq!(reviewer_for_task(&h, "opencode", 1).as_deref(), Some("codex"));
+        h.tasks[0].level = "media".into();
+        assert_eq!(reviewer_for_task(&h, "opencode", 1).as_deref(), Some("codex"));
+        h.tasks[0].level = "dificil".into();
+        assert_eq!(reviewer_for_task(&h, "opencode", 1).as_deref(), Some("claude"), "lo difícil, al líder");
+        h.tasks[0].level = String::new();
+        assert_eq!(reviewer_for_task(&h, "opencode", 1).as_deref(), Some("claude"), "sin nivel, al líder");
+        h.tasks[0].level = "simple".into();
+        assert_eq!(reviewer_for_task(&h, "codex", 1).as_deref(), Some("claude"), "lo de Codex lo revisa el líder");
+        with_codex(&mut h, 85.0);
+        assert_eq!(reviewer_for_task(&h, "opencode", 1).as_deref(), Some("claude"), "Codex sin cuota: al líder");
+        let mut off = delivered();
+        off.tasks[0].level = "simple".into();
+        assert_eq!(reviewer_for_task(&off, "opencode", 1).as_deref(), Some("claude"), "Codex desconectado: al líder");
+    }
+
+    #[test]
+    fn codex_aprueba_corrige_o_pasa_al_lider() {
+        let mut h = delivered();
+        with_codex(&mut h, 10.0);
+        h.tasks[0].level = "simple".into();
+        ask_review(&mut h, 1, "codex");
+        assert_eq!(h.tasks[0].reviewer, "codex");
+        let msg = inbox_unread(&h, "codex");
+        assert!(msg.len() == 1 && msg[0].text.contains("primer revisor") && msg[0].text.starts_with("🔎 Revisa la entrega de #1"));
+        assert!(inbox_unread(&h, "claude").is_empty(), "al líder no lo despierta");
+        assert!(review_task(&mut h, 1, "opencode", "s", "ok", "").is_err(), "quien entrega no se aprueba");
+        // Lo que no tiene claro vuelve al líder (también si pide take), con su nota.
+        review_task(&mut h, 1, "codex", "s", "lider", "toca el login").unwrap();
+        assert_eq!((h.tasks[0].status.as_str(), h.tasks[0].reviewer.as_str()), ("review", "claude"));
+        let lead = inbox_unread(&h, "claude");
+        assert!(lead.iter().any(|e| e.text.contains("#1") && e.text.contains("take (la haces tú)")));
+        assert!(review_task(&mut h, 1, "codex", "s", "ok", "").is_err(), "ya no es suya");
+        review_task(&mut h, 1, "claude", "s", "ok", "").unwrap();
+        assert_eq!(h.tasks[0].status, "done");
+    }
+
+    #[test]
+    fn codex_aprueba_y_tras_las_rondas_la_pasa() {
+        let mut h = delivered();
+        with_codex(&mut h, 10.0);
+        ask_review(&mut h, 1, "codex");
+        review_task(&mut h, 1, "codex", "s", "fix", "falta el test").unwrap();
+        h.tasks[0].status = "review".into();
+        review_task(&mut h, 1, "codex", "s", "fix", "otra vez").unwrap();
+        h.tasks[0].status = "review".into();
+        let err = review_task(&mut h, 1, "codex", "s", "fix", "y otra").unwrap_err();
+        assert!(err.contains("verdict lider"), "{err}");
+        review_task(&mut h, 1, "codex", "s", "take", "").unwrap();
+        assert_eq!((h.tasks[0].owner.as_str(), h.tasks[0].reviewer.as_str()), ("opencode", "claude"), "take = al líder, no se la queda");
+        let mut ok = delivered();
+        with_codex(&mut ok, 10.0);
+        ask_review(&mut ok, 1, "codex");
+        review_task(&mut ok, 1, "codex", "s", "ok", "").unwrap();
+        assert_eq!(ok.tasks[0].status, "done");
+    }
+
+    #[test]
+    fn la_revision_vuelve_al_lider_si_codex_no_puede() {
+        let mut h = delivered();
+        with_codex(&mut h, 10.0);
+        ask_review(&mut h, 1, "codex");
+        assert!(!reroute_reviews(&mut h), "Codex disponible y a tiempo: sigue con él");
+        with_codex(&mut h, 90.0);
+        assert!(reroute_reviews(&mut h));
+        assert_eq!(h.tasks[0].reviewer, "claude");
+        assert!(inbox_unread(&h, "claude").iter().any(|e| e.text.contains("#1")));
+        assert!(!reroute_reviews(&mut h), "una sola vez");
+        // Demasiado tiempo sin decidir, también.
+        let mut slow = delivered();
+        with_codex(&mut slow, 10.0);
+        ask_review(&mut slow, 1, "codex");
+        slow.tasks[0].review_ms = now_ms() - FIRST_REVIEWER_WAIT_MS - 1;
+        assert!(reroute_reviews(&mut slow));
+        assert_eq!(slow.tasks[0].reviewer, "claude");
+    }
+
     #[test]
     fn leader_back_gets_one_reminder_of_pending_reviews() {
         let mut h = delivered();

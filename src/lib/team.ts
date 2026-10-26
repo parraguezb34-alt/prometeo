@@ -83,6 +83,8 @@ export type TeamTask = {
   assign?: string;
   /** Rondas de corrección en modo director. */
   fix_rounds?: number;
+  /** Quién revisa la entrega en curso (el primer revisor o el líder). */
+  reviewer?: string;
   /** Carpeta aislada donde se trabaja (vacía o ausente si se trabaja en el proyecto). */
   workspace?: string;
   /** Programación que la creó (0 o ausente si ninguna). */

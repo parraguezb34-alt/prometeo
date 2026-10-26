@@ -196,12 +196,20 @@ fn cmd_heartbeat(app: &AppHandle, payload: &Value) -> Result<Value, String> {
     let sid = payload["session_id"].as_str().unwrap_or("").to_string();
     // `known: false` avisa al puente de que este hub no lo conoce (p. ej. lienzo se reinició):
     // el puente vuelve a unirse en vez de quedarse mudo con una sesión que ya no existe.
-    let known = hub::with_inner(app, |inner| {
+    let (known, rerouted) = hub::with_inner(app, |inner| {
         let known = inner.agents.contains_key(&sid);
         hub::touch_agent(inner, &sid);
-        known
+        // Cada latido mira si alguna revisión del primer revisor debe volver al líder.
+        let rerouted = hub::reroute_reviews(inner);
+        if rerouted {
+            hub::persist(inner);
+        }
+        (known, rerouted)
     })
     .ok_or("hub no inicializado")?;
+    if rerouted {
+        hub::notify_ui();
+    }
     Ok(json!({ "ok": true, "known": known }))
 }
 
@@ -660,7 +668,9 @@ fn isolated_step(app: &AppHandle, op: &str, id: u64, sid: &str, payload: &Value,
             return None;
         }
         let reviewer = t.research.is_empty() && hub::reviewer_for(inner, &agent).is_some();
-        let leads = agent == "tú" || inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(&agent));
+        let leads = agent == "tú"
+            || inner.leader.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(&agent))
+            || (!t.reviewer.is_empty() && t.reviewer.eq_ignore_ascii_case(&agent));
         Some((inner.project.clone()?, t.workspace.clone(), reviewer, leads, t.status.clone(), t.owner.clone(), agent))
     })
     .flatten();
@@ -883,7 +893,7 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                             return Err(format!("la tarea #{id} ya está hecha"));
                         }
                         if snapshot.status == "review" {
-                            return Err(format!("la tarea #{id} está en revisión del líder; espera su decisión"));
+                            return Err(format!("la tarea #{id} está en revisión; espera la decisión"));
                         }
                         if snapshot.status == "plan" {
                             return Err(format!(
@@ -944,7 +954,7 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 // Modo director: la entrega de un trabajador espera la revisión del líder.
                 // Las de una investigación no: ya tienen su verificación (y gastaría cuota del líder).
                 let reviewer = if op == "done" && inner.tasks[pos].research.is_empty() {
-                    hub::reviewer_for(inner, &agent)
+                    hub::reviewer_for_task(inner, &agent, id)
                 } else {
                     None
                 };

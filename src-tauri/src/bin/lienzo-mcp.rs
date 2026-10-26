@@ -203,6 +203,12 @@ usa los modelos gratis del equipo (opencode run) o pregunta antes con team_ask_u
 entrega con evidencia real y corrige lo que te pida. \
 No ejecutes en bucle nada que llame a un modelo de pago (claude -p…): gasta la cuota del usuario; una prueba y pregunta.\n"
                 ));
+                if me.eq_ignore_ascii_case("codex") {
+                    lead.push_str(
+                        "Eres además el primer revisor de las entregas simple y media: cuando te llegue un 🔎, \
+revísala (skill lienzo-revision) y decide con team_task_review: ok, fix o lider (lo que dudes o sea delicado).\n",
+                    );
+                }
             }
         }
     }
@@ -717,12 +723,12 @@ fn tools_catalog() -> Value {
         },
         {
             "name": "team_task_review",
-            "description": "Solo el líder, en modo director: decide sobre una entrega en revisión. ok = aprobada; fix = vuelve a su dueño con tus órdenes en `notes`; take = la terminas tú.",
+            "description": "Modo director: decide sobre una entrega en revisión (el líder, o el primer revisor al que le llegó el aviso 🔎). ok = aprobada; fix = vuelve a su dueño con tus órdenes en `notes`; take = la terminas tú (solo el líder); lider = el primer revisor se la pasa al líder.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "id": { "type": "integer" },
-                    "verdict": { "type": "string", "enum": ["ok", "fix", "take"] },
+                    "verdict": { "type": "string", "enum": ["ok", "fix", "take", "lider"] },
                     "notes": { "type": "string", "description": "Con fix: órdenes concretas y numeradas (archivo, qué cambiar, cómo comprobarlo)" }
                 },
                 "required": ["id", "verdict"]
