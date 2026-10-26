@@ -442,11 +442,10 @@ fn heading_level(style: &str) -> u8 {
         return 1;
     }
     for p in ["heading", "ttulo", "titre", "berschrift", "kop"] {
-        if let Some(n) = s.strip_prefix(p) {
-            if let Ok(n) = n.trim().parse::<u8>() {
+        if let Some(n) = s.strip_prefix(p)
+            && let Ok(n) = n.trim().parse::<u8>() {
                 return n.clamp(1, 6);
             }
-        }
     }
     0
 }
@@ -584,6 +583,8 @@ fn col_name(mut i: usize) -> String {
     s.iter().rev().collect()
 }
 
+type SheetRow = (usize, Vec<(usize, String, bool)>);
+
 fn xlsx(zip: &Zip) -> Result<String, String> {
     // Los textos repetidos van aparte, en sharedStrings.
     let mut shared: Vec<String> = Vec::new();
@@ -626,7 +627,7 @@ fn xlsx(zip: &Zip) -> Result<String, String> {
     let mut out = String::new();
     for (name, part) in sheets {
         let Some(xml) = zip.text(&part) else { continue };
-        let mut rows: Vec<(usize, Vec<(usize, String, bool)>)> = Vec::new();
+        let mut rows: Vec<SheetRow> = Vec::new();
         let (mut cell_t, mut cell_col, mut val, mut in_v, mut in_is_t) = (String::new(), 0usize, String::new(), false, false);
         let mut cut = false;
         for t in tokens(&xml) {
@@ -715,11 +716,10 @@ fn pptx(zip: &Zip) -> Result<String, String> {
     let mut slides: Vec<String> = Vec::new();
     if let Some(xml) = zip.text("ppt/presentation.xml") {
         for t in tokens(&xml) {
-            if let Tok::Open("p:sldId", a, _) = t {
-                if let Some((_, target)) = attr(&a, "r:id").and_then(|id| p_rels.iter().find(|(i, _)| i == id)) {
+            if let Tok::Open("p:sldId", a, _) = t
+                && let Some((_, target)) = attr(&a, "r:id").and_then(|id| p_rels.iter().find(|(i, _)| i == id)) {
                     slides.push(join_part("ppt", target));
                 }
-            }
         }
     }
     if slides.is_empty() {

@@ -64,11 +64,10 @@ pub fn log(source: &str, message: &str, detail: &str) {
     {
         let Ok(_g) = LOCK.lock() else { return };
         let path = file();
-        if let Ok(line) = serde_json::to_string(&e) {
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        if let Ok(line) = serde_json::to_string(&e)
+            && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
                 let _ = writeln!(f, "{line}");
             }
-        }
         // De vez en cuando se recorta a los últimos KEEP.
         let all = read_all();
         if all.len() > KEEP + 100 {

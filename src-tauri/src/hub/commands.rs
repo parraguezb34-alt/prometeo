@@ -389,11 +389,10 @@ pub fn team_isolate(hub: tauri::State<'_, Hub>, enabled: bool) -> Result<(), Str
 /// Tras unir una carpeta aislada: lo unido queda en el historial como entrega y la copia se borra.
 pub fn after_merge(project: String, id: u64, title: String, by: String, files: Vec<String>) {
     std::thread::spawn(move || {
-        if !files.is_empty() {
-            if let Err(e) = crate::history::record(&project, id, &title, &by, &files) {
+        if !files.is_empty()
+            && let Err(e) = crate::history::record(&project, id, &title, &by, &files) {
                 crate::errlog::log("historial", &format!("No se guardó la entrega de #{id} en el historial"), &e);
             }
-        }
         if let Err(e) = crate::workspace::discard(&project, id) {
             crate::errlog::log("carpetas", &format!("No se pudo borrar la carpeta aislada de #{id}"), &e);
         }

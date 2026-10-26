@@ -114,11 +114,10 @@ pub fn rename(hub: &Hub, path: &str, name: &str) -> Result<String, String> {
         hub::persist(&inner);
     }
     hub::notify_ui();
-    if let Some(home) = home() {
-        if let Err(e) = move_claude_sessions(&home, &old_s, &new_s) {
+    if let Some(home) = home()
+        && let Err(e) = move_claude_sessions(&home, &old_s, &new_s) {
             crate::errlog::log("proyecto", "No se pudieron mover las conversaciones de Claude Code", &e);
         }
-    }
     Ok(new_s)
 }
 

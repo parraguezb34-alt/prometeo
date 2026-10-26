@@ -85,11 +85,10 @@ pub fn search_feed(inner: &HubInner, query: &str, agent: &str, limit: usize) -> 
                 if found.len() >= limit {
                     break;
                 }
-                if let Ok(e) = serde_json::from_str::<Event>(line) {
-                    if feed_matches(&e, &terms, &agent) && !found.iter().any(|f| f.seq == e.seq) {
+                if let Ok(e) = serde_json::from_str::<Event>(line)
+                    && feed_matches(&e, &terms, &agent) && !found.iter().any(|f| f.seq == e.seq) {
                         found.push(e);
                     }
-                }
             }
         }
     }
@@ -141,8 +140,8 @@ pub fn save_handover(
 ) -> u64 {
     let now = now_ms();
     let mut attached = false;
-    if let Some(id) = task_id {
-        if let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) {
+    if let Some(id) = task_id
+        && let Some(task) = inner.tasks.iter_mut().find(|t| t.id == id) {
             task.handover = Some(TaskHandover {
                 text: redact::redact(summary),
                 by: agent.to_string(),
@@ -151,7 +150,6 @@ pub fn save_handover(
             });
             attached = true;
         }
-    }
     let label = match task_id {
         Some(id) if attached => format!("#{id} · "),
         Some(id) => format!("#{id} (sin tarea) · "),

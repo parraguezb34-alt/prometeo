@@ -92,13 +92,11 @@ pub fn check_in(source: &Path, current: &Path) -> UpdateInfo {
     let built = release.join("lienzo.exe");
     let built_ms = mtime_ms(&setup);
     let key = setup.display().to_string();
-    if let Ok(last) = LAST.lock() {
-        if let Some((k, ms, info)) = last.as_ref() {
-            if *k == key && *ms == built_ms {
+    if let Ok(last) = LAST.lock()
+        && let Some((k, ms, info)) = last.as_ref()
+            && *k == key && *ms == built_ms {
                 return info.clone();
             }
-        }
-    }
     // El instalador lleva dentro el lienzo.exe recién compilado: si es igual al que corre, ya está.
     let available = built.is_file() && !same_file(&built, current);
     let info = UpdateInfo {

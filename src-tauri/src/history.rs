@@ -145,11 +145,10 @@ fn big_files(root: &Path) -> Vec<String> {
                 if !NOISE.contains(&name.as_str()) {
                     stack.push(e.path());
                 }
-            } else if ft.is_file() && e.metadata().map(|m| m.len() > BIG_FILE).unwrap_or(false) {
-                if let Ok(rel) = e.path().strip_prefix(root) {
+            } else if ft.is_file() && e.metadata().map(|m| m.len() > BIG_FILE).unwrap_or(false)
+                && let Ok(rel) = e.path().strip_prefix(root) {
                     out.push(format!("/{}", rel.display().to_string().replace('\\', "/")));
                 }
-            }
         }
     }
     out
@@ -244,11 +243,10 @@ pub fn record(project: &str, task: u64, title: &str, by: &str, files: &[String])
     ensure_at(&root)?;
     let mut rels: Vec<String> = Vec::new();
     for f in files.iter().take(300) {
-        if let Some(r) = rel_of(&root, f) {
-            if !rels.contains(&r) {
+        if let Some(r) = rel_of(&root, f)
+            && !rels.contains(&r) {
                 rels.push(r);
             }
-        }
     }
     for r in &rels {
         // Una ruta que no existe ni existió da error: se ignora.
@@ -265,11 +263,10 @@ pub fn record(project: &str, task: u64, title: &str, by: &str, files: &[String])
 fn trailers(body: &str) -> HashMap<String, String> {
     let mut m = HashMap::new();
     for l in body.lines() {
-        if let Some(rest) = l.strip_prefix("lienzo-") {
-            if let Some((k, v)) = rest.split_once(':') {
+        if let Some(rest) = l.strip_prefix("lienzo-")
+            && let Some((k, v)) = rest.split_once(':') {
                 m.insert(k.trim().to_string(), v.trim().to_string());
             }
-        }
     }
     m
 }

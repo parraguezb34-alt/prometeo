@@ -357,13 +357,12 @@ pub fn delete_task(inner: &mut HubInner, id: u64) -> Result<(), String> {
         t.parents.retain(|p| *p != id);
     }
     // Su carpeta aislada ya no sirve: fuera (sin frenar al hub con git).
-    if !gone.workspace.is_empty() {
-        if let Some(project) = inner.project.clone() {
+    if !gone.workspace.is_empty()
+        && let Some(project) = inner.project.clone() {
             std::thread::spawn(move || {
                 let _ = crate::workspace::discard(&project, id);
             });
         }
-    }
     push_event(
         inner,
         "tú",
@@ -544,7 +543,7 @@ pub fn rename_project(inner: &mut HubInner, old: &str, new: &str) -> bool {
 /// Los otros proyectos (con carpeta), del usado más recientemente al más antiguo.
 pub fn project_list(inner: &HubInner) -> Vec<serde_json::Value> {
     let mut list: Vec<&ProjectSlot> = inner.projects.values().filter(|s| !s.path.is_empty()).collect();
-    list.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
+    list.sort_by_key(|a| std::cmp::Reverse(a.last_ms));
     list.iter()
         .map(|s| {
             serde_json::json!({
@@ -883,7 +882,7 @@ pub fn flush_pending() {
         }
     };
     if let Some(raw) = raw {
-        flush_pending_raw(&raw, |s| write_state(s));
+        flush_pending_raw(&raw, write_state);
     }
 }
 

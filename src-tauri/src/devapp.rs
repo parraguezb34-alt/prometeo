@@ -66,8 +66,8 @@ fn no_window(c: &mut Command) {
 /// Cómo se arranca este proyecto.
 pub fn detect(root: &Path) -> Detect {
     let pkg = root.join("package.json");
-    if let Ok(text) = std::fs::read_to_string(&pkg) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+    if let Ok(text) = std::fs::read_to_string(&pkg)
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
             let scripts = &v["scripts"];
             let cmd = if scripts["dev"].is_string() {
                 Some("npm run dev")
@@ -82,7 +82,6 @@ pub fn detect(root: &Path) -> Detect {
                 return Detect { kind: "npm".into(), cmd: cmd.into(), install: !root.join("node_modules").is_dir() };
             }
         }
-    }
     if root.join("index.html").is_file() {
         return Detect { kind: "static".into(), cmd: "index.html".into(), install: false };
     }
@@ -144,11 +143,10 @@ fn push_log(epoch: u64, line: String) {
         if a.epoch != epoch {
             return;
         }
-        if a.status.url.is_none() {
-            if let Some(u) = find_url(&line) {
+        if a.status.url.is_none()
+            && let Some(u) = find_url(&line) {
                 a.status.url = Some(u);
             }
-        }
         a.status.log.push(line);
         let n = a.status.log.len();
         if n > LOG_CAP {
@@ -209,13 +207,12 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
+        if b[i] == b'%' && i + 2 < b.len()
+            && let Some(v) = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
                 out.push(v);
                 i += 3;
                 continue;
             }
-        }
         out.push(b[i]);
         i += 1;
     }
@@ -224,6 +221,7 @@ fn percent_decode(s: &str) -> String {
 
 /// Archivo del proyecto para una URL del servidor de archivos (None si se sale de la carpeta).
 fn file_for(root: &Path, url: &str) -> Option<PathBuf> {
+    let real_root = root.canonicalize().ok()?;
     let path = url.split(['?', '#']).next().unwrap_or("");
     let rel = percent_decode(path.trim_start_matches('/'));
     let mut out = root.to_path_buf();
@@ -237,7 +235,11 @@ fn file_for(root: &Path, url: &str) -> Option<PathBuf> {
     if out.is_dir() {
         out.push("index.html");
     }
-    Some(out)
+    // Se lee la ruta canónica, no el enlace original: un junction o symlink
+    // dentro del proyecto puede apuntar a un archivo ajeno.
+    let real_file = out.canonicalize().ok()?;
+    real_file.strip_prefix(&real_root).ok()?;
+    real_file.is_file().then_some(real_file)
 }
 
 fn serve_static(epoch: u64, root: PathBuf, page: String) -> Result<(), String> {
@@ -469,9 +471,50 @@ mod tests {
 
     #[test]
     fn el_servidor_no_sale_de_la_carpeta() {
-        let root = PathBuf::from(r"C:\proy");
-        assert_eq!(file_for(&root, "/src/a%20b.js?v=1"), Some(root.join("src").join("a b.js")));
+        let root = std::env::temp_dir().join(format!("lienzo-rutas-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("a b.js"), b"ok").unwrap();
+        assert_eq!(file_for(&root, "/src/a%20b.js?v=1"), Some(root.join("src").join("a b.js").canonicalize().unwrap()));
         assert_eq!(file_for(&root, "/../secreto.txt"), None);
         assert_eq!(file_for(&root, "/%2e%2e/secreto.txt"), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn enlace_fuera_del_proyecto_da_404_por_http() {
+        use std::io::Write;
+        let base = std::env::temp_dir().join(format!("lienzo-enlace-{}-{}", std::process::id(), now_ms()));
+        let root = base.join("sitio");
+        let outside = base.join("fuera");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("index.html"), b"pagina").unwrap();
+        std::fs::write(outside.join("secreto.txt"), b"SECRETO_EXTERNO").unwrap();
+        let link = root.join("enlace");
+        #[cfg(windows)]
+        {
+            let mut cmd = Command::new("cmd");
+            cmd.args(["/C", "mklink", "/J"]).arg(&link).arg(&outside).stdout(Stdio::null()).stderr(Stdio::null());
+            no_window(&mut cmd);
+            assert!(cmd.status().unwrap().success(), "no pude crear el junction de prueba");
+        }
+        #[cfg(not(windows))]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let url = start(&root.to_string_lossy()).unwrap().url.unwrap();
+        let host = url.trim_start_matches("http://").split('/').next().unwrap();
+        let mut stream = std::net::TcpStream::connect(host).unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+        write!(stream, "GET /enlace/secreto.txt HTTP/1.0\r\nHost: {host}\r\n\r\n").unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.0 404") || response.starts_with("HTTP/1.1 404"), "{response}");
+        assert!(!response.contains("SECRETO_EXTERNO"));
+        stop();
+        #[cfg(windows)]
+        std::fs::remove_dir(&link).unwrap();
+        #[cfg(not(windows))]
+        std::fs::remove_file(&link).unwrap();
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

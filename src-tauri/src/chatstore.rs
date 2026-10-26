@@ -101,9 +101,8 @@ pub fn chats_read(project: String) -> Option<Value> {
 /// Síncrono a propósito: Tauri los ejecuta en orden, así una escritura vieja nunca pisa una nueva.
 #[tauri::command]
 pub fn chats_write(project: String, chats: Value) -> Result<(), String> {
-    write_in(&chats_dir(), &project, &chats).map_err(|e| {
-        crate::errlog::log("chats", "No se pudieron guardar los chats", &e);
-        e
+    write_in(&chats_dir(), &project, &chats).inspect_err(|e| {
+        crate::errlog::log("chats", "No se pudieron guardar los chats", e);
     })
 }
 

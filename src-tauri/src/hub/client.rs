@@ -76,11 +76,10 @@ impl HubClient {
         match self.request_once(method, path, body) {
             Ok(v) => Ok(v),
             Err(e) => {
-                if let Some(fresh) = Self::from_file() {
-                    if fresh.url != self.url || fresh.token != self.token {
+                if let Some(fresh) = Self::from_file()
+                    && (fresh.url != self.url || fresh.token != self.token) {
                         return fresh.request_once(method, path, body);
                     }
-                }
                 Err(e)
             }
         }

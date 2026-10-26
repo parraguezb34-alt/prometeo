@@ -184,11 +184,10 @@ pub fn report_ctx(
         if let Some(t) = tokens {
             // Una caída fuerte del contexto es una compactación (relevo o /compact): lo que se
             // liberó deja de viajar en cada mensaje siguiente.
-            if let Some(prev) = agent.ctx_tokens {
-                if prev > 30_000 && t < prev / 2 {
+            if let Some(prev) = agent.ctx_tokens
+                && prev > 30_000 && t < prev / 2 {
                     freed = Some((agent.name.clone(), prev - t));
                 }
-            }
             agent.ctx_tokens = Some(t);
         }
         if let Some(w) = window {

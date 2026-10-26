@@ -141,11 +141,10 @@ fn clean_paths(root: &Path, paths: &[String]) -> Vec<String> {
             continue;
         }
         let Ok(abs) = join_rel(root, &rel) else { continue };
-        if let Ok(canon) = abs.canonicalize() {
-            if !canon.starts_with(root) {
+        if let Ok(canon) = abs.canonicalize()
+            && !canon.starts_with(root) {
                 continue;
             }
-        }
         if !out.contains(&rel) {
             out.push(rel);
         }
@@ -486,7 +485,7 @@ pub async fn project_recent(
             });
         }
     }
-    out.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    out.sort_by_key(|a| std::cmp::Reverse(a.mtime_ms));
     out.truncate(limit);
     Ok(out)
 }

@@ -742,11 +742,10 @@ fn write_if_changed(path: &Path, body: &[u8]) -> bool {
     if std::fs::read(path).map(|cur| cur == body).unwrap_or(false) {
         return false;
     }
-    if let Some(dir) = path.parent() {
-        if std::fs::create_dir_all(dir).is_err() {
+    if let Some(dir) = path.parent()
+        && std::fs::create_dir_all(dir).is_err() {
             return false;
         }
-    }
     std::fs::write(path, body).is_ok()
 }
 
@@ -766,11 +765,10 @@ fn copy_into(src: &Path, dst: &Path, name: &str, changed: &mut Vec<String>) {
             if write_if_changed(&target, text.as_bytes()) {
                 changed.push(target.display().to_string());
             }
-        } else if let Ok(bytes) = std::fs::read(&path) {
-            if write_if_changed(&target, &bytes) {
+        } else if let Ok(bytes) = std::fs::read(&path)
+            && write_if_changed(&target, &bytes) {
                 changed.push(target.display().to_string());
             }
-        }
     }
 }
 

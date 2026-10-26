@@ -6,7 +6,13 @@
 
 use crate::hub;
 use serde_json::{json, Value};
+use std::io::Read;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tauri::AppHandle;
+
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+const MAX_IN_FLIGHT: usize = 16;
 
 pub fn bind() -> Result<(tiny_http::Server, u16), String> {
     let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| e.to_string())?;
@@ -19,12 +25,49 @@ pub fn bind() -> Result<(tiny_http::Server, u16), String> {
 }
 
 pub fn serve(server: tiny_http::Server, app: AppHandle) {
+    serve_with(Arc::new(server), move |request| handle_caught(request, &app));
+}
+
+fn serve_with<H>(server: Arc<tiny_http::Server>, handler: H)
+where
+    H: Fn(tiny_http::Request) + Send + Sync + 'static,
+{
+    let handler = Arc::new(handler);
+    let active = Arc::new(AtomicUsize::new(0));
     for request in server.incoming_requests() {
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(request, &app)));
-        if result.is_err() {
-            crate::errlog::log("hub", "Una petición de un agente hizo fallar al hub (se recuperó)", "");
+        // /health permanece disponible aunque una petición autenticada tarde en enviar su cuerpo.
+        if request.url().split('?').next() == Some("/health") {
+            handler(request);
+            continue;
         }
+        if active
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < MAX_IN_FLIGHT).then_some(n + 1))
+            .is_err()
+        {
+            respond_json(request, 503, json!({"error": "hub ocupado; vuelve a intentar"}));
+            continue;
+        }
+        let handler = handler.clone();
+        let active = active.clone();
+        std::thread::spawn(move || {
+            let _slot = ActiveRequest(active);
+            handler(request);
+        });
+    }
+}
+
+struct ActiveRequest(Arc<AtomicUsize>);
+
+impl Drop for ActiveRequest {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn handle_caught(request: tiny_http::Request, app: &AppHandle) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(request, app)));
+    if result.is_err() {
+        crate::errlog::log("hub", "Una petición de un agente hizo fallar al hub (se recuperó)", "");
     }
 }
 
@@ -67,6 +110,23 @@ fn authorized(request: &tiny_http::Request, app: &AppHandle) -> bool {
         .any(|h| h.field.equiv("X-Lienzo-Token") && h.value.as_str() == expected)
 }
 
+fn read_payload(request: &mut tiny_http::Request) -> Result<Value, (u16, &'static str)> {
+    if request.body_length().is_some_and(|n| n > MAX_BODY_BYTES) {
+        return Err((413, "cuerpo demasiado grande"));
+    }
+    parse_payload(request.as_reader())
+}
+
+fn parse_payload(reader: &mut dyn Read) -> Result<Value, (u16, &'static str)> {
+    let mut bytes = Vec::new();
+    match reader.take((MAX_BODY_BYTES + 1) as u64).read_to_end(&mut bytes) {
+        Ok(_) if bytes.len() > MAX_BODY_BYTES => Err((413, "cuerpo demasiado grande")),
+        Ok(_) => Ok(serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}))),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err((408, "tiempo agotado al leer el cuerpo")),
+        Err(_) => Err((400, "no se pudo leer el cuerpo")),
+    }
+}
+
 fn handle(mut request: tiny_http::Request, app: &AppHandle) {
     let method = request.method().as_str().to_string();
     let url = request.url().to_string();
@@ -86,9 +146,13 @@ fn handle(mut request: tiny_http::Request, app: &AppHandle) {
         return;
     }
 
-    let mut raw = String::new();
-    let _ = request.as_reader().read_to_string(&mut raw);
-    let payload: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({}));
+    let payload = match read_payload(&mut request) {
+        Ok(payload) => payload,
+        Err((status, error)) => {
+            respond_json(request, status, json!({"error": error}));
+            return;
+        }
+    };
 
     let result: Result<Value, String> = match (method.as_str(), path.as_str()) {
         ("POST", "/join") => cmd_join(app, &payload),
@@ -252,11 +316,10 @@ fn cmd_event(app: &AppHandle, payload: &Value) -> Result<Value, String> {
         let to = hub::message_target(inner, payload["to"].as_str().map(|s| s.to_string()));
         let ev = hub::push_event(inner, &agent, &sid, &kind, &text, files, to.clone());
         // Quien manda un mensaje ya leyó lo anterior de su buzón (está contestando).
-        if kind == "message" {
-            if let Some(reply_to) = payload["reply_to"].as_u64() {
+        if kind == "message"
+            && let Some(reply_to) = payload["reply_to"].as_u64() {
                 hub::inbox_ack(inner, &agent, reply_to);
             }
-        }
         let online = to.as_deref().map(|t| {
             let now = hub::now_ms();
             inner
@@ -1051,8 +1114,8 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                 hub::push_event(inner, &agent, &sid, "task", &text, ev_files, None);
                 // Historial: copia de sus archivos tal como los entrega (para verlos y deshacerlos).
                 // Con carpeta aislada lo guarda `after_merge` al unirla (y en revisión aún no se unió).
-                if op == "done" && ws_diff.is_none() && merged.is_none() {
-                    if let Some(project) = inner.project.clone() {
+                if op == "done" && ws_diff.is_none() && merged.is_none()
+                    && let Some(project) = inner.project.clone() {
                         let title = if task.fix_rounds > 0 {
                             format!("{} · corrección {}", task.title, task.fix_rounds)
                         } else {
@@ -1065,7 +1128,6 @@ fn cmd_task(app: &AppHandle, payload: &Value) -> Result<Value, String> {
                             }
                         });
                     }
-                }
                 if let Some(leader) = &reviewer {
                     hub::ask_review(inner, task.id, leader);
                 }
@@ -1192,50 +1254,6 @@ fn is_absolute_path(p: &str) -> bool {
     (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/'))
         || p.starts_with("\\\\")
         || p.starts_with('/')
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{is_absolute_path, WsPaths};
-
-    #[test]
-    fn blocked_isolated_delivery_never_writes_project() {
-        let root = std::env::temp_dir().join(format!("lienzo-blocked-delivery-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let project_file = root.join("proyecto.txt");
-        std::fs::write(&project_file, b"original").unwrap();
-        let mut parent = crate::hub::Task::new(1, "padre".into(), String::new(), vec![]);
-        parent.status = "claimed".into();
-        let mut child = crate::hub::Task::new(2, "hija".into(), String::new(), vec![1]);
-        child.status = "claimed".into();
-        child.owner = "codex".into();
-        let tasks = [parent, child];
-        let result = super::merge_done_if_valid(&tasks, &tasks[1], "codex", "entrega", || {
-            std::fs::write(&project_file, b"cambio").unwrap();
-            Ok(vec![])
-        });
-        assert!(result.unwrap_err().contains("#1"));
-        assert_eq!(std::fs::read(&project_file).unwrap(), b"original");
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn workspace_paths_map_back_to_the_project() {
-        let m = WsPaths { ws: r"C:\p\.lienzo\tareas\7".into(), root: r"C:\p".into() };
-        assert_eq!(m.map_path(r"C:\p\.lienzo\tareas\7\src\a.md"), r"C:\p\src\a.md");
-        assert_eq!(m.map_path("c:/p/.lienzo/tareas/7/src/a.md"), r"C:\p/src/a.md");
-        assert_eq!(m.map_path(r"C:\otro\x.md"), r"C:\otro\x.md", "lo de fuera se queda igual");
-    }
-
-    #[test]
-    fn claims_need_full_paths() {
-        for p in [r"C:\Users\x\revision\arbol.md", "c:/a/b.md", r"\\nas\share\a.md", "/home/a.md"] {
-            assert!(is_absolute_path(p), "{p}");
-        }
-        for p in ["revision/arbol.md", r"propuestas\hermes\a.md", "./a.md", "C:", "C:a.md", ""] {
-            assert!(!is_absolute_path(p), "{p}");
-        }
-    }
 }
 
 fn cmd_claim(app: &AppHandle, payload: &Value) -> Result<Value, String> {
@@ -1388,3 +1406,103 @@ fn short_name(path: &str) -> String {
         norm
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::{is_absolute_path, WsPaths};
+
+    #[test]
+    fn peticion_lenta_no_bloquea_health_ni_otra_peticion() {
+        use std::io::{Read, Write};
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+
+        fn get(port: u16, path: &str) -> std::io::Result<String> {
+            let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
+            stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+            write!(stream, "GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response)?;
+            Ok(response)
+        }
+
+        let server = Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
+        let port = server.server_addr().to_ip().unwrap().port();
+        let (started_tx, started_rx) = mpsc::channel();
+        let serving = server.clone();
+        let server_thread = std::thread::spawn(move || {
+            super::serve_with(serving, move |mut request| {
+                if request.url() == "/slow" {
+                    started_tx.send(()).unwrap();
+                    let mut body = Vec::new();
+                    let _ = request.as_reader().read_to_end(&mut body);
+                }
+                let _ = request.respond(tiny_http::Response::from_string("ready"));
+            });
+        });
+        let mut slow = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        slow.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        // tiny_http precarga cuerpos de hasta 1024 bytes; uno mayor deja la lectura al handler.
+        write!(slow, "POST /slow HTTP/1.0\r\nHost: localhost\r\nContent-Length: 2048\r\n\r\nx").unwrap();
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let health = get(port, "/health");
+        let fast = get(port, "/fast");
+        slow.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut slow_response = String::new();
+        let _ = slow.read_to_string(&mut slow_response);
+        server.unblock();
+        server_thread.join().unwrap();
+        assert!(health.unwrap().contains("ready"), "/health debe responder mientras /slow espera");
+        assert!(fast.unwrap().contains("ready"), "otra petición debe responder mientras /slow espera");
+        assert!(slow_response.contains("ready"));
+    }
+
+    #[test]
+    fn cuerpo_del_hub_tiene_limite_de_un_megabyte() {
+        let mut huge = std::io::Cursor::new(vec![b' '; super::MAX_BODY_BYTES + 1]);
+        assert_eq!(super::parse_payload(&mut huge).unwrap_err().0, 413);
+        let mut normal = std::io::Cursor::new(br#"{"ok":true}"#);
+        assert_eq!(super::parse_payload(&mut normal).unwrap()["ok"], true);
+    }
+
+    #[test]
+    fn blocked_isolated_delivery_never_writes_project() {
+        let root = std::env::temp_dir().join(format!("lienzo-blocked-delivery-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let project_file = root.join("proyecto.txt");
+        std::fs::write(&project_file, b"original").unwrap();
+        let mut parent = crate::hub::Task::new(1, "padre".into(), String::new(), vec![]);
+        parent.status = "claimed".into();
+        let mut child = crate::hub::Task::new(2, "hija".into(), String::new(), vec![1]);
+        child.status = "claimed".into();
+        child.owner = "codex".into();
+        let tasks = [parent, child];
+        let result = super::merge_done_if_valid(&tasks, &tasks[1], "codex", "entrega", || {
+            std::fs::write(&project_file, b"cambio").unwrap();
+            Ok(vec![])
+        });
+        assert!(result.unwrap_err().contains("#1"));
+        assert_eq!(std::fs::read(&project_file).unwrap(), b"original");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_paths_map_back_to_the_project() {
+        let m = WsPaths { ws: r"C:\p\.lienzo\tareas\7".into(), root: r"C:\p".into() };
+        assert_eq!(m.map_path(r"C:\p\.lienzo\tareas\7\src\a.md"), r"C:\p\src\a.md");
+        assert_eq!(m.map_path("c:/p/.lienzo/tareas/7/src/a.md"), r"C:\p/src/a.md");
+        assert_eq!(m.map_path(r"C:\otro\x.md"), r"C:\otro\x.md", "lo de fuera se queda igual");
+    }
+
+    #[test]
+    fn claims_need_full_paths() {
+        for p in [r"C:\Users\x\revision\arbol.md", "c:/a/b.md", r"\\nas\share\a.md", "/home/a.md"] {
+            assert!(is_absolute_path(p), "{p}");
+        }
+        for p in ["revision/arbol.md", r"propuestas\hermes\a.md", "./a.md", "C:", "C:a.md", ""] {
+            assert!(!is_absolute_path(p), "{p}");
+        }
+    }
+}
+

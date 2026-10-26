@@ -294,7 +294,7 @@ revísala (skill lienzo-revision) y decide con team_task_review: ok, fix o lider
             ));
         }
     }
-    notes.sort_by(|a, b| b.0.cmp(&a.0));
+    notes.sort_by_key(|a| std::cmp::Reverse(a.0));
     if !notes.is_empty() {
         let list: Vec<String> = notes.into_iter().take(3).map(|n| n.1).collect();
         work.push_str(&format!("Notas del tablón: {}\n", list.join(" · ")));
@@ -404,11 +404,10 @@ fn ask_user(client: &HubClient, sid: &str, args: &Value) -> Result<Value, String
     let start = std::time::Instant::now();
     while start.elapsed() < ASK_WAIT {
         std::thread::sleep(std::time::Duration::from_millis(1500));
-        if let Ok(s) = client.get(&format!("/ask?id={id}")) {
-            if s["done"].as_bool() == Some(true) {
+        if let Ok(s) = client.get(&format!("/ask?id={id}"))
+            && s["done"].as_bool() == Some(true) {
                 return Ok(text_result(s["text"].as_str().unwrap_or(""), false));
             }
-        }
     }
     let d = client.post("/ask/detach", &json!({ "id": id }))?;
     if d["done"].as_bool() == Some(true) {
@@ -606,8 +605,8 @@ Empieza con team_context, publica avances con team_update, reserva archivos con 
 Si una herramienta te avisa de 📬 mensajes, léelos con team_inbox y contesta con team_message (to + reply_to); no contestes agradecimientos. \
 Cuando tu contexto esté muy lleno, guarda tu memoria con team_handover_save (incluye tu task_id): queda pegada a la tarea y la app compactará tu contexto sin perder el hilo.",
     );
-    if let Some(c) = client {
-        if let Ok(state) = c.get("/state?limit=1") {
+    if let Some(c) = client
+        && let Ok(state) = c.get("/state?limit=1") {
             if let Some(leader) = state["leader"].as_str().filter(|s| !s.is_empty()) {
                 instructions.push_str(&format!(
                     "\nLíder del equipo: {} (coordina y reparte; no compitas por el mando).",
@@ -619,7 +618,6 @@ Cuando tu contexto esté muy lleno, guarda tu memoria con team_handover_save (in
                 instructions.push_str(&trunc(charter, 600));
             }
         }
-    }
     let wanted = params["protocolVersion"].as_str().unwrap_or("2025-06-18");
     json!({
         "protocolVersion": if wanted.is_empty() { "2025-06-18" } else { wanted },
@@ -1201,7 +1199,7 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                 }),
             )
             .map(|v| {
-                if v["events"].as_array().map_or(true, |a| a.is_empty()) {
+                if v["events"].as_array().is_none_or(|a| a.is_empty()) {
                     text_result("Nada en el historial con esas palabras.", false)
                 } else {
                     text_result(&render_feed(&v), false)
@@ -1425,13 +1423,11 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
     };
 
     let result = result.map(|mut v| {
-        if name != "team_inbox" {
-            if let Some(note) = inbox_notice(client) {
-                if let Some(t) = v["content"][0]["text"].as_str() {
+        if name != "team_inbox"
+            && let Some(note) = inbox_notice(client)
+                && let Some(t) = v["content"][0]["text"].as_str() {
                     v["content"][0]["text"] = json!(format!("{t}\n\n{note}"));
                 }
-            }
-        }
         v
     });
     match result {
@@ -1585,8 +1581,8 @@ fn mcp_mode() {
 
     // Telemetría de contexto para CLIs sin hooks (OpenCode, Codex): lee su
     // almacén local cada 12 s y lo reporta al hub sin ruido en el feed.
-    if matches!(agent.as_str(), "opencode" | "codex") {
-        if let Some(c) = client.clone() {
+    if matches!(agent.as_str(), "opencode" | "codex")
+        && let Some(c) = client.clone() {
             let sess = session.clone();
             let agent_name = agent.clone();
             let cwd = std::env::current_dir()
@@ -1635,7 +1631,6 @@ fn mcp_mode() {
                 }
             });
         }
-    }
 
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
@@ -1733,8 +1728,8 @@ fn statusline_mode() {
     let five = rate_window(&rl["five_hour"]);
     let week = rate_window(&rl["seven_day"]);
 
-    if (five.is_some() || week.is_some()) && !outside_lienzo() {
-        if let Some(client) = HubClient::discover() {
+    if (five.is_some() || week.is_some()) && !outside_lienzo()
+        && let Some(client) = HubClient::discover() {
             let mut windows = vec![];
             if let Some((pct, reset)) = five {
                 windows.push(json!({ "key": "session", "label": "Sesión (5 h)", "used_pct": pct, "resets_at": reset }));
@@ -1744,7 +1739,6 @@ fn statusline_mode() {
             }
             let _ = client.post("/limits", &json!({ "agent": "claude", "windows": windows, "exact": true }));
         }
-    }
 
     let mut parts: Vec<String> = vec![];
     if let Some(m) = p["model"]["display_name"].as_str().filter(|s| !s.is_empty()) {
@@ -1981,8 +1975,8 @@ fn hook_mode(args: &[String]) {
     }
 
     // Inject team context on prompt/session start (Claude Code / Codex shape).
-    if event == "prompt" || event == "session" {
-        if let Ok(state) = client.get("/state?limit=30") {
+    if (event == "prompt" || event == "session")
+        && let Ok(state) = client.get("/state?limit=30") {
             let hook_event = if event == "session" {
                 "SessionStart"
             } else {
@@ -2022,7 +2016,6 @@ fn hook_mode(args: &[String]) {
                 );
             }
         }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2362,11 +2355,10 @@ fn transcript_reply(path: &str) -> Option<String> {
             continue;
         }
         let msg_id = v["message"]["id"].as_str().unwrap_or("").to_string();
-        if let Some(cur) = &id {
-            if *cur != msg_id {
+        if let Some(cur) = &id
+            && *cur != msg_id {
                 break;
             }
-        }
         let texts: Vec<String> = v["message"]["content"]
             .as_array()
             .map(|blocks| {

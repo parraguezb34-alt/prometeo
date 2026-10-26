@@ -26,11 +26,6 @@ export function savePrefs(prefs: Record<string, AgentPref>) {
   }
 }
 
-/** Ajustes de un agente tal como se guardaron (para quien lanza sin pasar por la UI de equipo). */
-export function prefsFor(agent: string): AgentPref {
-  return loadPrefs()[agent] ?? {};
-}
-
 const APPLIED_KEY = "lienzo.agentapplied.v1";
 
 /** Lo último que se aplicó a la sesión de cada agente. Se guarda para que, al reabrir Prometeo

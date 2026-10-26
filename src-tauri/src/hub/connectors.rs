@@ -511,7 +511,6 @@ fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>)
 
     // Codex no ejecuta un hook nuevo o cambiado hasta que alguien lo aprueba en su pantalla; los
     // nuestros los aprueba Prometeo con el propio Codex (su firma, en su config).
-    let mut notes = notes;
     match codex_trust_hooks(project, exe) {
         Ok(_) => {}
         Err(e) => notes.push(format!("Codex te pedirá aprobar los avisos de Prometeo al abrirlo ({e}).")),
@@ -564,11 +563,10 @@ fn codex_trust_hooks(project: &Path, exe: &str) -> Result<usize, String> {
     std::thread::spawn(move || {
         for line in std::io::BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            if let Ok(v) = serde_json::from_str::<Value>(&line) {
-                if tx.send(v).is_err() {
+            if let Ok(v) = serde_json::from_str::<Value>(&line)
+                && tx.send(v).is_err() {
                     break;
                 }
-            }
         }
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(25);
@@ -992,7 +990,9 @@ pub fn launch_target(agent: &str, opts: &LaunchOpts) -> Option<Value> {
         }
         "codex" => {
             let exe = codex_cli()?;
-            let mut cmd = quoted(&exe);
+            // El usuario eligió que Codex no pida nunca permiso (ni aprobaciones ni sandbox):
+            // quita la flag para volver a las confirmaciones.
+            let mut cmd = format!("{} --dangerously-bypass-approvals-and-sandbox", quoted(&exe));
             if let Some(m) = &model {
                 cmd.push_str(&format!(" -m {m}"));
             }
@@ -1088,14 +1088,13 @@ pub async fn team_open(
         resume: resume.unwrap_or(false),
     };
     // OpenCode: el modelo va en la config del proyecto, no en la línea de comandos.
-    if agent == "opencode" {
-        if let (Some(m), Some(dir)) = (
+    if agent == "opencode"
+        && let (Some(m), Some(dir)) = (
             opts.model.as_deref().and_then(safe_token),
             project_of(&app).filter(|p| !p.trim().is_empty()),
         ) {
             let _ = set_opencode_model(Path::new(dir.trim()), &m);
         }
-    }
     let spec = launch_target(&agent, &opts)
         .ok_or_else(|| format!("no encontré cómo abrir «{}» — ¿está instalado?", agent))?;
     if spec.get("kind").and_then(|k| k.as_str()) == Some("app") {
@@ -1122,8 +1121,8 @@ pub async fn team_open(
         // restarted while a bridge was alive, it can be left with a dead
         // `lienzo-team` connection and no session gets the team tools. A quick
         // `opencode reload` makes it re-spawn the bridge before we open the TUI.
-        if agent == "opencode" {
-            if let Some(dir) = project_of(&app).filter(|p| !p.trim().is_empty()) {
+        if agent == "opencode"
+            && let Some(dir) = project_of(&app).filter(|p| !p.trim().is_empty()) {
                 let local = std::env::var("LOCALAPPDATA")
                     .map(PathBuf::from)
                     .unwrap_or_default();
@@ -1152,17 +1151,14 @@ pub async fn team_open(
                     }
                 }
             }
-        }
         // Con carpetas aisladas fuera del proyecto (proyecto en OneDrive), Claude Code necesita
         // permiso para trabajar allí: se la añade como carpeta de trabajo.
         let mut spec = spec;
-        if agent == "claude" {
-            if let Some(dir) = isolated_outside(&app) {
-                if let Some(cmd) = spec["cmd"].as_str().map(|c| format!("{c} --add-dir {}", quoted(&dir))) {
+        if agent == "claude"
+            && let Some(dir) = isolated_outside(&app)
+                && let Some(cmd) = spec["cmd"].as_str().map(|c| format!("{c} --add-dir {}", quoted(&dir))) {
                     spec["cmd"] = json!(cmd);
                 }
-            }
-        }
         Ok(spec)
     }
 }
@@ -1434,8 +1430,8 @@ pub async fn team_models(agent: String) -> Result<Value, String> {
             let current_effort = toml_top_value(&cfg, "model_reasoning_effort");
             let mut models: Vec<Value> = vec![];
             let cache = std::fs::read_to_string(home().join(".codex").join("models_cache.json")).unwrap_or_default();
-            if let Ok(v) = serde_json::from_str::<Value>(&cache) {
-                if let Some(list) = v.get("models").and_then(|m| m.as_array()) {
+            if let Ok(v) = serde_json::from_str::<Value>(&cache)
+                && let Some(list) = v.get("models").and_then(|m| m.as_array()) {
                     for m in list {
                         if m.get("visibility").and_then(|x| x.as_str()) != Some("list") {
                             continue;
@@ -1458,12 +1454,10 @@ pub async fn team_models(agent: String) -> Result<Value, String> {
                         models.push(model_entry(slug, label, &efforts));
                     }
                 }
-            }
-            if models.is_empty() {
-                if let Some(m) = &current_model {
+            if models.is_empty()
+                && let Some(m) = &current_model {
                     models.push(model_entry(m, m, &["low", "medium", "high", "xhigh"].map(String::from)));
                 }
-            }
             Ok(json!({
                 "models": models,
                 "efforts": ["low", "medium", "high", "xhigh"],
@@ -1490,8 +1484,8 @@ pub async fn team_models(agent: String) -> Result<Value, String> {
         }
         "opencode" => {
             let mut models: Vec<Value> = vec![];
-            if let Some(cli) = opencode_cli() {
-                if let Some(out) = run_capture(&cli, &["models"], 12_000) {
+            if let Some(cli) = opencode_cli()
+                && let Some(out) = run_capture(&cli, &["models"], 12_000) {
                     for line in out.lines() {
                         let id = line.trim();
                         if id.is_empty() || id.contains(' ') || !id.contains('/') {
@@ -1500,7 +1494,6 @@ pub async fn team_models(agent: String) -> Result<Value, String> {
                         models.push(model_entry(id, id, &[]));
                     }
                 }
-            }
             Ok(json!({ "models": models, "efforts": [], "current": { "model": null, "effort": null }, "live": false }))
         }
         other => Err(format!("agente desconocido: {other}")),

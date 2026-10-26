@@ -246,11 +246,10 @@ pub fn create_by_user(inner: &mut HubInner, d: &Draft) -> Result<Schedule, Strin
         s = saved.clone();
     }
     // El aviso de «pendiente» sobra: la creaste tú.
-    if let Some(e) = inner.events.back_mut() {
-        if e.text.starts_with(&format!("📅 Programación P{} pendiente", s.id)) {
+    if let Some(e) = inner.events.back_mut()
+        && e.text.starts_with(&format!("📅 Programación P{} pendiente", s.id)) {
             e.text = format!("📅 Programación P{} creada: «{}» · {}", s.id, s.title, validate_every(&s.every).unwrap_or_default());
         }
-    }
     Ok(s)
 }
 

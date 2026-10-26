@@ -2,46 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type ProjectInfo = { root: string; repo: boolean; branch: string };
 
-export type GitFile = { path: string; status: string };
-
-export type GitStatus = {
-  repo: boolean;
-  branch: string;
-  files: GitFile[];
-  diff: string;
-  truncated: boolean;
-};
-
-export type DirEntry = {
-  name: string;
-  rel: string;
-  dir: boolean;
-  size: number;
-  mtime_ms: number;
-};
-
-export type FileData = {
-  text: string;
-  truncated: boolean;
-  binary: boolean;
-  size: number;
-  mtime_ms: number;
-};
-
 export type RecentFile = { rel: string; mtime_ms: number; size: number };
 
-export type TaskDiff = { diff: string; files: GitFile[]; truncated: boolean };
-
 export const projectInfo = (path: string) => invoke<ProjectInfo>("project_info", { path });
-
-export const projectStatus = (path: string) =>
-  invoke<GitStatus>("project_status", { path });
-
-export const projectList = (path: string, rel: string) =>
-  invoke<DirEntry[]>("project_list", { path, rel });
-
-export const projectRead = (path: string, rel: string) =>
-  invoke<FileData>("project_read", { path, rel });
 
 export const projectRecent = (path: string, exts: string[], limit = 40) =>
   invoke<RecentFile[]>("project_recent", { path, exts, limit });
@@ -112,18 +75,6 @@ export function parentDir(path: string): string {
   const i = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
   return i > 0 ? p.slice(0, i) : p;
 }
-
-/** Diff y estado limitados a las rutas de una tarea. */
-export const projectDiffPaths = (path: string, paths: string[]) =>
-  invoke<TaskDiff>("project_diff_paths", { path, paths });
-
-/** Confirma (commit) los archivos de una tarea; devuelve la línea del commit. */
-export const projectCommitPaths = (path: string, paths: string[], message: string) =>
-  invoke<string>("project_commit_paths", { path, paths, message });
-
-/** Revierte los archivos de una tarea al último commit (destructivo). */
-export const projectRevertPaths = (path: string, paths: string[]) =>
-  invoke<string>("project_revert_paths", { path, paths });
 
 /** "812 B", "4.2 kB", "1.3 MB" */
 export function friendlySize(bytes: number): string {

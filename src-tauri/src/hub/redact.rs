@@ -159,7 +159,7 @@ fn jwts(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(pos) = rest.find("eyJ") {
-        let before_ok = rest[..pos].chars().last().map_or(true, |c| !token_char(c));
+        let before_ok = rest[..pos].chars().last().is_none_or(|c| !token_char(c));
         let tail = &rest[pos..];
         let len = tail.find(|c: char| !(token_char(c) || c == '.')).unwrap_or(tail.len());
         let cand = &tail[..len];
@@ -185,7 +185,7 @@ fn aws_keys(text: &str) -> String {
             && (i == 0 || !token_char(chars[i - 1]))
             && chars.len() >= i + 20
             && chars[i + 4..i + 20].iter().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-            && chars.get(i + 20).map_or(true, |c| !token_char(*c))
+            && chars.get(i + 20).is_none_or(|c| !token_char(*c))
         {
             out.push_str(&hidden("AKIA"));
             i += 20;
@@ -215,7 +215,7 @@ fn key_values(text: &str) -> String {
             if lower[i..].starts_with(key) {
                 let before_ok = i == 0 || !token_char(text[..i].chars().last().unwrap_or(' '));
                 let after = i + key.len();
-                let after_ok = text[after..].chars().next().map_or(false, |c| !token_char(c));
+                let after_ok = text[after..].chars().next().is_some_and(|c| !token_char(c));
                 if before_ok && after_ok {
                     matched = Some(after);
                     break;
