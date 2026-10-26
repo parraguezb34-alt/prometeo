@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { agentColor, agentLabel, ago } from "../lib/team";
 import type { MemoryEntry } from "../lib/team";
 import { Icon } from "./Icon";
+import { ConfirmButton } from "./ConfirmButton";
 
 const KINDS: { id: string; label: string }[] = [
   { id: "decision", label: "Decisión" },
@@ -119,14 +120,16 @@ export function ProjectMemory({
               <span>
                 {m.by === "tú" ? "tú" : agentLabel(m.by)} · hace {ago(m.ts_ms)}
               </span>
-              <button
+              <ConfirmButton
                 className="cc-icon-btn sm"
-                onClick={() => void onForget(m.id)}
+                onConfirm={() => void onForget(m.id)}
+                confirmText="¿Seguro? Pulsa otra vez"
                 title="Olvidar esta entrada"
                 aria-label="Olvidar"
+                style={{ width: "auto", minWidth: 20, padding: "0 6px", fontSize: 11 }}
               >
                 <Icon name="x" size={13} />
-              </button>
+              </ConfirmButton>
             </div>
             <div className="cc-pm-text">{m.text}</div>
           </div>

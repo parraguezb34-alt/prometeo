@@ -6,6 +6,7 @@ import type { AgentPref } from "../lib/agentPrefs";
 import { confirmChoice } from "../lib/pty";
 import { ctxLevel, ctxOf, fmtTokens, shortModel } from "./AgentCard";
 import { Icon } from "./Icon";
+import { ConfirmButton } from "./ConfirmButton";
 import { fmtReset, level, windowLabel, worst } from "../lib/limits";
 import type { AgentLimits } from "../lib/limits";
 import { stallText } from "../lib/stall";
@@ -283,14 +284,15 @@ export function TeamModal({
                         <span>{agentLabel(name)}</span>
                         {a.online &&
                           (isLeader ? (
-                            <button
+                            <ConfirmButton
                               className="cc-lead"
-                              onClick={() => onCrown(name)}
-                              title="Es el líder (pulsa para quitarlo)"
+                              onConfirm={() => onCrown(name)}
+                              confirmText="¿Seguro? Pulsa otra vez"
+                              title="Es el líder (pulsa dos veces para quitarlo)"
                             >
                               <Icon name="crown" size={13} />
                               Líder
-                            </button>
+                            </ConfirmButton>
                           ) : (
                             <button
                               className="cc-makelead"
@@ -548,15 +550,28 @@ export function TeamModal({
                         <Icon name="term" size={14} />
                         Terminal
                       </button>
-                      <button
-                        className="cc-btn sec"
-                        disabled={busy === name}
-                        onClick={() => onReload(name)}
-                        title="Cierra su terminal y la vuelve a abrir retomando la misma conversación (carga las herramientas y skills nuevas)"
-                      >
-                        <Icon name="refresh" size={14} />
-                        {busy === name ? "Reiniciando…" : "Reiniciar"}
-                      </button>
+                      {state === "work" ? (
+                        <ConfirmButton
+                          className="cc-btn sec"
+                          disabled={busy === name}
+                          onConfirm={() => onReload(name)}
+                          confirmText="¿Seguro? Pulsa otra vez"
+                          title="El agente está trabajando. Pulsa dos veces para reiniciar cortando su tarea"
+                        >
+                          <Icon name="refresh" size={14} />
+                          {busy === name ? "Reiniciando…" : "Reiniciar"}
+                        </ConfirmButton>
+                      ) : (
+                        <button
+                          className="cc-btn sec"
+                          disabled={busy === name}
+                          onClick={() => onReload(name)}
+                          title="Cierra su terminal y la vuelve a abrir retomando la misma conversación (carga las herramientas y skills nuevas)"
+                        >
+                          <Icon name="refresh" size={14} />
+                          {busy === name ? "Reiniciando…" : "Reiniciar"}
+                        </button>
+                      )}
                       <button
                         className={ctx && ctx.pct >= 75 ? "cc-btn hot" : "cc-btn sec"}
                         onClick={() => onCmd(name, `${HANDOVER_SAVE_PROMPT}\r`, "relevo con memoria")}

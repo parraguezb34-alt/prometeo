@@ -9,6 +9,7 @@ import type { ProjectItem } from "./ProjectSwitcher";
 import type { Chat } from "../lib/chats";
 import { Icon } from "./Icon";
 import { InlineRename } from "./InlineRename";
+import { ConfirmButton } from "./ConfirmButton";
 
 const GROUPS = ["Hoy", "Ayer", "Esta semana", "Antes"];
 
@@ -150,7 +151,11 @@ export function ChatsSidebar({
         />
       </label>
       <div className="cc-chats-list">
-        {grouped.length === 0 && <div className="cc-chats-empty">Ningún chat coincide.</div>}
+        {grouped.length === 0 && (
+          <div className="cc-chats-empty">
+            {chats.length === 0 ? "Aún no hay chats en este proyecto." : "Ningún chat coincide con la búsqueda."}
+          </div>
+        )}
         {grouped.map((g) => (
           <div key={g.name}>
             <div className="cc-chats-grp">{g.name}</div>
@@ -162,11 +167,17 @@ export function ChatsSidebar({
                   className="cc-chat-item"
                   data-active={c.id === activeId ? "1" : "0"}
                   onClick={() => onSelect(c)}
-                  role="button"
                   tabIndex={0}
+                  aria-label={`Chat: ${c.title}`}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") onSelect(c);
-                    if (e.key === "F2") setEditing(c.id);
+                    if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+                      e.preventDefault();
+                      onSelect(c);
+                    }
+                    if (e.key === "F2") {
+                      e.preventDefault();
+                      setEditing(c.id);
+                    }
                   }}
                 >
                   {editing === c.id ? (
@@ -224,17 +235,16 @@ export function ChatsSidebar({
                   >
                     <Icon name="pencil" size={12} />
                   </button>
-                  <button
+                  <ConfirmButton
                     className="cc-chat-del"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onRemove(c);
-                    }}
+                    onConfirm={() => onRemove(c)}
+                    confirmText="¿Seguro? Pulsa otra vez"
                     title="Quitar de la lista (los eventos siguen en el feed)"
                     aria-label="Quitar chat"
+                    style={{ width: "auto", minWidth: 20, zIndex: 3, background: "var(--raised-2, #1e1e1e)", borderRadius: 6, padding: "0 6px", fontSize: 11, opacity: 1 }}
                   >
                     <Icon name="x" size={13} />
-                  </button>
+                  </ConfirmButton>
                 </div>
               );
             })}

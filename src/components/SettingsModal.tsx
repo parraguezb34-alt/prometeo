@@ -12,6 +12,7 @@ import { cachePct, sumUsage, totalTokens, usageOf } from "../lib/usage";
 import { fmtTokens } from "./AgentCard";
 import type { DetectResult, ModelCatalog, TeamDetails, TeamState } from "../lib/team";
 import { Icon } from "./Icon";
+import { ConfirmButton } from "./ConfirmButton";
 import { SkillsPanel } from "./SkillsPanel";
 import { ErrorsPanel } from "./ErrorsPanel";
 import { useUnseenErrors } from "../lib/errors";
@@ -373,7 +374,7 @@ function General({ state, info, autoStart, shoot, chatsMin, say, onAutoStart, on
         </div>
       </Group>
 
-      <Group title="Al abrir lienzo">
+      <Group title="Al abrir Prometeo">
         <Row
           label="Abrir el equipo al iniciar"
           hint="Conecta los agentes instalados y abre los que no estén en marcha. Los que quites del equipo en Agentes no se abren."
@@ -1100,9 +1101,14 @@ function Dispatch({ dispatchOn, dispatchState, onDispatch, onDispatchClear }: Pr
       <Group
         title="Reglas del reparto"
         aside={
-          <button className="st-link" disabled={isDefault} onClick={() => resetSettings("dispatch")}>
+          <ConfirmButton
+            className="st-link"
+            disabled={isDefault}
+            onConfirm={() => resetSettings("dispatch")}
+            confirmText="¿Seguro? Pulsa otra vez"
+          >
             Valores por defecto
-          </button>
+          </ConfirmButton>
         }
       >
         <Row label="El líder recibe tareas" hint="El líder coordina; normalmente solo trabaja si no hay nadie más." disabled={off}>
@@ -1176,7 +1182,7 @@ function Notify({ notifyOn, onNotify, say }: Props) {
           <Switch on={notifyOn} onChange={onNotify} label="Avisos" />
         </Row>
         <Row
-          label="Aspecto fuera de lienzo"
+          label="Aspecto fuera de Prometeo"
           hint={
             n.style === "lienzo"
               ? "Con el diseño de Prometeo. No quedan en el centro de notificaciones de Windows."

@@ -21,6 +21,7 @@ import { doingOf, statusEs, stepOf, workSummary } from "../lib/steps";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import { Markdown } from "./Markdown";
+import { ConfirmButton } from "./ConfirmButton";
 
 /** Lo que hace ahora un agente que está trabajando (leído de su terminal o de sus acciones). */
 export type LiveAgent = {
@@ -1158,9 +1159,14 @@ export function ChatView({
             <b>{held.length === 1 ? "1 tarea del plan espera tu OK" : `${held.length} tareas del plan esperan tu OK`}</b>
             <small>Nadie empieza hasta que lo apruebes.</small>
           </span>
-          <button className="cv-ghost" disabled={planBusy} onClick={() => decidePlan("discard")}>
+          <ConfirmButton
+            className="cv-ghost"
+            disabled={planBusy}
+            confirmText="¿Seguro? Pulsa otra vez"
+            onConfirm={() => decidePlan("discard")}
+          >
             Descartar
-          </button>
+          </ConfirmButton>
           <button className="cv-btn" data-tone="accent" disabled={planBusy} onClick={() => decidePlan("approve")}>
             <Icon name="check" size={13} />
             Aprobar y empezar
