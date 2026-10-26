@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { onPtyData } from "./pty";
-import { DIALOG, SUBMIT_CHECK_MS, cleanTerm, needsResubmit } from "./submit";
+import { DIALOG, SUBMIT_CHECK_MS, bracketedAfter, cleanTerm, needsResubmit } from "./submit";
 
 /**
  * Qué está haciendo cada agente ahora mismo, leído de su terminal. Al ponerse
@@ -44,6 +44,14 @@ const lastTail = new Map<string, string>();
 
 /** Terminales que pintaron un aviso de los que se cierran con Esc (ver `DIALOG`). */
 const dialogOpen = new Set<string>();
+
+/** Terminales cuyo programa encendió el pegado «bracketed» (ver `bracketedAfter`). */
+const bracketed = new Set<string>();
+
+/** ¿Acepta la terminal `sid` un pegado entre marcas? */
+export function termBracketed(sid: string): boolean {
+  return bracketed.has(sid);
+}
 
 /**
  * ¿Hay que cerrar un aviso antes de teclear en `sid`? Sí si pintó uno y el agente está libre (con
@@ -105,6 +113,10 @@ export function useTermActivity(): Map<string, Activity> {
       const seen = cleanTerm(t.tail.slice(-120) + text);
       if (MARKER.test(seen)) t.armed = true;
       if (DIALOG.test(seen)) dialogOpen.add(sid);
+      if (text.includes("\x1b[?2004")) {
+        if (bracketedAfter(bracketed.has(sid), text)) bracketed.add(sid);
+        else bracketed.delete(sid);
+      }
       t.tail = (t.tail + text).slice(-TAIL);
       t.lastMs = Date.now();
       if (t.armed) lastBusy.set(sid, t.lastMs);

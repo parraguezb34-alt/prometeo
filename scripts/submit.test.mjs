@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { DIALOG, needsResubmit, cleanTerm } from "./lib/submit.js";
+import { DIALOG, needsResubmit, cleanTerm, bracketedAfter, asPaste } from "./lib/submit.js";
 
 let n = 0;
 function test(name, fn) {
@@ -37,6 +37,20 @@ test("reconoce el aviso de Codex que se come el teclado", () => {
   const warn = "Warnings \x1b[2m·\x1b[0m 1 of 1 · MCP · Roblox_Studio\r\n\x1b[1mk\x1b[0m keep & next · \x1b[1mesc\x1b[0m dismiss & close · ctrl+o copy";
   assert.equal(DIALOG.test(cleanTerm(warn)), true);
   assert.equal(DIALOG.test(cleanTerm("\x1b[2m esc to interrupt\x1b[0m")), false);
+});
+
+test("un texto largo resumido como pegado que sigue en el cuadro: otro Enter", () => {
+  assert.equal(needsResubmit({ ...base, tail: "› [Pasted Content 812 chars]" }), true);
+  assert.equal(needsResubmit({ ...base, tail: "> [Pasted text #1 +3 lines]" }), true);
+});
+
+test("pegado «bracketed»: manda la última marca y solo entonces se envuelve el texto", () => {
+  assert.equal(bracketedAfter(false, "hola\x1b[?2004h"), true);
+  assert.equal(bracketedAfter(true, "\x1b[?2004l"), false);
+  assert.equal(bracketedAfter(true, "\x1b[?2004l…\x1b[?2004h"), true);
+  assert.equal(bracketedAfter(true, "nada"), true);
+  assert.equal(asPaste("hola", true), "\x1b[200~hola\x1b[201~");
+  assert.equal(asPaste("hola", false), "hola");
 });
 
 console.log(`${n} pruebas de envío OK`);

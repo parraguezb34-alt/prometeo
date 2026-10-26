@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { takeDialog, watchSubmit } from "./activity";
+import { takeDialog, termBracketed, watchSubmit } from "./activity";
+import { asPaste } from "./submit";
 
 export type SessionInfo = {
   id: string;
@@ -71,8 +72,11 @@ export async function termWrite(id: string, data: string): Promise<void> {
       await new Promise((ok) => setTimeout(ok, 300));
     }
     watchSubmit(id, data.slice(0, -1), () => invoke<void>("term_write", { id, data: "\r" }));
-    await invoke<void>("term_write", { id, data: data.slice(0, -1) });
-    await new Promise((ok) => setTimeout(ok, 180));
+    // Como pegado entre marcas si el CLI lo admite (Codex, Claude Code): así el Enter de después
+    // no se confunde con parte del pegado. Codex ignora un Enter que llega muy pegado al texto.
+    const paste = termBracketed(id);
+    await invoke<void>("term_write", { id, data: asPaste(data.slice(0, -1), paste) });
+    await new Promise((ok) => setTimeout(ok, paste ? 350 : 180));
     return invoke<void>("term_write", { id, data: "\r" });
   }
   return invoke<void>("term_write", { id, data });

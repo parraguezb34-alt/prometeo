@@ -52,5 +52,31 @@ export function needsResubmit(input: {
   if (input.busyBefore || text.startsWith("/") || text.length < 8) return false;
   if (input.lastBusyMs >= input.sentMs) return false;
   const key = text.replace(/\s+/g, "").slice(0, 24);
-  return cleanTerm(input.tail).replace(/\s+/g, "").includes(key);
+  const seen = cleanTerm(input.tail);
+  // Un texto largo no se ve: Codex lo resume en «[Pasted Content 812 chars]» y Claude Code en
+  // «[Pasted text #1 +3 lines]». Si eso sigue en el cuadro, tampoco se envió.
+  if (PASTED.test(seen)) return true;
+  return seen.replace(/\s+/g, "").includes(key);
+}
+
+const PASTED = /\[Pasted (?:Content \d+ chars|text #\d+[^\]]*)\]/i;
+
+/**
+ * ¿Dejó el programa de la terminal el modo de pegado «bracketed» encendido? Lo encienden con
+ * `ESC[?2004h` y lo apagan con `ESC[?2004l`; manda el último que aparezca en `chunk`.
+ */
+export function bracketedAfter(before: boolean, chunk: string): boolean {
+  const on = chunk.lastIndexOf("\x1b[?2004h");
+  const off = chunk.lastIndexOf("\x1b[?2004l");
+  if (on < 0 && off < 0) return before;
+  return on > off;
+}
+
+/**
+ * Lo que se teclea en una terminal con el pegado «bracketed» encendido: el texto entre sus marcas,
+ * para que el CLI lo tome por un pegado entero. Sin ellas, Codex lo detecta como pegado por la
+ * velocidad («paste burst») y el Enter que llega justo después se queda como salto de línea.
+ */
+export function asPaste(text: string, bracketed: boolean): string {
+  return bracketed ? `\x1b[200~${text}\x1b[201~` : text;
 }
