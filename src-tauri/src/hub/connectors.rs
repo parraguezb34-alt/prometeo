@@ -401,36 +401,93 @@ fn connect_claude(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>
     Ok((files, notes))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodexConfigPlan {
+    /// Contenido que debe escribirse en ~/.codex/config.toml (None si no debe tocarse).
+    pub global_write: Option<String>,
+    /// Contenido que debe escribirse en <project>/.codex/config.toml (None si no debe tocarse).
+    pub local_write: Option<String>,
+    /// Nota informativa sobre la confianza de la carpeta en Codex.
+    pub note: Option<String>,
+}
+
+/// Decide qué cambios aplicar a la configuración de Codex según estemos en Prometeo Dev o no.
+/// En Dev, nunca se toca el config.toml global ni el bloque de confianza global.
+pub(crate) fn plan_codex_config(
+    is_dev: bool,
+    global_existing: &str,
+    local_existing: &str,
+    exe: &str,
+    project: &Path,
+) -> CodexConfigPlan {
+    if is_dev {
+        let needed = !local_existing.contains("mcp_servers.lienzo-team") || !uses_bridge(local_existing, exe);
+        let local_write = if needed {
+            Some(codex_config(local_existing, exe))
+        } else {
+            None
+        };
+        CodexConfigPlan {
+            global_write: None,
+            local_write,
+            note: Some("En Prometeo Dev, confía en la carpeta desde Codex para que ejecute sus hooks y herramientas.".to_string()),
+        }
+    } else {
+        let mut text = if !global_existing.contains("mcp_servers.lienzo-team") || !uses_bridge(global_existing, exe) {
+            codex_config(global_existing, exe)
+        } else {
+            global_existing.to_string()
+        };
+        if !codex_project_listed(&text, project) {
+            text = format!("{}\n\n{}", text.trim_end(), codex_trust_block(project));
+        }
+        let global_write = if text != global_existing {
+            Some(text)
+        } else {
+            None
+        };
+        CodexConfigPlan {
+            global_write,
+            local_write: None,
+            note: None,
+        }
+    }
+}
+
 fn connect_codex(project: &Path, exe: &str) -> Result<(Vec<String>, Vec<String>), String> {
     let mut files = vec![];
-    let notes = vec!["Codex lee su MCP global; reinícialo si estaba abierto.".to_string()];
 
-    // Global MCP config (~/.codex/config.toml). Si ya estaba pero con otro puente (una
-    // compilación de desarrollo, otra instalación), se cambia el bloque entero.
+    // Global MCP config (~/.codex/config.toml) y local del proyecto (<project>/.codex/config.toml).
+    // Prometeo Dev nunca escribe el config global ni añade bloques de confianza globales.
     let cfg = home().join(".codex").join("config.toml");
-    let existing = std::fs::read_to_string(&cfg).unwrap_or_default();
-    let mut text = existing.clone();
-    // Prometeo Dev deja la global al Prometeo normal: su servidor va en la del proyecto (que
-    // Codex lee al confiar en la carpeta).
+    let global_existing = std::fs::read_to_string(&cfg).unwrap_or_default();
     let local = project.join(".codex").join("config.toml");
-    if crate::hub::IS_DEV {
-        let mine = std::fs::read_to_string(&local).unwrap_or_default();
-        if !mine.contains("mcp_servers.lienzo-team") || !uses_bridge(&mine, exe) {
-            write_text(&local, &codex_config(&mine, exe))?;
-        }
-        files.push(local.display().to_string());
-    } else if !text.contains("mcp_servers.lienzo-team") || !uses_bridge(&text, exe) {
-        text = codex_config(&text, exe);
-    }
-    // Codex desactiva los hooks de las carpetas en las que no confía: sin esto no llega al chat
-    // ni su respuesta ni lo que hace. Si el usuario ya la marcó (confiada o no), se respeta.
-    if !codex_project_listed(&text, project) {
-        text = format!("{}\n\n{}", text.trim_end(), codex_trust_block(project));
-    }
-    if text != existing {
+    let local_existing = std::fs::read_to_string(&local).unwrap_or_default();
+
+    let plan = plan_codex_config(crate::hub::IS_DEV, &global_existing, &local_existing, exe, project);
+
+    if let Some(text) = plan.global_write {
         write_text(&cfg, &text)?;
+        files.push(cfg.display().to_string());
+    } else if !crate::hub::IS_DEV {
+        files.push(cfg.display().to_string());
     }
-    files.push(cfg.display().to_string());
+
+    if let Some(text) = plan.local_write {
+        write_text(&local, &text)?;
+        files.push(local.display().to_string());
+    } else if crate::hub::IS_DEV {
+        files.push(local.display().to_string());
+    }
+
+    let mut notes = vec![];
+    if crate::hub::IS_DEV {
+        if let Some(n) = plan.note {
+            notes.push(n);
+        }
+    } else {
+        notes.push("Codex lee su MCP global; reinícialo si estaba abierto.".to_string());
+    }
 
     // Project hooks (same shape as Claude Code).
     let hooks_path = project.join(".codex").join("hooks.json");
@@ -1560,6 +1617,40 @@ mod tests {
         if cfg!(windows) {
             assert!(block.contains(r"[projects.'c:\users\yo\escritorio\mejora de skill']"), "{block}");
         }
+    }
+
+    #[test]
+    fn codex_en_dev_no_escribe_config_global() {
+        let exe = r"C:\Users\yo\AppData\Local\Prometeo\lienzo-mcp.exe";
+        let project = Path::new(r"C:\Users\yo\Projects\mi-app");
+        let global_before = "model = \"o3-mini\"\n";
+        let local_before = "";
+
+        // En modo dev (is_dev = true): nunca se escribe en el config global ni se añade el bloque de confianza global.
+        let plan_dev = plan_codex_config(true, global_before, local_before, exe, project);
+        assert_eq!(
+            plan_dev.global_write, None,
+            "En dev nunca debe haber escritura en el config global"
+        );
+        assert!(
+            plan_dev.local_write.is_some(),
+            "En dev debe prepararse la escritura en el config local del proyecto"
+        );
+        let local_text = plan_dev.local_write.unwrap();
+        assert!(uses_bridge(&local_text, exe));
+        assert!(plan_dev.note.is_some());
+        assert!(plan_dev.note.unwrap().contains("Codex"));
+
+        // En modo normal (is_dev = false): se actualiza el config global con el puente y la confianza.
+        let plan_prod = plan_codex_config(false, global_before, local_before, exe, project);
+        assert!(
+            plan_prod.global_write.is_some(),
+            "En producción se debe actualizar el config global con el puente y la confianza"
+        );
+        let global_text = plan_prod.global_write.unwrap();
+        assert!(uses_bridge(&global_text, exe));
+        assert!(codex_project_listed(&global_text, project));
+        assert_eq!(plan_prod.local_write, None);
     }
 
     #[test]
