@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 /**
- * Campo para renombrar en el sitio: Enter guarda, Esc cancela y salir del campo también guarda.
- * Devuelve el texto nuevo solo si cambió.
+ * Campo para renombrar en el sitio: Enter guarda, Esc cancela y salir del campo (blur) cancela.
+ * Solo Enter confirma; devuelve el texto nuevo solo si cambió.
  */
 export function InlineRename({
   value,
@@ -37,7 +37,7 @@ export function InlineRename({
       value={text}
       maxLength={maxLength}
       aria-label={label}
-      title="Enter para guardar, Esc para cancelar"
+      title="Enter para confirmar, Esc o salir para cancelar"
       onChange={(e) => setText(e.target.value)}
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
@@ -46,7 +46,7 @@ export function InlineRename({
         if (e.key === "Enter") finish(true);
         if (e.key === "Escape") finish(false);
       }}
-      onBlur={() => finish(true)}
+      onBlur={() => finish(false)}
     />
   );
 }

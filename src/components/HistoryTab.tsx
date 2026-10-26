@@ -355,7 +355,7 @@ export function HistoryTab({
                           onClick={() => setFile(f.path)}
                           onDoubleClick={() => f.status !== "D" && onOpenFile(f.path)}
                           onKeyDown={(e) => {
-                            if (e.key === "Enter" && file === f.path && f.status !== "D") {
+                            if (e.key === "Enter" && f.status !== "D") {
                               e.preventDefault();
                               onOpenFile(f.path);
                             }

@@ -127,16 +127,22 @@ export function PreviewTab({
       setErr(null);
       setLoading(true);
       const k = viewKind(rel);
-      const job: Promise<Loaded> = TEXTY.includes(k)
+      const job: Promise<Loaded | null> = TEXTY.includes(k)
         ? fileText(project, rel).then((t) => ({ kind: "text", text: t.text, truncated: t.truncated, binary: t.binary, size: t.size, mtime: t.mtime_ms }))
         : BLOBBY.includes(k)
-          ? fileBlob(project, rel).then((b) => ({ kind: "blob", url: blobUrl(b), size: b.size, mtime: b.mtime_ms }))
+          ? fileBlob(project, rel).then((b) => {
+              if (reqIdRef.current !== id) return null;
+              return { kind: "blob" as const, url: blobUrl(b), size: b.size, mtime: b.mtime_ms };
+            })
           : k === "office"
             ? fileOffice(project, rel).then((html) => ({ kind: "page", html }))
             : Promise.reject(new Error(""));
       job
         .then((data) => {
-          if (reqIdRef.current !== id) return;
+          if (reqIdRef.current !== id || !data) {
+            if (data?.kind === "blob") URL.revokeObjectURL(data.url);
+            return;
+          }
           setLoaded(data);
         })
         .catch((e) => {
@@ -153,8 +159,11 @@ export function PreviewTab({
   );
 
   useEffect(() => {
+    reqIdRef.current++;
     setSel(null);
     setLoaded(null);
+    setErr(null);
+    setLoading(false);
     loadList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadList]);
