@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_DAILY_CAP: u32 = 6;
 /// Intervalo mínimo de «cada N min».
 pub const MIN_INTERVAL_MIN: u32 = 15;
+/// Intervalo máximo permitido (~1 año en minutos).
+pub const MAX_INTERVAL_MIN: u32 = 525_600;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Schedule {
@@ -130,14 +132,18 @@ pub fn validate_every(every: &str) -> Result<String, String> {
         let n: u32 = it.next().and_then(|n| n.parse().ok()).ok_or_else(|| format!("no entiendo «{every}»: {help}"))?;
         let unit = it.next().unwrap_or("");
         let mins = if unit.starts_with("min") {
-            n
+            Some(n)
         } else if unit.starts_with('h') {
-            n * 60
+            n.checked_mul(60)
         } else {
             return Err(format!("no entiendo «{every}»: {help}"));
         };
+        let mins = mins.ok_or_else(|| format!("intervalo demasiado grande en «{every}»"))?;
         if mins < MIN_INTERVAL_MIN {
             return Err(format!("como mínimo cada {MIN_INTERVAL_MIN} min"));
+        }
+        if mins > MAX_INTERVAL_MIN {
+            return Err(format!("intervalo demasiado grande en «{every}» (como máximo {MAX_INTERVAL_MIN} min)"));
         }
         return Ok(format!("cada {mins} min"));
     }
@@ -386,5 +392,12 @@ mod tests {
         for bad in ["cada 5 min", "a veces", "lun 25:00", "cada día", "pepe 9:00", "cada 3 semanas"] {
             assert!(validate_every(bad).is_err(), "{bad} debía fallar");
         }
+    }
+
+    #[test]
+    fn frecuencia_extrema_no_desborda() {
+        assert!(validate_every("cada 4294967295 h").is_err());
+        assert!(validate_every("cada 100000000 min").is_err());
+        assert_eq!(validate_every("cada 2 h").unwrap(), "cada 120 min");
     }
 }

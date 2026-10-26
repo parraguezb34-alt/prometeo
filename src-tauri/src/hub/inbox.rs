@@ -51,6 +51,9 @@ pub fn inbox_unread<'a>(inner: &'a HubInner, agent: &str) -> Vec<&'a Event> {
 }
 
 pub fn inbox_ack(inner: &mut HubInner, agent: &str, seq: u64) {
+    if seq > inner.seq {
+        return;
+    }
     let entry = inner.inbox_marks.entry(agent.to_lowercase()).or_insert(0);
     if seq > *entry {
         *entry = seq;
@@ -85,4 +88,68 @@ pub(super) fn inbox_summary(inner: &HubInner) -> serde_json::Value {
 /// Normaliza el destinatario de un mensaje antes de guardarlo (alias del líder).
 pub fn message_target(inner: &HubInner, to: Option<String>) -> Option<String> {
     to.map(|t| resolve_to(inner, &t)).filter(|t| !t.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ack_futuro_no_silencia_mensajes_posteriores() {
+        let mut inner = HubInner {
+            token: String::new(),
+            port: 0,
+            agents: HashMap::new(),
+            events: VecDeque::new(),
+            tasks: vec![],
+            claims: HashMap::new(),
+            project: None,
+            charter: None,
+            leader: Some("claude".into()),
+            broadcasts: VecDeque::new(),
+            memory: vec![],
+            memory_seq: 0,
+            broadcast_marks: HashMap::new(),
+            inbox_marks: HashMap::new(),
+            inbox_floor: 0,
+            usage: HashMap::new(),
+            usage_since: 0,
+            usage_seen: VecDeque::new(),
+            director: false,
+            fix_limit: 0,
+            plan_hold: false,
+            isolate: false,
+            bases: HashMap::new(),
+            focus: HashMap::new(),
+            strengths: HashMap::new(),
+            questions: vec![],
+            question_seq: 0,
+            schedules: vec![],
+            schedule_seq: 0,
+            projects: HashMap::new(),
+            limits: HashMap::new(),
+            seq: 0,
+            task_seq: 0,
+        };
+
+        // Si se llama ack con un número futuro (ej. u64::MAX cuando seq es 0):
+        inbox_ack(&mut inner, "claude", u64::MAX);
+        assert_eq!(inbox_mark(&inner, "claude"), 0);
+
+        // Se publica un mensaje nuevo posterior:
+        push_event(
+            &mut inner,
+            "opencode",
+            "s1",
+            "message",
+            "mensaje para claude",
+            vec![],
+            Some("claude".into()),
+        );
+
+        // Debe seguir sin leer y aparecer en inbox_unread:
+        let unread = inbox_unread(&inner, "claude");
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].text, "mensaje para claude");
+    }
 }

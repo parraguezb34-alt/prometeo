@@ -1964,7 +1964,7 @@ fn hook_mode(args: &[String]) {
             ack_inbox(&client, &agent, &inbox);
             cache["inbox_blocks"] = json!(streak + 1);
             if let Some(p) = &cache_path {
-                save_cache(p, &cache);
+                let _ = save_cache(p, &cache);
             }
             println!(
                 "{}",
@@ -2005,7 +2005,7 @@ fn hook_mode(args: &[String]) {
                 ack_inbox(&client, &agent, &inbox);
             }
             if let Some(p) = &cache_path {
-                save_cache(p, &cache);
+                let _ = save_cache(p, &cache);
             }
             if saved > 0 {
                 let _ = client.post("/usage", &json!({ "agent": agent, "saved": saved }));
@@ -2051,8 +2051,38 @@ fn load_cache(path: &std::path::Path) -> Value {
         .unwrap_or_else(|| json!({}))
 }
 
-fn save_cache(path: &std::path::Path, v: &Value) {
-    let _ = std::fs::write(path, v.to_string());
+static CACHE_TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn save_cache(path: &std::path::Path, v: &Value) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    let seq = CACHE_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    name.push(format!(".tmp-{}-{}-{}", std::process::id(), now_ms(), seq));
+    let tmp = path.with_file_name(name);
+    let written = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(v.to_string().as_bytes())?;
+        f.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    let mut result = std::fs::rename(&tmp, path);
+    for _ in 0..5 {
+        if result.is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        result = std::fs::rename(&tmp, path);
+    }
+    if let Err(ref e) = result {
+        let _ = std::fs::remove_file(&tmp);
+        eprintln!("lienzo-mcp: error al guardar caché de hooks en {}: {e}", path.display());
+    }
+    result
 }
 
 fn fingerprint(text: &str) -> String {
@@ -2900,5 +2930,25 @@ mod tests {
         assert!(r.contains("- antigravity · uso: Gemini · semana holgado · se le da bien: investigar en la web"), "{r}");
         assert!(!r.contains("codex"), "solo los que están en línea: {r}");
         assert_eq!(team_roster(&json!({ "agents": [] }), now), "No hay otros agentes en línea ahora mismo.\n");
+    }
+
+    #[test]
+    fn cache_hooks_escritura_atomica() {
+        let dir = std::env::temp_dir().join(format!("test-hooks-{}", now_ms()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("cache.json");
+        let initial = json!({ "key": "valor_inicial" });
+        save_cache(&path, &initial).expect("guardar inicial");
+        assert_eq!(load_cache(&path), initial);
+
+        let updated = json!({ "key": "valor_actualizado" });
+        save_cache(&path, &updated).expect("guardar actualizado");
+        assert_eq!(load_cache(&path), updated);
+
+        let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].file_name(), "cache.json");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
