@@ -466,13 +466,33 @@ fn dev_call_inner(name: &str, args: &Value) -> Result<Value, String> {
         }
         "dev_ver" => {
             const SCRIPT: &str = r#"(() => {
-              const visible = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+              const hidden = el => !!el.closest('[aria-hidden="true"],.cc-hideterms');
+              const visible = el => { if (hidden(el)) return false; const r = el.getBoundingClientRect(), s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
               document.querySelectorAll('[data-prometeo-dev-index]').forEach(el => el.removeAttribute('data-prometeo-dev-index'));
               const nodes = [...document.querySelectorAll('button,a[href],input,textarea,select,[role="button"],[role="tab"],[contenteditable="true"]')].filter(visible).slice(0,120);
               const elementos = nodes.map((el,i) => { el.setAttribute('data-prometeo-dev-index', String(i+1)); return { indice:i+1, rol:el.getAttribute('role') || el.tagName.toLowerCase(), texto:(el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.getAttribute('placeholder') || '').trim().slice(0,120) }; });
               const focused = document.activeElement;
-              const enfocado = focused ? (focused.getAttribute('aria-label') || focused.getAttribute('placeholder') || focused.innerText || focused.tagName.toLowerCase()).trim().slice(0,100) : '';
-              return { texto:(document.body.innerText || '').slice(0,14000), enfocado, elementos };
+              const enfocado = focused && visible(focused) ? (focused.getAttribute('aria-label') || focused.getAttribute('placeholder') || focused.innerText || focused.tagName.toLowerCase()).trim().slice(0,100) : '';
+              const text = [];
+              let size = 0;
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+                acceptNode(node) {
+                  if (node.nodeType === Node.ELEMENT_NODE) {
+                    const el = node;
+                    if (el.matches('[aria-hidden="true"],.cc-hideterms,script,style,template')) return NodeFilter.FILTER_REJECT;
+                    const s = getComputedStyle(el);
+                    return s.display === 'none' || s.visibility === 'hidden' ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+                  }
+                  const value = node.textContent?.trim();
+                  return value && node.parentElement?.getClientRects().length ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+                }
+              });
+              while (size < 6000 && walker.nextNode()) {
+                const part = walker.currentNode.textContent.trim();
+                text.push(part);
+                size += part.length + 1;
+              }
+              return { texto:text.join('\n').slice(0,6000), enfocado, elementos };
             })()"#;
             let view = dev_eval(&mut socket, 1, SCRIPT)?;
             let mut lines = vec![format!("Texto visible:\n{}", view["texto"].as_str().unwrap_or("")), format!("\nFoco: {}", view["enfocado"].as_str().unwrap_or("")), "\nElementos (índices para dev_clic):".into()];
@@ -2406,6 +2426,9 @@ fn hook_mode(args: &[String]) {
     let pending = fetch_pending(&client, &agent, &session_key);
     // Mensajes de otros agentes para este (su buzón).
     let inbox = fetch_inbox(&client, &agent);
+    let hook_inbox = inbox_text_capped(&inbox);
+    // Un diff recortado debe seguir pendiente para que team_inbox entregue el texto completo.
+    let inbox_has_trimmed_diff = hook_inbox.contains(DIFF_TRUNCATED);
 
     // On stop: if there are pending team messages, keep the turn alive with them.
     if event == "stop" && !pending.is_empty() {
@@ -2417,8 +2440,10 @@ fn hook_mode(args: &[String]) {
             joined.join("\n")
         );
         if !inbox.is_empty() {
-            reason.push_str(&format!("\n\n{}", inbox_text(&inbox)));
-            ack_inbox(&client, &agent, &inbox);
+            reason.push_str(&format!("\n\n{hook_inbox}"));
+            if !inbox_has_trimmed_diff {
+                ack_inbox(&client, &agent, &inbox);
+            }
         }
         println!("{}", json!({ "decision": "block", "reason": reason }));
         return;
@@ -2432,7 +2457,9 @@ fn hook_mode(args: &[String]) {
         // Solo un mensaje dirigido a él merece otro turno; los de «todo el equipo» esperan a su
         // próximo mensaje o herramienta (cada turno extra relee todo su contexto).
         if inbox.iter().any(|m| m.3) && streak < 3 {
-            ack_inbox(&client, &agent, &inbox);
+            if !inbox_has_trimmed_diff {
+                ack_inbox(&client, &agent, &inbox);
+            }
             cache["inbox_blocks"] = json!(streak + 1);
             if let Some(p) = &cache_path {
                 let _ = save_cache(p, &cache);
@@ -2443,7 +2470,7 @@ fn hook_mode(args: &[String]) {
                     "decision": "block",
                     "reason": format!(
                         "{}\n\nAtiéndelos si hace falta (team_message con to y reply_to) y vuelve a lo tuyo. No contestes agradecimientos ni confirmaciones.",
-                        inbox_text(&inbox)
+                        hook_inbox
                     )
                 })
             );
@@ -2472,8 +2499,10 @@ fn hook_mode(args: &[String]) {
                 ack_pending(&client, &agent, &session_key, max_seq);
             }
             if !inbox.is_empty() {
-                ctx.push_str(&format!("\n{}\n", inbox_text(&inbox)));
-                ack_inbox(&client, &agent, &inbox);
+                ctx.push_str(&format!("\n{hook_inbox}\n"));
+                if !inbox_has_trimmed_diff {
+                    ack_inbox(&client, &agent, &inbox);
+                }
             }
             if let Some(p) = &cache_path {
                 let _ = save_cache(p, &cache);
@@ -2655,6 +2684,51 @@ fn inbox_text(list: &[(u64, String, String, bool)]) -> String {
     let mut out = format!("📬 Mensajes de tus compañeros ({}):\n", list.len());
     for (seq, from, text, _) in list {
         out.push_str(&format!("- #{seq} de {from}: {text}\n"));
+    }
+    out.push_str("Para responder: team_message con to = quien escribió y reply_to = su número.");
+    out
+}
+
+const HOOK_INBOX_CHARS: usize = 8_000;
+const DIFF_TRUNCATED: &str = "\n(diff recortado: team_inbox)\n";
+
+/// Reduce solo el diff; el texto de cada mensaje y su número quedan intactos.
+fn clip_hook_diff(diff: &str, max_chars: usize) -> String {
+    let prefix = "\n```diff\n";
+    let suffix = "\n```\n";
+    let overhead = prefix.chars().count() + suffix.chars().count() + DIFF_TRUNCATED.chars().count();
+    if max_chars <= overhead {
+        return DIFF_TRUNCATED.to_string();
+    }
+    let body = diff.strip_prefix(prefix).and_then(|s| s.strip_suffix(suffix)).unwrap_or(diff);
+    let excerpt: String = body.chars().take(max_chars - overhead).collect();
+    let excerpt = excerpt.rfind('\n').map(|end| &excerpt[..end]).unwrap_or(&excerpt);
+    format!("{prefix}{excerpt}{suffix}{DIFF_TRUNCATED}")
+}
+
+/// El hook tiene un límite blando de 8k caracteres: conserva todos los textos
+/// y recorta primero los diffs antiguos. team_inbox sigue entregando todo.
+fn inbox_text_capped(list: &[(u64, String, String, bool)]) -> String {
+    let full = inbox_text(list);
+    let mut total = full.chars().count();
+    if total <= HOOK_INBOX_CHARS { return full; }
+    let mut pieces: Vec<(&str, String)> = list.iter().map(|(_, _, text, _)| {
+        match text.rfind("\n```diff\n") {
+            Some(start) => (&text[..start], text[start..].to_string()),
+            None => (text.as_str(), String::new()),
+        }
+    }).collect();
+    for (_, diff) in &mut pieces {
+        if total <= HOOK_INBOX_CHARS { break; }
+        if diff.is_empty() { continue; }
+        let before = diff.chars().count();
+        let target = before.saturating_sub(total - HOOK_INBOX_CHARS);
+        *diff = clip_hook_diff(diff, target);
+        total = total - before + diff.chars().count();
+    }
+    let mut out = format!("📬 Mensajes de tus compañeros ({}):\n", list.len());
+    for ((seq, from, _, _), (text, diff)) in list.iter().zip(pieces) {
+        out.push_str(&format!("- #{seq} de {from}: {text}{diff}\n"));
     }
     out.push_str("Para responder: team_message con to = quien escribió y reply_to = su número.");
     out
@@ -3567,6 +3641,22 @@ mod tests {
         changed["agents"][0]["online"] = json!(false);
         let (next, _) = context_for_prompt(&changed, "codex", &mut cache, false);
         assert!(next.contains("No hay otros agentes en línea"));
+    }
+
+    #[test]
+    fn hook_recorta_diffs_viejos_sin_perder_mensajes() {
+        let diff = format!("\n```diff\n{}\n```\n", "+línea de cambio\n".repeat(390));
+        let messages = (1..=3).map(|id| (
+            id, "lienzo".to_string(), format!("Revisa la entrega #{id}: decide y responde.{diff}"), true,
+        )).collect::<Vec<_>>();
+        let before = inbox_text(&messages);
+        let after = inbox_text_capped(&messages);
+        println!("hook inbox bytes: {} -> {}", before.len(), after.len());
+        assert!(before.chars().count() > 16_000);
+        assert!(after.chars().count() <= HOOK_INBOX_CHARS, "{} caracteres", after.chars().count());
+        for id in 1..=3 { assert!(after.contains(&format!("Revisa la entrega #{id}"))); }
+        assert!(after.contains("(diff recortado: team_inbox)"));
+        assert!(after.contains("#3 de lienzo") && after.contains("+línea de cambio"));
     }
 
     #[test]

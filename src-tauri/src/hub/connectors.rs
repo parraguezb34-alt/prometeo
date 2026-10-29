@@ -278,6 +278,9 @@ fn write_managed_block(path: &Path, block: &str) -> Result<(), String> {
     } else {
         format!("{}\n\n{}\n", existing.trim_end(), block)
     };
+    if existing == updated && path.is_file() {
+        return Ok(());
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
@@ -1544,7 +1547,10 @@ mod tests {
             std::fs::write(dir.join(name), format!("prefacio\n{BLOCK_START}\nbloque viejo\n{BLOCK_END}\nfinal\n")).unwrap();
         }
         assert_eq!(refresh_protocol(&dir).len(), 2);
+        let first_mtimes = ["CLAUDE.md", "AGENTS.md"].map(|name| std::fs::metadata(dir.join(name)).unwrap().modified().unwrap());
         assert!(refresh_protocol(&dir).is_empty());
+        let second_mtimes = ["CLAUDE.md", "AGENTS.md"].map(|name| std::fs::metadata(dir.join(name)).unwrap().modified().unwrap());
+        assert_eq!(first_mtimes, second_mtimes, "regenerar sin cambios no debe tocar mtime");
         for name in ["CLAUDE.md", "AGENTS.md"] {
             let text = std::fs::read_to_string(dir.join(name)).unwrap();
             assert_eq!(text.matches(BLOCK_START).count(), 1);

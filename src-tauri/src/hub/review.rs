@@ -8,8 +8,11 @@ use std::path::{Path, PathBuf};
 
 /// Archivos más grandes no se copian ni se comparan.
 pub const MAX_FILE_BYTES: u64 = 256 * 1024;
-/// Tope de celdas de la tabla LCS; por encima, el tramo central sale como reemplazo entero.
+/// Tope de celdas de la tabla LCS; por encima probamos Myers acotado.
 const MAX_CELLS: usize = 2_000_000;
+/// Un reemplazo realmente grande conserva el fallback antiguo; un par de cambios
+/// lejanos en miles de líneas se resuelve con D pequeño y dos hunks legibles.
+const MAX_EDIT_DISTANCE: usize = 128;
 /// Un archivo sin copia previa se muestra entero solo si es corto.
 const MAX_LINES_WITHOUT_BASE: usize = 150;
 
@@ -65,6 +68,75 @@ enum Op {
     Ins,
 }
 
+/// Myers para el tramo central grande. Con D acotado, la traza de diagonales
+/// ocupa O(D²) y el recorrido O((N+M)·D); no crea una tabla N×M.
+fn myers_lines<'a>(a: &[&'a str], b: &[&'a str]) -> Option<Vec<(Op, &'a str)>> {
+    let (n, m) = (a.len(), b.len());
+    let limit = (n + m).min(MAX_EDIT_DISTANCE);
+    let offset = limit + 1;
+    let at = |k: isize| (offset as isize + k) as usize;
+    let mut frontier = vec![0usize; 2 * limit + 3];
+    let mut trace: Vec<Vec<usize>> = Vec::new();
+    for d in 0..=limit {
+        let mut next = frontier.clone();
+        for k in (-(d as isize)..=d as isize).step_by(2) {
+            let mut x = if k == -(d as isize)
+                || (k != d as isize && frontier[at(k - 1)] < frontier[at(k + 1)]) {
+                frontier[at(k + 1)]
+            } else {
+                frontier[at(k - 1)] + 1
+            };
+            let mut y = (x as isize - k) as usize;
+            while x < n && y < m && a[x] == b[y] {
+                x += 1;
+                y += 1;
+            }
+            next[at(k)] = x;
+            if x == n && y == m {
+                trace.push(next);
+                let mut reversed = Vec::with_capacity(n + m);
+                let (mut x, mut y) = (n, m);
+                for depth in (1..trace.len()).rev() {
+                    let k = x as isize - y as isize;
+                    let previous = &trace[depth - 1];
+                    let prev_k = if k == -(depth as isize)
+                        || (k != depth as isize && previous[at(k - 1)] < previous[at(k + 1)]) {
+                        k + 1
+                    } else {
+                        k - 1
+                    };
+                    let prev_x = previous[at(prev_k)];
+                    let prev_y = (prev_x as isize - prev_k) as usize;
+                    while x > prev_x && y > prev_y {
+                        x -= 1;
+                        y -= 1;
+                        reversed.push((Op::Eq, a[x]));
+                    }
+                    if x == prev_x {
+                        y -= 1;
+                        reversed.push((Op::Ins, b[y]));
+                    } else {
+                        x -= 1;
+                        reversed.push((Op::Del, a[x]));
+                    }
+                }
+                while x > 0 && y > 0 {
+                    x -= 1;
+                    y -= 1;
+                    reversed.push((Op::Eq, a[x]));
+                }
+                while x > 0 { x -= 1; reversed.push((Op::Del, a[x])); }
+                while y > 0 { y -= 1; reversed.push((Op::Ins, b[y])); }
+                reversed.reverse();
+                return Some(reversed);
+            }
+        }
+        trace.push(next.clone());
+        frontier = next;
+    }
+    None
+}
+
 /// Operaciones línea a línea: prefijo y sufijo comunes fuera, y LCS en el tramo central.
 fn diff_lines<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<(Op, &'a str)> {
     let mut pre = 0;
@@ -107,6 +179,8 @@ fn diff_lines<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<(Op, &'a str)> {
         }
         out.extend(am[i..].iter().map(|l| (Op::Del, *l)));
         out.extend(bm[j..].iter().map(|l| (Op::Ins, *l)));
+    } else if let Some(ops) = myers_lines(am, bm) {
+        out.extend(ops);
     } else {
         out.extend(am.iter().map(|l| (Op::Del, *l)));
         out.extend(bm.iter().map(|l| (Op::Ins, *l)));
@@ -209,6 +283,34 @@ mod tests {
         assert_eq!(unified("", "a\nb", 0), "@@ -1,0 +1,2 @@\n+a\n+b\n");
         assert_eq!(unified("a\nc", "a\nb\nc", 1), "@@ -1,2 +1,3 @@\n a\n+b\n c\n");
         assert_eq!(unified("igual", "igual", 3), "");
+    }
+
+    #[test]
+    fn large_file_with_distant_edits_has_two_small_hunks() {
+        let old = (1..=4000).map(|i| format!("línea única {i}")).collect::<Vec<_>>().join("\n");
+        let new = old.replace("línea única 590", "línea editada 590")
+            .replace("línea única 3500", "línea editada 3500");
+        let diff = unified(&old, &new, 3);
+        assert_eq!(diff.lines().filter(|l| l.starts_with("@@")).count(), 2, "{diff}");
+        assert!(diff.contains("-línea única 590\n+línea editada 590"));
+        assert!(diff.contains("-línea única 3500\n+línea editada 3500"));
+        assert!(diff.lines().count() < 30, "diff demasiado grande");
+    }
+
+    #[test]
+    fn myers_large_middle_reconstructs_insertions_and_deletions() {
+        let a = (0..3500).map(|i| format!("item {i}")).collect::<Vec<_>>();
+        let mut b = a.clone();
+        b.insert(500, "insertado".into());
+        b.remove(3000);
+        let old = a.join("\n");
+        let new = b.join("\n");
+        let aa: Vec<&str> = old.lines().collect();
+        let bb: Vec<&str> = new.lines().collect();
+        let ops = diff_lines(&aa, &bb);
+        assert_eq!(ops.iter().filter(|(op, _)| *op != Op::Ins).map(|(_, line)| *line).collect::<Vec<_>>(), aa);
+        assert_eq!(ops.iter().filter(|(op, _)| *op != Op::Del).map(|(_, line)| *line).collect::<Vec<_>>(), bb);
+        assert_eq!(unified(&old, &new, 3).lines().filter(|l| l.starts_with("@@")).count(), 2);
     }
 
     #[test]
