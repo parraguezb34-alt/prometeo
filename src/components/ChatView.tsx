@@ -73,8 +73,9 @@ type Props = {
 // ---- imágenes ------------------------------------------------------------------
 
 type ImageCacheEntry = { promise: Promise<string>; bytes: number };
-const MAX_IMAGE_CACHE_ITEMS = 24;
-const MAX_IMAGE_CACHE_BYTES = 32 * 1024 * 1024;
+const MAX_IMAGE_CACHE_ITEMS = 8;
+const MAX_IMAGE_CACHE_BYTES = 12 * 1024 * 1024;
+const ROW_PAGE = 80;
 const imageCache = new Map<string, ImageCacheEntry>();
 let imageCacheBytes = 0;
 
@@ -385,13 +386,21 @@ export function ChatView({
 }: Props) {
   const load = loadImage ?? diskImage;
   const rows = useMemo(() => buildTimeline(events), [events]);
+  const [rowWindow, setRowWindow] = useState({ key: resetKey, count: ROW_PAGE, rowsAt: rows.length });
+  const [unseen, setUnseen] = useState(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  // Mientras se lee arriba, conserva la primera fila visible cuando llegan mensajes.
+  const visibleCount = rowWindow.key === resetKey
+    ? rowWindow.count + (stick.current ? 0 : Math.max(0, rows.length - rowWindow.rowsAt))
+    : ROW_PAGE;
+  const firstVisible = Math.max(0, rows.length - visibleCount);
+  const visibleRows = rows.slice(firstVisible);
+  const scrollAnchor = useRef<{ top: number; height: number } | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [box, setBox] = useState<{ paths: string[]; index: number } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
-  const [unseen, setUnseen] = useState(0);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
   const lastCount = useRef(0);
 
   const busy = useMemo(() => new Map(live.filter((l) => l.busy).map((l) => [l.name, l])), [live]);
@@ -414,7 +423,7 @@ export function ChatView({
     return m;
   }, [events]);
 
-  // Reloj de segundo en segundo mientras haya algo en vivo (trabajo o un mensaje sin acuse).
+  // El cronómetro de segundo en segundo vive en LiveClock; aquí solo se actualizan acuses.
   const lastUser = useMemo(() => {
     for (let i = rows.length - 1; i >= 0; i--) {
       const r = rows[i];
@@ -425,9 +434,9 @@ export function ChatView({
   const ticking = busy.size > 0 || (!!lastUser && Date.now() - lastUser.e.ts_ms < 10 * 60_000);
   useEffect(() => {
     if (!ticking) return;
-    // Cada 5 s basta para los acuses («Enviado», «Recibido»…); el cronómetro de «Pensando…» va
+    // Cada 15 s basta para los acuses («Enviado», «Recibido»…); el cronómetro de «Pensando…» va
     // en su propio componente y es lo único que se repinta cada segundo.
-    const id = window.setInterval(() => setNow(Date.now()), 5000);
+    const id = window.setInterval(() => setNow(Date.now()), 15_000);
     return () => window.clearInterval(id);
   }, [ticking]);
 
@@ -450,7 +459,7 @@ export function ChatView({
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     // Solo te despegas del final si subes tú; si el contenido crece mientras bajamos solos, no.
     if (atBottom) stick.current = true;
-    else if (el.scrollTop < lastTop.current - 4) stick.current = false;
+    else if (el.scrollTop < lastTop.current - 4 || el.scrollTop < 4) stick.current = false;
     lastTop.current = el.scrollTop;
     if (stick.current) setUnseen(0);
   };
@@ -458,9 +467,37 @@ export function ChatView({
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    lastTop.current = el.scrollTop;
     stick.current = true;
     setUnseen(0);
   };
+  useEffect(() => {
+    setRowWindow({ key: resetKey, count: ROW_PAGE, rowsAt: rows.length });
+    // Solo al cambiar de chat; los mensajes nuevos no reinician la ventana.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey]);
+  useLayoutEffect(() => {
+    // Al seguir pegado al fondo, la base avanza con los mensajes; así, al subir
+    // más tarde no reaparecen de golpe todas las filas recibidas desde la carga.
+    if (!stick.current) return;
+    setRowWindow((cur) => cur.key === resetKey && cur.rowsAt !== rows.length
+      ? { ...cur, rowsAt: rows.length }
+      : cur);
+  }, [resetKey, rows.length]);
+  const showOlder = () => {
+    const el = scrollRef.current;
+    if (el) scrollAnchor.current = { top: el.scrollTop, height: el.scrollHeight };
+    stick.current = false;
+    setRowWindow({ key: resetKey, count: Math.min(rows.length, visibleCount + ROW_PAGE), rowsAt: rows.length });
+  };
+  useLayoutEffect(() => {
+    const anchor = scrollAnchor.current;
+    const el = scrollRef.current;
+    if (!anchor || !el) return;
+    el.scrollTop = anchor.top + el.scrollHeight - anchor.height;
+    lastTop.current = el.scrollTop;
+    scrollAnchor.current = null;
+  }, [rowWindow]);
   useLayoutEffect(() => {
     stick.current = true;
     lastCount.current = events.length;
@@ -483,7 +520,10 @@ export function ChatView({
     const col = el?.firstElementChild;
     if (!el || !col || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
-      if (stick.current) el.scrollTop = el.scrollHeight;
+      if (stick.current) {
+        el.scrollTop = el.scrollHeight;
+        lastTop.current = el.scrollTop;
+      }
     });
     ro.observe(col);
     return () => ro.disconnect();
@@ -1166,7 +1206,12 @@ export function ChatView({
           empty
         ) : (
           <div className="cv-col">
-            {rows.map(renderRow)}
+            {firstVisible > 0 && (
+              <button className="cv-ghost" style={{ alignSelf: "center" }} onClick={showOlder}>
+                Ver anteriores (+{Math.min(ROW_PAGE, firstVisible)})
+              </button>
+            )}
+            {visibleRows.map(renderRow)}
             {pending.map((l) => (
               <div
                 className="cv-turn"
