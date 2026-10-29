@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { cleanFolderName, parentDir, projectName } from "../lib/project";
 import { Icon } from "./Icon";
 
 export type ProjectItem = { path: string; openTasks?: number };
+export type ProjectAction = (name: string) => Promise<string | null>;
 
 /**
  * Proyecto en el que trabaja el equipo (una carpeta) y cómo cambiar: a uno reciente, a otra
@@ -22,20 +23,51 @@ export function ProjectSwitcher({
   busy: boolean;
   onSwitch: (path: string) => void;
   onOpenFolder: () => void;
-  onCreate: (name: string) => void;
+  onCreate: ProjectAction;
   /** Renombra la carpeta del proyecto abierto (en el disco). */
-  onRename: (name: string) => void;
+  onRename: ProjectAction;
 }) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const submittingRef = useRef(false);
   const [open, setOpen] = useState(false);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  useLayoutEffect(() => {
+    if (!open) return;
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"], input')?.focus();
+    return () => triggerRef.current?.focus();
+  }, [open]);
   const close = () => {
+    if (submittingRef.current) return;
     setOpen(false);
     setNaming(false);
     setName("");
     setRenaming(false);
+    setError("");
+  };
+  const submit = async (value: string, action: ProjectAction) => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    setError("");
+    try {
+      const message = await action(value);
+      if (message) setError(message);
+      else {
+        submittingRef.current = false;
+        close();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
+    }
   };
   const cur = project ? projectName(project) : "";
   const nextName = cleanFolderName(newName);
@@ -43,6 +75,7 @@ export function ProjectSwitcher({
   return (
     <div className="ps">
       <button
+        ref={triggerRef}
         className="ps-btn"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
@@ -56,7 +89,19 @@ export function ProjectSwitcher({
       {open && (
         <>
           <div className="cc-scrim" data-light="1" onClick={close} />
-          <div className="ps-menu" role="menu" aria-label="Proyectos">
+          <div
+            ref={menuRef}
+            className="ps-menu"
+            role="menu"
+            aria-label="Proyectos"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                close();
+              }
+            }}
+          >
             <div className="cc-menu-sep">Proyecto actual</div>
             {project ? (
               <div className="ps-cur" title={project}>
@@ -81,23 +126,25 @@ export function ProjectSwitcher({
                   onSubmit={(e) => {
                     e.preventDefault();
                     if (!nextName || nextName === cur) return;
-                    onRename(nextName);
-                    close();
+                    void submit(nextName, onRename);
                   }}
                 >
                   <input
                     autoFocus
                     value={newName}
                     maxLength={120}
-                    onChange={(e) => setNewName(e.target.value)}
+                    onChange={(e) => { setNewName(e.target.value); setError(""); }}
                     onFocus={(e) => e.target.select()}
                     placeholder="Nombre nuevo de la carpeta"
-                    onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
                     aria-label="Nombre nuevo de la carpeta"
+                    aria-invalid={!!error}
+                    aria-describedby={error ? "ps-rename-error" : undefined}
+                    disabled={submitting}
                   />
-                  <button className="cc-btn" type="submit" disabled={!nextName || nextName === cur}>
-                    Renombrar
+                  <button className="cc-btn" type="submit" disabled={!nextName || nextName === cur || submitting}>
+                    {submitting ? "Renombrando…" : "Renombrar"}
                   </button>
+                  {error && <small id="ps-rename-error" role="alert" style={{ color: "var(--err)" }}>{error}</small>}
                   <small>
                     Cambia el nombre de la carpeta en el disco. Las terminales se cierran un momento y los agentes
                     vuelven solos; chats, tareas, historial y memoria siguen igual.
@@ -109,6 +156,7 @@ export function ProjectSwitcher({
                   role="menuitem"
                   onClick={() => {
                     setNewName(cur);
+                    setError("");
                     setRenaming(true);
                   }}
                 >
@@ -168,24 +216,27 @@ export function ProjectSwitcher({
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (!name.trim()) return;
-                  onCreate(name.trim());
-                  close();
+                  void submit(name.trim(), onCreate);
                 }}
               >
                 <input
                   autoFocus
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => { setName(e.target.value); setError(""); }}
                   placeholder="Nombre del proyecto"
-                  onKeyDown={(e) => e.key === "Escape" && setNaming(false)}
+                  aria-label="Nombre del proyecto"
+                  aria-invalid={!!error}
+                  aria-describedby={error ? "ps-create-error" : undefined}
+                  disabled={submitting}
                 />
-                <button className="cc-btn" type="submit" disabled={!name.trim()}>
-                  Crear
+                <button className="cc-btn" type="submit" disabled={!name.trim() || submitting}>
+                  {submitting ? "Creando…" : "Crear"}
                 </button>
+                {error && <small id="ps-create-error" role="alert" style={{ color: "var(--err)" }}>{error}</small>}
                 <small>Se crea en {project ? parentDir(project) : "la carpeta que elijas"}</small>
               </form>
             ) : (
-              <button className="cc-mi" role="menuitem" onClick={() => setNaming(true)}>
+              <button className="cc-mi" role="menuitem" onClick={() => { setError(""); setNaming(true); }}>
                 <span className="cc-mi-ic">
                   <Icon name="plus" />
                 </span>

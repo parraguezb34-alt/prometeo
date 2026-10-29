@@ -66,10 +66,11 @@ export const termSpawn = (
  */
 export async function termWrite(id: string, data: string): Promise<void> {
   if (data.length > 1 && data.endsWith("\r") && !data.startsWith("\x1b")) {
-    // Un aviso abierto (Codex al arrancar con un MCP roto) se comería el mensaje: se cierra antes.
-    if (takeDialog(id)) {
+    // Un aviso o un buscador abierto (Codex) se comería el mensaje: se cierra antes. Si tras el Esc
+    // vuelve a pintarse otro (un buscador encima de otro), se repite, como mucho tres veces.
+    for (let i = 0; i < 3 && takeDialog(id); i++) {
       await invoke<void>("term_write", { id, data: "\x1b" });
-      await new Promise((ok) => setTimeout(ok, 300));
+      await new Promise((ok) => setTimeout(ok, 400));
     }
     const text = data.slice(0, -1);
     watchSubmit(id, text, () => invoke<void>("term_write", { id, data: "\r" }));

@@ -39,6 +39,13 @@ test("reconoce el aviso de Codex que se come el teclado", () => {
   assert.equal(DIALOG.test(cleanTerm("\x1b[2m esc to interrupt\x1b[0m")), false);
 });
 
+test("los buscadores de Codex se cierran con Esc; el «esc to cancel» de Claude Code no", () => {
+  const find = "Find: buzón\x1b[1;1H  No matches \x1b[2m·\x1b[0m full transcript \x1b[2m·\x1b[0m esc cancel";
+  assert.equal(DIALOG.test(cleanTerm(find)), true);
+  assert.equal(DIALOG.test(cleanTerm("  reverse-i-search:")), true);
+  assert.equal(DIALOG.test(cleanTerm("Do you want to proceed? 1. Yes 2. No  Esc to cancel")), false);
+});
+
 test("un texto largo resumido como pegado que sigue en el cuadro: otro Enter", () => {
   assert.equal(needsResubmit({ ...base, tail: "› [Pasted Content 812 chars]" }), true);
   assert.equal(needsResubmit({ ...base, tail: "> [Pasted text #1 +3 lines]" }), true);

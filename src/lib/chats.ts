@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { agentLabel } from "./team";
+import { agentLabel, errMsg } from "./team";
 import type { TeamEvent } from "./team";
 import { chatsRead, chatsWrite, mergeChats, sameChats } from "./chatsDisk";
+import { notify } from "./notify";
+import { reportError } from "./errors";
 
 /**
  * Chats = ventanas de tiempo sobre el feed del hub. El hub no sabe de chats:
@@ -77,18 +79,150 @@ function load(project: string | null): Chat[] {
  * estar vacía y pisaría los chats guardados). */
 const synced = new Set<string>();
 
+let writeSeq = 0;
+// Estado de sincronización y pendientes por proyecto (clave = storageKey(project))
+const projectSeqs = new Map<string, { lastSuccessfulSeq: number; lastLocalSeq: number; failedSeq: number }>();
+const pendingSaves = new Map<string, { seq: number; project: string | null; chats: Chat[] }>();
+const lastSavedByProject = new Map<string, number>();
+let retryTimer: number | undefined;
+
+/**
+ * Reintenta el guardado para todos los proyectos que tienen escrituras pendientes.
+ */
+export function retrySaveChats() {
+  if (pendingSaves.size === 0) return;
+  const entries = Array.from(pendingSaves.values());
+  for (const item of entries) {
+    save(item.project, item.chats);
+  }
+}
+
+function handleSaveFailure(seq: number, project: string | null, chats: Chat[], detail: string) {
+  const key = storageKey(project);
+  const st = projectSeqs.get(key) ?? { lastSuccessfulSeq: 0, lastLocalSeq: 0, failedSeq: 0 };
+
+  // Si ya hubo un guardado exitoso igual o más reciente para este proyecto (seq <= lastSuccessfulSeq),
+  // este fallo tardío de una petición desfasada se descarta para no pisar el estado confirmado.
+  if (seq <= st.lastSuccessfulSeq) return;
+
+  // Si una escritura más reciente ya se guardó con éxito en localStorage (seq < lastLocalSeq),
+  // este fallo de una versión vieja no debe fijar una lista obsoleta como pendiente.
+  if (seq < st.lastLocalSeq) return;
+
+  // Si ya hay un fallo más reciente pendiente para este proyecto, no lo pisamos con uno desfasado.
+  if (seq < st.failedSeq && pendingSaves.has(key)) return;
+  st.failedSeq = seq;
+  projectSeqs.set(key, st);
+
+  pendingSaves.set(key, { seq, project, chats });
+  reportError("interfaz", `Fallo al guardar chats en disco y almacenamiento local (${project ?? "sin proyecto"})`, detail);
+
+  const lastTimeMs = lastSavedByProject.get(key);
+  const lastTime = lastTimeMs
+    ? new Date(lastTimeMs).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : "nunca";
+  notify(
+    "⚠️ Error al guardar chats",
+    `No se pudieron guardar los chats ni en disco ni en el navegador (último guardado con éxito: ${lastTime}). Reintentando automáticamente en segundo plano.`,
+    { kind: "late" },
+  );
+  if (retryTimer === undefined && typeof window !== "undefined") {
+    retryTimer = window.setTimeout(() => {
+      retryTimer = undefined;
+      retrySaveChats();
+    }, 20_000);
+  }
+}
+
+function onSaveSuccess(seq: number, project: string | null) {
+  const key = storageKey(project);
+  const st = projectSeqs.get(key) ?? { lastSuccessfulSeq: 0, lastLocalSeq: 0, failedSeq: 0 };
+  if (seq > st.lastSuccessfulSeq) {
+    st.lastSuccessfulSeq = seq;
+    lastSavedByProject.set(key, Date.now());
+  }
+
+  // Solo se da por resuelta la sincronización de este proyecto si la escritura exitosa
+  // es al menos tan reciente como la última que falló para este proyecto.
+  if (seq >= st.failedSeq) {
+    const hadPending = pendingSaves.has(key);
+    pendingSaves.delete(key);
+    st.failedSeq = 0;
+    projectSeqs.set(key, st);
+
+    // Si este proyecto tenía fallos pendientes y ahora todos los proyectos están limpios:
+    if (hadPending && pendingSaves.size === 0) {
+      if (retryTimer !== undefined && typeof window !== "undefined") {
+        window.clearTimeout(retryTimer);
+        retryTimer = undefined;
+      }
+      notify("Chats guardados", "Se ha restablecido la sincronización y el guardado de chats.", { kind: "done" });
+    }
+  } else {
+    projectSeqs.set(key, st);
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("focus", () => {
+    if (pendingSaves.size > 0) retrySaveChats();
+  });
+}
+
 /**
  * Guarda en disco (lo que vale) y en el navegador interno (copia rápida para abrir al instante).
  * Las escrituras a disco van en orden, así que la última siempre gana.
  */
 function save(project: string | null, chats: Chat[]) {
+  const key = storageKey(project);
+  const seq = ++writeSeq;
   const list = chats.slice(0, MAX_CHATS);
-  try {
-    localStorage.setItem(storageKey(project), JSON.stringify(list));
-  } catch {
-    /* sin almacenamiento rápido: queda el disco */
+
+  // Si este proyecto ya tenía un guardado pendiente de reintento, actualizamos de inmediato
+  // la instantánea a la más reciente para que ningún reintento intermedio guarde datos viejos.
+  if (pendingSaves.has(key)) {
+    pendingSaves.set(key, { seq, project, chats: list });
+    const st = projectSeqs.get(key) ?? { lastSuccessfulSeq: 0, lastLocalSeq: 0, failedSeq: 0 };
+    if (seq > st.failedSeq) st.failedSeq = seq;
+    projectSeqs.set(key, st);
   }
-  if (project && synced.has(storageKey(project))) void chatsWrite(project, list).catch(() => {});
+
+  const st = projectSeqs.get(key) ?? { lastSuccessfulSeq: 0, lastLocalSeq: 0, failedSeq: 0 };
+  let localOk = false;
+  let localErr = "";
+  try {
+    localStorage.setItem(key, JSON.stringify(list));
+    localOk = true;
+    if (seq > st.lastLocalSeq) st.lastLocalSeq = seq;
+  } catch (e) {
+    localErr = errMsg(e);
+  }
+  projectSeqs.set(key, st);
+
+  if (project && synced.has(key)) {
+    chatsWrite(project, list)
+      .then(() => {
+        onSaveSuccess(seq, project);
+      })
+      .catch((e) => {
+        const diskErr = errMsg(e);
+        reportError("historial", `Fallo al escribir chats en disco para ${project} (seq ${seq}): ${diskErr}`);
+        if (!localOk || pendingSaves.has(key)) {
+          handleSaveFailure(
+            seq,
+            project,
+            list,
+            `Disco: ${diskErr}${localOk ? " (localStorage OK)" : ` · LocalStorage: ${localErr}`}`,
+          );
+        } else {
+          lastSavedByProject.set(key, Date.now());
+        }
+      });
+  } else if (!localOk) {
+    handleSaveFailure(seq, project, list, `LocalStorage: ${localErr}`);
+  } else {
+    onSaveSuccess(seq, project);
+  }
 }
 
 /** ¿El evento pertenece a la ventana del chat? */
@@ -201,7 +335,9 @@ export function useChats(project: string | null) {
         if (sameChats(merged, ref.current)) save(project, merged);
         else update(() => merged);
       })
-      .catch(() => {});
+      .catch((e) => {
+        reportError("historial", `Fallo al leer chats de disco para ${project}: ${errMsg(e)}`);
+      });
     return () => {
       alive = false;
     };

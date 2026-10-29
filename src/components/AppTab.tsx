@@ -32,7 +32,11 @@ export function AppTab({
 }) {
   const [mode, setMode] = useState<"app" | "file">(openRel ? "file" : "app");
   const [det, setDet] = useState<AppDetect | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [detectError, setDetectError] = useState<string | null>(null);
   const [st, setSt] = useState<AppStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
@@ -42,19 +46,51 @@ export function AppTab({
     if (openRel) setMode("file");
   }, [openRel]);
 
-  useEffect(() => {
-    setDet(null);
-    if (project) appDetect(project).then(setDet).catch(() => setDet(null));
+  const detect = useCallback(() => {
+    if (!project) {
+      setDet(null);
+      setDetectError(null);
+      setDetecting(false);
+      return;
+    }
+    setDetecting(true);
+    setDetectError(null);
+    appDetect(project)
+      .then((d) => {
+        setDet(d);
+        setDetectError(null);
+      })
+      .catch((e) => {
+        setDetectError(errMsg(e) || "Error al detectar configuración de arranque");
+        setDet(null);
+      })
+      .finally(() => {
+        setDetecting(false);
+      });
   }, [project]);
+
+  useEffect(() => {
+    detect();
+  }, [detect]);
+
   // Sin nada que arrancar, lo útil son los archivos.
   useEffect(() => {
     if (det?.kind === "none" && !st?.running) setMode("file");
   }, [det?.kind, st?.running]);
 
   const poll = useCallback(() => {
+    setStatusLoading(true);
     appStatus()
-      .then(setSt)
-      .catch(() => {});
+      .then((res) => {
+        setSt(res);
+        setStatusError(null);
+      })
+      .catch((e) => {
+        setStatusError(errMsg(e) || "Error al consultar el estado");
+      })
+      .finally(() => {
+        setStatusLoading(false);
+      });
   }, []);
 
   // Más a menudo mientras arranca; luego basta con vigilar que siga viva.
@@ -123,9 +159,47 @@ export function AppTab({
         </button>
       </div>
     );
+  } else if (statusError && !st) {
+    body = (
+      <div className="ap-empty">
+        <h3>Error al consultar el estado de la app</h3>
+        <span>{statusError}</span>
+        <button className="hs-btn" onClick={() => void poll()}>
+          <Icon name="refresh" size={13} />
+          Reintentar
+        </button>
+      </div>
+    );
+  } else if (!st && statusLoading) {
+    body = (
+      <div className="ap-empty">
+        <h3>Consultando estado…</h3>
+        <span>Comprobando si la app está en marcha.</span>
+      </div>
+    );
   } else if (url) {
     body = (
       <>
+        {statusError && (
+          <div
+            className="ap-empty-row"
+            style={{
+              padding: "6px 12px",
+              background: "color-mix(in srgb, var(--warn) 15%, transparent)",
+              borderBottom: "1px solid var(--line)",
+              fontSize: "12px",
+              color: "var(--warn)",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span>No se pudo confirmar el estado actual. Mostrando último estado confirmado.</span>
+            <button className="hs-btn" style={{ padding: "2px 8px", fontSize: "11px" }} onClick={() => void poll()}>
+              <Icon name="refresh" size={11} /> Reintentar
+            </button>
+          </div>
+        )}
         <iframe
           key={`${url}|${reload}`}
           className="ap-frame"
@@ -144,6 +218,11 @@ export function AppTab({
           <span>
             Ejecutando <code>{st!.cmd}</code>. En cuanto diga su dirección, aparece aquí.
           </span>
+          {statusError && (
+            <small style={{ color: "var(--warn)", marginTop: "8px" }}>
+              Aviso: fallo al consultar el estado ({statusError}).
+            </small>
+          )}
         </div>
         {logView}
       </>
@@ -169,6 +248,17 @@ export function AppTab({
         {logView}
       </>
     );
+  } else if (detectError) {
+    body = (
+      <div className="ap-empty">
+        <h3>Error al detectar la app</h3>
+        <span>{detectError}</span>
+        <button className="hs-btn" onClick={() => void detect()}>
+          <Icon name="refresh" size={13} />
+          Reintentar detección
+        </button>
+      </div>
+    );
   } else if (det?.kind === "none") {
     body = (
       <div className="ap-empty">
@@ -192,8 +282,10 @@ export function AppTab({
               Se ejecuta <code>{det.install ? `npm install && ${det.cmd}` : det.cmd}</code> en la carpeta del
               proyecto. Los cambios de los agentes se ven al momento.
             </>
-          ) : (
+          ) : detecting ? (
             "Mirando cómo se arranca…"
+          ) : (
+            "Comprobando configuración de arranque…"
           )}
         </span>
         <button className="hs-btn hs-btn-go" onClick={() => void start()} disabled={busy || !det}>
@@ -201,6 +293,11 @@ export function AppTab({
           Arrancar
         </button>
         {mine && st!.exit === 0 && <small>La última vez terminó sin errores.</small>}
+        {statusError && (
+          <small style={{ color: "var(--warn)", marginTop: "4px" }}>
+            Aviso: no se pudo consultar el estado actual ({statusError}).
+          </small>
+        )}
       </div>
     );
   }
@@ -225,8 +322,49 @@ export function AppTab({
         {mode === "app" && (
           <>
             <span className="ap-state">
-              <span className="ap-led" data-s={url ? "on" : running ? "wait" : failed ? "err" : "off"} />
-              {url ? <code title={url}>{url}</code> : running ? "Arrancando…" : failed ? "Parada con error" : "Parada"}
+              <span
+                className="ap-led"
+                data-s={
+                  statusError
+                    ? "err"
+                    : !st && statusLoading
+                      ? "wait"
+                      : url
+                        ? "on"
+                        : running
+                          ? "wait"
+                          : failed
+                            ? "err"
+                            : "off"
+                }
+              />
+              {statusError ? (
+                <>
+                  <span title={statusError}>
+                    {st
+                      ? `Sin conexión (último: ${url ? "activa" : running ? "arrancando" : failed ? "error" : "parada"})`
+                      : "Error de estado"}
+                  </span>
+                  <button
+                    className="ap-icon"
+                    onClick={() => void poll()}
+                    title={`Error al consultar estado: ${statusError}. Clic para reintentar.`}
+                    aria-label="Reintentar comprobación de estado"
+                  >
+                    <Icon name="refresh" size={13} />
+                  </button>
+                </>
+              ) : !st && statusLoading ? (
+                "Consultando estado…"
+              ) : url ? (
+                <code title={url}>{url}</code>
+              ) : running ? (
+                "Arrancando…"
+              ) : failed ? (
+                "Parada con error"
+              ) : (
+                "Parada"
+              )}
             </span>
             <span className="ap-spacer" />
             {url && (

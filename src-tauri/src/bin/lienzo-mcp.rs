@@ -9,6 +9,7 @@
 //!   imprime contexto del equipo para inyectarlo en la conversación.
 
 use lienzo_lib::hub::client::HubClient;
+use base64::Engine;
 use serde_json::{json, Value};
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
@@ -91,16 +92,21 @@ fn default_strength(name: &str) -> &'static str {
 /// cambia, y un número que sube cada minuto la reenviaría sin parar).
 fn usage_step(limits: &Value, now: u64) -> Option<String> {
     let windows = limits["windows"].as_array()?;
-    let worst = windows
-        .iter()
-        .max_by(|a, b| a["used_pct"].as_f64().unwrap_or(0.0).total_cmp(&b["used_pct"].as_f64().unwrap_or(0.0)))?;
-    let pct = worst["used_pct"].as_f64().unwrap_or(0.0);
+    // Una ventana cuyo reinicio ya pasó está vacía, aunque el agente no haya vuelto a informar.
+    let used = |w: &Value| match w["resets_at"].as_u64() {
+        Some(t) if t <= now => 0.0,
+        _ => w["used_pct"].as_f64().unwrap_or(0.0),
+    };
+    let worst = windows.iter().max_by(|a, b| used(a).total_cmp(&used(b)))?;
+    let pct = used(worst);
     let label = worst["label"].as_str().unwrap_or("uso");
     let reset = worst["resets_at"].as_u64().filter(|t| *t > now).map(|t| {
         let h = (t - now) / 3_600_000;
         if h >= 48 { format!(", se reinicia en {} días", h / 24) } else if h >= 1 { format!(", se reinicia en {h} h") } else { ", se reinicia en menos de 1 h".into() }
     });
-    Some(if pct >= 90.0 {
+    Some(if pct >= 100.0 {
+        format!("⛔ {label} SIN CUOTA{}: no le des nada", reset.unwrap_or_default())
+    } else if pct >= 90.0 {
         format!("⛔ {label} casi agotado{}: no le des trabajo pesado", reset.unwrap_or_default())
     } else if pct >= 70.0 {
         format!("⚠ {label} alto{}: solo lo que necesite él", reset.unwrap_or_default())
@@ -188,6 +194,356 @@ fn text_result(text: &str, is_error: bool) -> Value {
         v["isError"] = json!(true);
     }
     v
+}
+
+// Prometeo Dev exposes CDP only when scripts/dev-app.mjs launches its own process.
+const DEV_CDP_PORT: u16 = 9333;
+const DEV_OPEN_HINT: &str = "Abre Prometeo Dev (npm run dev:app).";
+
+fn local_json(port: u16, path: &str, token: Option<&str>) -> Result<Value, String> {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))
+        .map_err(|_| DEV_OPEN_HINT.to_string())?;
+    let timeout = Some(std::time::Duration::from_secs(5));
+    stream.set_read_timeout(timeout).ok();
+    stream.set_write_timeout(timeout).ok();
+    let auth = token.map(|t| format!("X-Lienzo-Token: {t}\r\n")).unwrap_or_default();
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{auth}Connection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    let mut header = Vec::new();
+    while !header.ends_with(b"\r\n\r\n") && header.len() < 16_384 {
+        let mut byte = [0_u8; 1];
+        stream.read_exact(&mut byte).map_err(|e| format!("HTTP Dev: {e}"))?;
+        header.push(byte[0]);
+    }
+    let head = String::from_utf8_lossy(&header);
+    if !head.lines().next().unwrap_or("").contains(" 200 ") {
+        return Err(format!("Prometeo Dev respondió: {}", head.lines().next().unwrap_or("?")));
+    }
+    let length = head.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.eq_ignore_ascii_case("Content-Length").then(|| value.trim().parse::<usize>().ok()).flatten()
+    }).ok_or("Respuesta HTTP Dev sin Content-Length")?;
+    if length > 8 * 1024 * 1024 { return Err("Respuesta HTTP Dev demasiado grande".into()); }
+    let mut body = vec![0_u8; length];
+    stream.read_exact(&mut body).map_err(|e| format!("HTTP Dev incompleto: {e}"))?;
+    serde_json::from_slice(&body).map_err(|e| format!("JSON inválido de Prometeo Dev: {e}"))
+}
+
+fn dev_page_url(targets: &Value) -> Result<String, String> {
+    let pages = targets.as_array().ok_or(DEV_OPEN_HINT)?;
+    let page = pages.iter().find(|t| {
+        if t["type"].as_str() != Some("page") { return false; }
+        let url = t["url"].as_str().unwrap_or("");
+        let title = t["title"].as_str().unwrap_or("");
+        !url.contains("aviso") && (title.contains("Prometeo") || url.contains("tauri.localhost"))
+    }).ok_or(DEV_OPEN_HINT)?;
+    let url = page["webSocketDebuggerUrl"].as_str().ok_or(DEV_OPEN_HINT)?;
+    let tail = url.strip_prefix("ws://127.0.0.1:9333/")
+        .or_else(|| url.strip_prefix("ws://localhost:9333/"))
+        .ok_or("CDP de Prometeo Dev no usa 127.0.0.1:9333")?;
+    if !tail.starts_with("devtools/page/") || !tail.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'/' | b'-' | b'_')) {
+        return Err("Ruta CDP de Prometeo Dev inválida".into());
+    }
+    Ok(format!("ws://127.0.0.1:9333/{tail}"))
+}
+
+struct DevSocket {
+    stream: std::net::TcpStream,
+}
+
+impl DevSocket {
+    fn connect(url: &str) -> Result<Self, String> {
+        let path = url.strip_prefix("ws://127.0.0.1:9333/").ok_or("CDP no es local")?;
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", DEV_CDP_PORT))
+            .map_err(|_| DEV_OPEN_HINT.to_string())?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(6))).ok();
+        stream.set_write_timeout(Some(std::time::Duration::from_secs(6))).ok();
+        let mut nonce = [0_u8; 16];
+        getrandom::fill(&mut nonce).map_err(|e| e.to_string())?;
+        let key = base64::engine::general_purpose::STANDARD.encode(nonce);
+        let request = format!(
+            "GET /{path} HTTP/1.1\r\nHost: 127.0.0.1:9333\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+        let mut header = Vec::new();
+        while !header.ends_with(b"\r\n\r\n") && header.len() < 16_384 {
+            let mut byte = [0_u8; 1];
+            stream.read_exact(&mut byte).map_err(|e| format!("CDP handshake: {e}"))?;
+            header.push(byte[0]);
+        }
+        let response = String::from_utf8_lossy(&header);
+        if !response.lines().next().unwrap_or("").contains(" 101 ")
+            || !response.to_ascii_lowercase().contains("upgrade: websocket") {
+                return Err(format!("CDP rechazó WebSocket: {}", response.lines().next().unwrap_or("?")));
+            }
+        Ok(Self { stream })
+    }
+
+    fn send_frame(&mut self, opcode: u8, payload: &[u8]) -> Result<(), String> {
+        let mut mask = [0_u8; 4];
+        getrandom::fill(&mut mask).map_err(|e| e.to_string())?;
+        let mut frame = vec![0x80 | opcode];
+        match payload.len() {
+            n if n < 126 => frame.push(0x80 | n as u8),
+            n if n <= u16::MAX as usize => {
+                frame.push(0x80 | 126);
+                frame.extend_from_slice(&(n as u16).to_be_bytes());
+            }
+            n => {
+                frame.push(0x80 | 127);
+                frame.extend_from_slice(&(n as u64).to_be_bytes());
+            }
+        }
+        frame.extend_from_slice(&mask);
+        frame.extend(payload.iter().enumerate().map(|(i, byte)| byte ^ mask[i % 4]));
+        self.stream.write_all(&frame).map_err(|e| format!("CDP envío: {e}"))
+    }
+
+    fn send_text(&mut self, text: &str) -> Result<(), String> {
+        self.send_frame(1, text.as_bytes())
+    }
+
+    fn read_text(&mut self) -> Result<String, String> {
+        let mut message = Vec::new();
+        let mut fragmented = false;
+        loop {
+            let mut head = [0_u8; 2];
+            self.stream.read_exact(&mut head).map_err(|e| format!("CDP lectura: {e}"))?;
+            let final_frame = head[0] & 0x80 != 0;
+            let opcode = head[0] & 0x0f;
+            let mut len = u64::from(head[1] & 0x7f);
+            if len == 126 {
+                let mut extra = [0_u8; 2];
+                self.stream.read_exact(&mut extra).map_err(|e| e.to_string())?;
+                len = u64::from(u16::from_be_bytes(extra));
+            } else if len == 127 {
+                let mut extra = [0_u8; 8];
+                self.stream.read_exact(&mut extra).map_err(|e| e.to_string())?;
+                len = u64::from_be_bytes(extra);
+            }
+            if len > 64 * 1024 * 1024 || (message.len() as u64).saturating_add(len) > 64 * 1024 * 1024 {
+                return Err("CDP devolvió una trama demasiado grande".into());
+            }
+            let masked = head[1] & 0x80 != 0;
+            let mut mask = [0_u8; 4];
+            if masked { self.stream.read_exact(&mut mask).map_err(|e| e.to_string())?; }
+            let mut data = vec![0_u8; len as usize];
+            self.stream.read_exact(&mut data).map_err(|e| format!("CDP lectura: {e}"))?;
+            if masked {
+                for (i, byte) in data.iter_mut().enumerate() { *byte ^= mask[i % 4]; }
+            }
+            match opcode {
+                0x8 => return Err("Prometeo Dev cerró CDP".into()),
+                0x9 => { self.send_frame(0xA, &data)?; continue; }
+                0xA => continue,
+                0x1 if !fragmented => { message.extend_from_slice(&data); fragmented = !final_frame; }
+                0x0 if fragmented => { message.extend_from_slice(&data); fragmented = !final_frame; }
+                _ => return Err("Trama WebSocket inesperada de CDP".into()),
+            }
+            if !fragmented {
+                return String::from_utf8(message).map_err(|e| format!("CDP texto inválido: {e}"));
+            }
+        }
+    }
+}
+
+fn dev_socket() -> Result<DevSocket, String> {
+    let targets = local_json(DEV_CDP_PORT, "/json", None)?;
+    DevSocket::connect(&dev_page_url(&targets)?)
+}
+
+fn dev_command(socket: &mut DevSocket, id: u64, method: &str, params: Value) -> Result<Value, String> {
+    socket.send_text(&json!({"id": id, "method": method, "params": params}).to_string())?;
+    for _ in 0..100 {
+        let text = socket.read_text()?;
+        let response: Value = serde_json::from_str(&text).map_err(|e| format!("CDP JSON: {e}"))?;
+        if response["id"].as_u64() != Some(id) { continue; }
+        if !response["error"].is_null() {
+            return Err(format!("CDP: {}", response["error"]["message"].as_str().unwrap_or("error")));
+        }
+        return Ok(response["result"].clone());
+    }
+    Err("CDP no devolvió respuesta".into())
+}
+
+fn dev_eval(socket: &mut DevSocket, id: u64, expression: &str) -> Result<Value, String> {
+    let response = dev_command(socket, id, "Runtime.evaluate", json!({
+        "expression": expression, "returnByValue": true, "awaitPromise": false
+    }))?;
+    if !response["exceptionDetails"].is_null() {
+        return Err(format!("Interfaz Dev: {}", response["exceptionDetails"]["text"].as_str().unwrap_or("error")));
+    }
+    Ok(response["result"]["value"].clone())
+}
+
+fn dev_project_root() -> Result<std::path::PathBuf, String> {
+    let appdata = std::env::var("APPDATA").map_err(|_| "No encuentro APPDATA de Windows")?;
+    let discovery = std::path::Path::new(&appdata).join("lienzo-dev").join("hub.json");
+    let raw = std::fs::read_to_string(discovery).map_err(|_| DEV_OPEN_HINT.to_string())?;
+    let hub: Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let addr = hub["url"].as_str().and_then(|s| s.strip_prefix("http://"))
+        .ok_or("Hub de Prometeo Dev inválido")?;
+    let port = addr.strip_prefix("127.0.0.1:").or_else(|| addr.strip_prefix("localhost:"))
+        .and_then(|s| s.trim_end_matches('/').parse::<u16>().ok())
+        .ok_or("Hub de Prometeo Dev no está en loopback")?;
+    let token = hub["token"].as_str().ok_or("Hub de Prometeo Dev sin token")?;
+    let state = local_json(port, "/state?limit=1", Some(token))?;
+    let root = state["project"].as_str().filter(|s| !s.is_empty())
+        .ok_or("Elige una carpeta de proyecto en Prometeo Dev")?;
+    Ok(std::path::PathBuf::from(root))
+}
+
+fn dev_key(socket: &mut DevSocket, key_name: &str, first_id: u64) -> Result<(), String> {
+    let parts: Vec<&str> = key_name.split('+').collect();
+    let key = parts.last().copied().unwrap_or("");
+    let mut modifiers = 0;
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        match part.to_ascii_lowercase().as_str() {
+            "alt" => modifiers |= 1,
+            "ctrl" | "control" => modifiers |= 2,
+            "meta" | "win" => modifiers |= 4,
+            "shift" => modifiers |= 8,
+            _ => return Err(format!("Modificador no admitido: {part}")),
+        }
+    }
+    let (name, code, vk, text) = match key.to_ascii_lowercase().as_str() {
+        "enter" | "return" => ("Enter", "Enter", 13, "\r"),
+        "escape" | "esc" => ("Escape", "Escape", 27, ""),
+        "tab" => ("Tab", "Tab", 9, ""),
+        "backspace" => ("Backspace", "Backspace", 8, ""),
+        "delete" => ("Delete", "Delete", 46, ""),
+        "arrowup" | "up" => ("ArrowUp", "ArrowUp", 38, ""),
+        "arrowdown" | "down" => ("ArrowDown", "ArrowDown", 40, ""),
+        "arrowleft" | "left" => ("ArrowLeft", "ArrowLeft", 37, ""),
+        "arrowright" | "right" => ("ArrowRight", "ArrowRight", 39, ""),
+        "home" => ("Home", "Home", 36, ""),
+        "end" => ("End", "End", 35, ""),
+        "space" => (" ", "Space", 32, " "),
+        "a" => ("a", "KeyA", 65, "a"),
+        "," => (",", "Comma", 188, ","),
+        _ => return Err("Tecla no admitida. Usa Enter, Escape, Tab, flechas, Home, End, Backspace, Delete, Space o Ctrl+,".into()),
+    };
+    let written = if modifiers == 0 { text } else { "" };
+    dev_command(socket, first_id, "Input.dispatchKeyEvent", json!({
+        "type": "keyDown", "key": name, "code": code, "windowsVirtualKeyCode": vk,
+        "nativeVirtualKeyCode": vk, "modifiers": modifiers, "text": written
+    }))?;
+    dev_command(socket, first_id + 1, "Input.dispatchKeyEvent", json!({
+        "type": "keyUp", "key": name, "code": code, "windowsVirtualKeyCode": vk,
+        "nativeVirtualKeyCode": vk, "modifiers": modifiers
+    }))?;
+    Ok(())
+}
+
+fn dev_call(name: &str, args: &Value) -> Value {
+    match dev_call_inner(name, args) {
+        Ok(v) => v,
+        Err(e) => text_result(&e, true),
+    }
+}
+
+fn dev_call_inner(name: &str, args: &Value) -> Result<Value, String> {
+    let mut socket = dev_socket()?;
+    match name {
+        "dev_captura" => {
+            let root = dev_project_root()?;
+            let response = dev_command(&mut socket, 1, "Page.captureScreenshot", json!({
+                "format": "png", "captureBeyondViewport": false, "fromSurface": true
+            }))?;
+            let data = response["data"].as_str().ok_or("CDP no devolvió la captura")?;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(data)
+                .map_err(|e| format!("PNG inválido: {e}"))?;
+            let dir = root.join(".lienzo").join("capturas");
+            std::fs::create_dir_all(&dir).map_err(|e| format!("No pude crear capturas: {e}"))?;
+            let path = dir.join(format!("prometeo-dev-{}-{}.png", now_ms(), std::process::id()));
+            std::fs::write(&path, bytes).map_err(|e| format!("No pude guardar la captura: {e}"))?;
+            Ok(json!({ "content": [
+                { "type": "text", "text": format!("Captura de Prometeo Dev: {}", path.display()) },
+                { "type": "image", "data": data, "mimeType": "image/png" }
+            ] }))
+        }
+        "dev_ver" => {
+            const SCRIPT: &str = r#"(() => {
+              const visible = el => { const r = el.getBoundingClientRect(), s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+              document.querySelectorAll('[data-prometeo-dev-index]').forEach(el => el.removeAttribute('data-prometeo-dev-index'));
+              const nodes = [...document.querySelectorAll('button,a[href],input,textarea,select,[role="button"],[role="tab"],[contenteditable="true"]')].filter(visible).slice(0,120);
+              const elementos = nodes.map((el,i) => { el.setAttribute('data-prometeo-dev-index', String(i+1)); return { indice:i+1, rol:el.getAttribute('role') || el.tagName.toLowerCase(), texto:(el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.getAttribute('placeholder') || '').trim().slice(0,120) }; });
+              const focused = document.activeElement;
+              const enfocado = focused ? (focused.getAttribute('aria-label') || focused.getAttribute('placeholder') || focused.innerText || focused.tagName.toLowerCase()).trim().slice(0,100) : '';
+              return { texto:(document.body.innerText || '').slice(0,14000), enfocado, elementos };
+            })()"#;
+            let view = dev_eval(&mut socket, 1, SCRIPT)?;
+            let mut lines = vec![format!("Texto visible:\n{}", view["texto"].as_str().unwrap_or("")), format!("\nFoco: {}", view["enfocado"].as_str().unwrap_or("")), "\nElementos (índices para dev_clic):".into()];
+            if let Some(items) = view["elementos"].as_array() {
+                for item in items {
+                    lines.push(format!("{}. [{}] {}", item["indice"].as_u64().unwrap_or(0), item["rol"].as_str().unwrap_or("?"), item["texto"].as_str().unwrap_or("")));
+                }
+            }
+            Ok(text_result(&lines.join("\n"), false))
+        }
+        "dev_clic" => {
+            if args["indice"].as_u64().is_none() && args["selector"].as_str().is_none() && args["texto"].as_str().is_none() {
+                return Err("Indica indice, selector o texto (de dev_ver)".into());
+            }
+            let prefix = format!("(() => {{ const a = {}; ", json!({
+                "indice": args["indice"], "selector": args["selector"], "texto": args["texto"]
+            }));
+            let expression = prefix.to_string() + r#"
+              const all = [...document.querySelectorAll('button,a[href],input,textarea,select,[role="button"],[role="tab"],[contenteditable="true"]')].filter(x => { const r=x.getBoundingClientRect(), s=getComputedStyle(x); return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; });
+              let el = a.selector ? document.querySelector(a.selector) : a.indice ? document.querySelector(`[data-prometeo-dev-index="${a.indice}"]`) : all.find(x => (x.getAttribute('aria-label') || x.getAttribute('title') || x.innerText || '').trim().toLocaleLowerCase('es').includes(a.texto.toLocaleLowerCase('es')));
+              if (!el) return { error:'Elemento no encontrado; ejecuta dev_ver de nuevo.' };
+              const r=el.getBoundingClientRect(), s=getComputedStyle(el);
+              if (el.disabled || r.width === 0 || r.height === 0 || s.visibility === 'hidden' || s.display === 'none') return { error:'Elemento oculto o deshabilitado.' };
+              el.focus(); el.click(); return { ok:true, texto:(el.getAttribute('aria-label') || el.innerText || el.tagName).trim().slice(0,120) };
+            })()"#;
+            let result = dev_eval(&mut socket, 1, &expression)?;
+            if let Some(e) = result["error"].as_str() { return Err(e.to_string()); }
+            Ok(text_result(&format!("Clic: {}", result["texto"].as_str().unwrap_or("hecho")), false))
+        }
+        "dev_escribir" => {
+            let value = args["texto"].as_str().ok_or("Falta texto")?;
+            let prefix = format!("(() => {{ const a = {}; ", json!({"selector": args["selector"]}));
+            let expression = prefix.to_string() + r#"
+              const el = a.selector ? document.querySelector(a.selector) : document.activeElement;
+              if (!el) return { error:'No encuentro el campo.' };
+              const editable = el.matches('input:not([type="checkbox"]):not([type="radio"]),textarea,[contenteditable="true"]');
+              if (!editable || el.disabled) return { error:'Enfoca un campo editable o indica selector.' };
+              el.focus(); return { ok:true };
+            })()"#;
+            let result = dev_eval(&mut socket, 1, &expression)?;
+            if let Some(e) = result["error"].as_str() { return Err(e.to_string()); }
+            dev_command(&mut socket, 2, "Input.insertText", json!({"text": value}))?;
+            if args["enviar"].as_bool().unwrap_or(false) { dev_key(&mut socket, "Enter", 3)?; }
+            Ok(text_result(if args["enviar"].as_bool().unwrap_or(false) { "Texto escrito y Enter enviado." } else { "Texto escrito." }, false))
+        }
+        "dev_tecla" => {
+            let key = args["tecla"].as_str().ok_or("Falta tecla")?;
+            dev_key(&mut socket, key, 1)?;
+            Ok(text_result(&format!("Tecla {key} enviada."), false))
+        }
+        "dev_seccion" => {
+            let section = args["nombre"].as_str().ok_or("Falta nombre")?.trim().to_lowercase();
+            let selector = match section.as_str() {
+                "chat" | "comando" => "button[data-view=feed]",
+                "tareas" => ".cc-tasks-btn",
+                "investigar" | "investigación" => "button[data-view=research]",
+                "programadas" => "button[data-view=schedule]",
+                "app" => "button[data-view=app]",
+                "historial" => "button[data-view=history]",
+                "terminal" => "button[data-view=term]",
+                "ajustes" => ".cc-gear",
+                _ => return Err("Sección no admitida: Chat, Tareas, Investigar, Programadas, App, Historial, Terminal o Ajustes".into()),
+            };
+            let expression = format!("(() => {{ const el = document.querySelector({}); if (!el) return false; el.focus(); el.click(); return true; }})()", serde_json::to_string(selector).unwrap_or_default());
+            if dev_eval(&mut socket, 1, &expression)?.as_bool() != Some(true) {
+                return Err("No encuentro esa sección en Prometeo Dev".into());
+            }
+            Ok(text_result(&format!("Sección {section} abierta."), false))
+        }
+        _ => Err("Herramienta Dev desconocida".into()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -662,6 +1018,30 @@ fn with_load_hints(mut catalog: Value) -> Value {
 
 fn tools_catalog() -> Value {
     json!([
+        { "name": "dev_captura", "description": "Captura Prometeo Dev; guarda PNG en el proyecto y devuelve la imagen.",
+          "inputSchema": { "type": "object", "properties": {} } },
+        { "name": "dev_ver", "description": "Lee texto visible y elementos de Prometeo Dev con índices para dev_clic.",
+          "inputSchema": { "type": "object", "properties": {} } },
+        { "name": "dev_clic", "description": "Pulsa un elemento de Prometeo Dev por índice de dev_ver, texto o selector CSS.",
+          "inputSchema": { "type": "object", "properties": {
+            "indice": { "type": "integer", "description": "Índice de dev_ver (empieza en 1)" },
+            "texto": { "type": "string", "description": "Texto visible del control" },
+            "selector": { "type": "string", "description": "Selector CSS" }
+          } } },
+        { "name": "dev_escribir", "description": "Escribe en el campo enfocado o en selector CSS; opcionalmente envía Enter.",
+          "inputSchema": { "type": "object", "properties": {
+            "texto": { "type": "string" },
+            "selector": { "type": "string" },
+            "enviar": { "type": "boolean", "description": "Enviar con Enter tras escribir" }
+          }, "required": ["texto"] } },
+        { "name": "dev_tecla", "description": "Envía una tecla a Prometeo Dev: Enter, Escape, Tab, Shift+Tab, flechas…",
+          "inputSchema": { "type": "object", "properties": {
+            "tecla": { "type": "string" }
+          }, "required": ["tecla"] } },
+        { "name": "dev_seccion", "description": "Abre Chat, Tareas, Investigar, Programadas, App, Historial, Terminal o Ajustes.",
+          "inputSchema": { "type": "object", "properties": {
+            "nombre": { "type": "string" }
+          }, "required": ["nombre"] } },
         {
             "name": "team_context",
             "description": "Resumen del equipo: compañeros en línea, tareas abiertas, archivos reservados y actividad reciente. Úsalo al empezar tu trabajo.",
@@ -1615,7 +1995,8 @@ fn mcp_mode() {
                         let _ = c.post("/limits", &json!({ "agent": agent_name, "windows": sample.limits, "exact": true }));
                         last_limits = Some(sample.limits.clone());
                     }
-                    if last == Some((sample.used, sample.window)) {
+                    // Sin conversación viva (Codex solo informa límites): no hay contexto que mandar.
+                    if sample.used == 0 || last == Some((sample.used, sample.window)) {
                         continue;
                     }
                     last = Some((sample.used, sample.window));
@@ -1653,6 +2034,11 @@ fn mcp_mode() {
             | "notifications/roots/list_changed" => None,
             "ping" => Some(Ok(json!({}))),
             "tools/list" => Some(Ok(json!({ "tools": with_load_hints(tools_catalog()) }))),
+            "tools/call" if params["name"].as_str().is_some_and(|n| n.starts_with("dev_")) => {
+                let name = params["name"].as_str().unwrap_or("");
+                let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+                Some(Ok(dev_call(name, &args)))
+            }
             "tools/call" => match &client {
                 Some(c) => {
                     let sid = session.lock().map(|s| s.clone()).unwrap_or_default();
@@ -2642,19 +3028,109 @@ fn codex_ctx(cwd: &str) -> Option<CtxSample> {
     if !root.is_dir() {
         return None;
     }
-    let (mtime, path) = newest_jsonl(&root, 4)?;
-    if mtime.elapsed().map(|d| d.as_secs() > 900).unwrap_or(true) {
-        return None;
+    let mut files = vec![];
+    collect_jsonl(&root, 4, &mut files);
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    // De la más nueva a la más vieja, solo las de esta carpeta. El contexto, de la más nueva si
+    // sigue viva; los límites, de la primera que los traiga: una conversación recién abierta (o
+    // que chocó con el límite) aún no tiene porcentajes, pero la anterior sí.
+    let mut sample: Option<CtxSample> = None;
+    let mut limit_hit = false;
+    let mut seen = 0;
+    for (mtime, path) in files.into_iter().take(60) {
+        let Some(cwd_meta) = read_first_line(&path)
+            .and_then(|l| serde_json::from_str::<Value>(&l).ok())
+            .and_then(|m| m["payload"]["cwd"].as_str().map(|s| s.to_string()))
+        else {
+            continue;
+        };
+        if !codex_same_dir(&cwd_meta, cwd) {
+            continue;
+        }
+        let Some(tail) = read_tail(&path, 512 * 1024) else { continue };
+        let s = codex_sample(&tail);
+        limit_hit |= s.limit_hit;
+        let found_limits = !s.limits.is_empty();
+        match sample.as_mut() {
+            None => {
+                let live = mtime.elapsed().map(|d| d.as_secs() <= 900).unwrap_or(false);
+                let (used, window) = if live { s.ctx.unwrap_or((0, 0)) } else { (0, 0) };
+                sample = Some(CtxSample { model: s.model, used, window, limits: s.limits });
+            }
+            Some(first) => first.limits = s.limits,
+        }
+        seen += 1;
+        if found_limits || seen >= 5 {
+            break;
+        }
     }
-    let first = read_first_line(&path)?;
-    let meta: Value = serde_json::from_str(&first).ok()?;
-    let cwd_meta = meta["payload"]["cwd"].as_str()?;
-    if norm_dir(cwd_meta) != norm_dir(cwd) {
-        return None;
+    let mut sample = sample?;
+    if limit_hit {
+        mark_limit_hit(&mut sample.limits);
     }
-    let tail = read_tail(&path, 512 * 1024)?;
+    Some(sample)
+}
+
+fn collect_jsonl(dir: &std::path::Path, depth: u32, out: &mut Vec<(std::time::SystemTime, std::path::PathBuf)>) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let path = e.path();
+        let Ok(meta) = e.metadata() else { continue };
+        if meta.is_dir() {
+            collect_jsonl(&path, depth - 1, out);
+        } else if path.extension().is_some_and(|x| x == "jsonl")
+            && let Ok(t) = meta.modified()
+        {
+            out.push((t, path));
+        }
+    }
+}
+
+/// Codex chocó con su límite después de las últimas ventanas leídas: la de 5 h, al 100 %.
+fn mark_limit_hit(limits: &mut Vec<Value>) {
+    match limits.iter_mut().find(|w| w["key"] == "session" || w["key"] == "primary") {
+        Some(w) => w["used_pct"] = json!(100.0),
+        None => limits.push(json!({ "key": "session", "label": "Sesión (5 h)", "used_pct": 100.0, "resets_at": null })),
+    }
+}
+
+struct CodexRead {
+    model: Option<String>,
+    ctx: Option<(u64, u64)>,
+    limits: Vec<Value>,
+    limit_hit: bool,
+}
+
+/// ¿El cwd del rollout es la carpeta del equipo? Codex puede trabajar en un worktree propio
+/// (`~/.codex/worktrees/<id>/<carpeta>`): cuenta si la última carpeta coincide.
+fn codex_same_dir(cwd_meta: &str, cwd: &str) -> bool {
+    let (meta, team) = (norm_dir(cwd_meta), norm_dir(cwd));
+    if meta == team {
+        return true;
+    }
+    let base = |p: &str| p.rsplit('/').next().unwrap_or("").to_string();
+    meta.contains("/.codex/worktrees/") && !base(&team).is_empty() && base(&meta) == base(&team)
+}
+
+/// Lee el final de un rollout de Codex (de lo último a lo primero). El contexto sale del último
+/// `token_count` con uso; las ventanas de límite, del último que las trae (los de `limit_id`
+/// «premium» vienen con `primary: null` y no sirven). Si después de esas ventanas Codex chocó
+/// con su límite (`usage_limit_exceeded`), `limit_hit`.
+fn codex_sample(tail: &str) -> CodexRead {
     let mut model: Option<String> = None;
+    let mut ctx: Option<(u64, u64)> = None;
+    let mut limits: Vec<Value> = vec![];
+    let mut limit_hit = false;
     for line in tail.lines().rev() {
+        if ctx.is_some() && !limits.is_empty() {
+            break;
+        }
+        if limits.is_empty() && line.contains("usage_limit_exceeded") {
+            limit_hit = true;
+        }
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
@@ -2668,21 +3144,22 @@ fn codex_ctx(cwd: &str) -> Option<CtxSample> {
         if p["type"].as_str() != Some("token_count") {
             continue;
         }
-        let Some(used) = p["info"]["last_token_usage"]["total_tokens"].as_u64() else {
-            continue;
-        };
-        if used == 0 {
-            continue;
+        if limits.is_empty() {
+            let ts = v["timestamp"].as_str().and_then(iso_secs);
+            limits = codex_rate_windows(&p["rate_limits"], ts);
         }
-        let window = p["info"]["model_context_window"]
-            .as_u64()
-            .filter(|w| *w > 0)
-            .unwrap_or(200_000);
-        let ts = v["timestamp"].as_str().and_then(iso_secs);
-        let limits = codex_rate_windows(&p["rate_limits"], ts);
-        return Some(CtxSample { model, used, window, limits });
+        if ctx.is_none() {
+            let used = p["info"]["last_token_usage"]["total_tokens"].as_u64().unwrap_or(0);
+            if used > 0 {
+                let window = p["info"]["model_context_window"]
+                    .as_u64()
+                    .filter(|w| *w > 0)
+                    .unwrap_or(200_000);
+                ctx = Some((used, window));
+            }
+        }
     }
-    None
+    CodexRead { model, ctx, limits, limit_hit }
 }
 
 /// Las ventanas de `rate_limits` de un `token_count` de Codex (`primary`: 5 h, `secondary`:
@@ -2807,6 +3284,37 @@ mod tests {
     }
 
     #[test]
+    fn codex_limite_agotado_y_worktree() {
+        let tc = |rl: Value| json!({"timestamp":"2026-10-27T02:00:47.841Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":142970},"model_context_window":258400},"rate_limits":rl}}).to_string();
+        let buena = tc(json!({"limit_id":"codex","primary":{"used_percent":90.0,"window_minutes":300,"resets_at":1793079128u64},"secondary":{"used_percent":22.0,"window_minutes":10080,"resets_at":1793641353u64}}));
+        let premium = tc(json!({"limit_id":"premium","primary":null,"secondary":null}));
+        let error = json!({"type":"event_msg","payload":{"type":"task_complete","error":{"codex_error_info":"usage_limit_exceeded"}}}).to_string();
+        // Lo último es un «premium» sin ventanas: se usan las de antes y el choque marca 100 %.
+        let mut s = codex_sample(&[buena.clone(), premium.clone(), error.clone(), premium.clone()].join("\n"));
+        assert_eq!(s.ctx, Some((142970, 258400)));
+        assert!(s.limit_hit);
+        mark_limit_hit(&mut s.limits);
+        let ses = s.limits.iter().find(|w| w["key"] == "session").unwrap();
+        assert_eq!(ses["used_pct"], json!(100.0));
+        assert_eq!(ses["resets_at"], json!(1793079128000u64));
+        assert!(s.limits.iter().any(|w| w["key"] == "week" && w["used_pct"] == json!(22.0)));
+        // Sin choque, el porcentaje real.
+        let s = codex_sample(&[buena, premium.clone()].join("\n"));
+        assert!(!s.limit_hit);
+        assert_eq!(s.limits.iter().find(|w| w["key"] == "session").unwrap()["used_pct"], json!(90.0));
+        // Conversación nueva tras el choque: sin ventanas, pero con el error (las toma de la anterior).
+        let s = codex_sample(&[premium, error].join("\n"));
+        assert!(s.limits.is_empty() && s.limit_hit);
+        // Ya pasó el reinicio: el 100 % no cuenta.
+        let st = json!({"windows":[{"key":"session","label":"Sesión (5 h)","used_pct":100.0,"resets_at":1000u64}]});
+        assert_eq!(usage_step(&st, 2000).as_deref(), Some("Sesión (5 h) holgado"));
+        assert!(usage_step(&st, 500).unwrap().contains("SIN CUOTA"));
+        assert!(codex_same_dir(r"C:\Users\parra\.codex\worktrees\935f\bucle-site", r"C:\Users\parra\OneDrive\Escritorio\PROYECTOS\bucle-site"));
+        assert!(!codex_same_dir(r"C:\Users\parra\.codex\worktrees\935f\otro", r"C:\x\bucle-site"));
+        assert!(!codex_same_dir(r"C:\otra\bucle-site", r"C:\x\bucle-site"));
+    }
+
+    #[test]
     fn codex_lee_sus_limites() {
         let rl = json!({
             "primary": { "used_percent": 93.0, "window_minutes": 300, "resets_at": 1791330799u64 },
@@ -2843,7 +3351,45 @@ mod tests {
                 }
             }
         }
+        for line in src.lines() {
+            let arm = line.trim_start();
+            if arm.starts_with("\"dev_") && arm.contains("=>") {
+                out.insert(arm.split('"').nth(1).unwrap_or("").to_string());
+            }
+        }
         out
+    }
+
+    #[test]
+    fn dev_websocket_reads_large_fragmented_text_and_pings() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let payload = vec![b'x'; 70_000];
+        let expected = payload.clone();
+        let writer = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(&[0x01, 126]).unwrap();
+            stream.write_all(&100_u16.to_be_bytes()).unwrap();
+            stream.write_all(&payload[..100]).unwrap();
+            stream.write_all(&[0x89, 1, b'?']).unwrap();
+            stream.write_all(&[0x80, 127]).unwrap();
+            stream.write_all(&(69_900_u64).to_be_bytes()).unwrap();
+            stream.write_all(&payload[100..]).unwrap();
+            // Consume el pong enmascarado antes de cerrar, evitando un RST de Windows.
+            let mut pong_head = [0_u8; 2];
+            stream.read_exact(&mut pong_head).unwrap();
+            assert_eq!(pong_head[0], 0x8A);
+            assert_eq!(pong_head[1], 0x81);
+            let mut mask = [0_u8; 4];
+            stream.read_exact(&mut mask).unwrap();
+            let mut byte = [0_u8; 1];
+            stream.read_exact(&mut byte).unwrap();
+            assert_eq!(byte[0] ^ mask[0], b'?');
+        });
+        let stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let mut ws = DevSocket { stream };
+        assert_eq!(ws.read_text().unwrap().as_bytes(), expected);
+        writer.join().unwrap();
     }
 
     #[test]

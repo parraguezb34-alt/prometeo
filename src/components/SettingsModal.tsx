@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { AgentPref } from "../lib/agentPrefs";
@@ -20,6 +20,7 @@ import type { IconName } from "./Icon";
 import { EFFORT_LABEL } from "./TeamModal";
 import { appAbout, updateCheck } from "../lib/update";
 import type { About, UpdateInfo } from "../lib/update";
+import { useModalFocus } from "./useModalFocus";
 
 export type SettingsSection = "general" | "agents" | "team" | "skills" | "usage" | "dispatch" | "notify" | "hub" | "errors" | "about";
 
@@ -89,6 +90,8 @@ type Props = {
 };
 
 export function SettingsModal(props: Props) {
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocus(dialogRef);
   const [section, setSection] = useState<SettingsSection>(props.initial);
   useEffect(() => setSection(props.initial), [props.initial]);
   const cur = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
@@ -97,7 +100,7 @@ export function SettingsModal(props: Props) {
   return (
     <>
       <div className="cc-scrim" onClick={props.onClose} />
-      <section className="cc-modal st" role="dialog" aria-label="Ajustes">
+      <section ref={dialogRef} className="cc-modal st" role="dialog" aria-modal="true" aria-label="Ajustes" tabIndex={-1}>
         <nav className="st-nav" aria-label="Secciones de ajustes">
           <div className="st-nav-title">Ajustes</div>
           {SECTIONS.map((s) => (

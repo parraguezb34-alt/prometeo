@@ -36,6 +36,19 @@
   --err: #ff6961;
   --link: #6cb6ff;
 
+  /* bordes y estados semánticos (P-15) */
+  --warn-line: #7c5e10;
+  --ok-line: #166534;
+  --err-line: #7f1d1d;
+  --err-line-hover: #b91c1c;
+  --err-text-hover: #fca5a5;
+  --err-bg-hover: #2a1417;
+
+  /* tarjetas elevadas y controles (P-15) */
+  --surface-card: #262629;
+  --surface-card-hover: #2c2c30;
+  --surface-control: #3a3a3e;
+
   /* identidad de los agentes (apagada, para no competir con el rojo) */
   --c-claude: #e8a582;
   --c-opencode: #8fb4d9;
@@ -230,12 +243,12 @@ select {
 
 .task-chip[data-s="claimed"] {
   color: var(--warn);
-  border-color: #7c5e10;
+  border-color: var(--warn-line);
 }
 
 .task-chip[data-s="done"] {
   color: var(--ok);
-  border-color: #166534;
+  border-color: var(--ok-line);
 }
 
 .task-title {
@@ -1058,13 +1071,13 @@ select {
 
 .cc-mini-btn.cc-danger {
   color: var(--err);
-  border-color: #7f1d1d;
+  border-color: var(--err-line);
 }
 
 .cc-mini-btn.cc-danger:hover {
-  color: #fca5a5;
-  border-color: #b91c1c;
-  background: #2a1417;
+  color: var(--err-text-hover);
+  border-color: var(--err-line-hover);
+  background: var(--err-bg-hover);
 }
 
 .cc-files-row {

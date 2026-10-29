@@ -82,6 +82,8 @@ export function quotaPace(l: AgentLimits | undefined, now: number): number {
   if (!l) return 0;
   let worst = -Infinity;
   for (const w of l.windows) {
+    // Ventana ya reiniciada (el agente aún no volvió a informar): no cuenta.
+    if (w.resets_at && w.resets_at <= now) continue;
     if (w.used_pct >= PACE_FULL_PCT) return Infinity;
     const len = windowMs(w);
     if (!len || !w.resets_at) continue;

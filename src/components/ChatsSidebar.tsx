@@ -5,7 +5,7 @@ import type { TeamEvent } from "../lib/team";
 import { chatEvents, dayGroup, loadChats, stampLabel } from "../lib/chats";
 import { projectName } from "../lib/project";
 import { ProjectSwitcher } from "./ProjectSwitcher";
-import type { ProjectItem } from "./ProjectSwitcher";
+import type { ProjectAction, ProjectItem } from "./ProjectSwitcher";
 import type { Chat } from "../lib/chats";
 import { Icon } from "./Icon";
 import { InlineRename } from "./InlineRename";
@@ -63,8 +63,8 @@ export function ChatsSidebar({
   /** Cambia de proyecto (y, si se da, abre ese chat suyo). */
   onSwitchProject: (path: string, chatId?: string) => void;
   onOpenFolder: () => void;
-  onCreateProject: (name: string) => void;
-  onRenameProject: (name: string) => void;
+  onCreateProject: ProjectAction;
+  onRenameProject: ProjectAction;
 }) {
   const [query, setQuery] = useState("");
   const [openProj, setOpenProj] = useState<string | null>(null);

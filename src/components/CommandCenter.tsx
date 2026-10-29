@@ -126,6 +126,19 @@ const HistoryTab = lazy(() => import("./HistoryTab").then((m) => ({ default: m.H
 const ResearchTab = lazy(() => import("./ResearchTab").then((m) => ({ default: m.ResearchTab })));
 const AppTab = lazy(() => import("./AppTab").then((m) => ({ default: m.AppTab })));
 const SettingsModal = lazy(() => import("./SettingsModal").then((m) => ({ default: m.SettingsModal })));
+const loadingView = (
+  <div role="status" style={{ minHeight: "min(60vh, 520px)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    Cargando…
+  </div>
+);
+const loadingSettings = (
+  <>
+    <div className="cc-scrim" />
+    <section className="cc-modal st" role="status" style={{ minHeight: 240, alignItems: "center", justifyContent: "center" }}>
+      Cargando…
+    </section>
+  </>
+);
 
 /**
  * Centro de Mando: vista principal. A la izquierda el equipo (agentes con sus
@@ -510,19 +523,27 @@ export function CommandCenter() {
     return extra.length > 0 ? [...list, ...extra].sort((a, b) => a.ts_ms - b.ts_ms) : list;
   }, [state, sel, lineage, newImages, older]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Imágenes nuevas en el proyecto (capturas que guardan los agentes): se miran cada poco.
+  // Se escanea al abrir un chat o cuando el feed anuncia imágenes/una entrega; el temporizador
+  // lento recupera capturas que un agente dejó en disco sin mencionarlas en el feed.
+  const chatVisible = view === "feed";
+  const imageEventsRef = useRef(state?.events ?? []);
+  imageEventsRef.current = state?.events ?? [];
+  const imageScanSeq = useMemo(
+    () => (state?.events ?? []).find(
+      (e) => e.kind === "image" || eventImages(e).length > 0 || (e.kind === "task" && /hecha|aprobada|entregada/.test(e.text)),
+    )?.seq ?? 0,
+    [state?.events],
+  );
+  useEffect(() => setNewImages((prev) => prev.length > 0 ? [] : prev), [project]);
   useEffect(() => {
-    if (!project) {
-      setNewImages([]);
-      return;
-    }
+    if (!project || !chatVisible) return;
     let alive = true;
     const scan = () => {
       projectRecent(project, IMAGE_EXTS, 16)
         .then((files) => {
           if (!alive) return;
           const since = Date.now() - 24 * 3600_000;
-          const evs = state?.events ?? [];
+          const evs = imageEventsRef.current;
           setNewImages(
             files
               .filter((f) => f.mtime_ms > since)
@@ -540,14 +561,12 @@ export function CommandCenter() {
         .catch(() => {});
     };
     scan();
-    const id = window.setInterval(scan, 12_000);
+    const id = window.setInterval(scan, 90_000);
     return () => {
       alive = false;
       window.clearInterval(id);
     };
-    // El dueño de cada imagen se recalcula en el siguiente escaneo; no hace falta reiniciar.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project]);
+  }, [project, chatVisible, activeChat?.id, imageScanSeq]);
 
   /** Enfoca la conversación con un agente sin tocar la lista de chats. */
   const focusAgent = (name: string) => {
@@ -1442,11 +1461,11 @@ export function CommandCenter() {
    */
   const switchProject = async (path: string, opts: { chatId?: string; newChat?: boolean } = {}) => {
     const target = path.trim();
-    if (!target || switching) return;
+    if (!target || switching) return false;
     if (project && projectKey(project) === projectKey(target)) {
       if (opts.chatId) chats.select(opts.chatId);
       else if (opts.newChat) startChat({ kind: "team" });
-      return;
+      return true;
     }
     setSwitching(true);
     setOverlay(null);
@@ -1494,8 +1513,10 @@ export function CommandCenter() {
           ? `📁 Ahora en «${name}»: ${reopened === 1 ? "1 agente reabierto" : `${reopened} agentes reabiertos`} en esa carpeta.`
           : `📁 Ahora en «${name}». Abre a los agentes cuando quieras: arrancarán en esa carpeta.`,
       );
+      return true;
     } catch (e) {
       say(errMsg(e), true);
+      return false;
     } finally {
       setSwitching(false);
     }
@@ -1518,15 +1539,16 @@ export function CommandCenter() {
   };
 
   /** Crea un proyecto nuevo (carpeta vacía junto a la actual) y se cambia a él con un chat nuevo. */
-  const createProject = async (name: string) => {
+  const createProject = async (name: string): Promise<string | null> => {
     let parent = project ? parentDir(project) : null;
     if (!parent) parent = await pickFolder();
-    if (!parent) return;
+    if (!parent) return "Elige una carpeta para crear el proyecto.";
     try {
       const path = await projectCreateDir(parent, name);
-      await switchProject(path, { newChat: true });
+      return await switchProject(path, { newChat: true }) ? null : "No se pudo abrir el proyecto creado.";
     } catch (e) {
       say(errMsg(e), true);
+      return errMsg(e);
     }
   };
 
@@ -1535,10 +1557,10 @@ export function CommandCenter() {
    * en uso, así que se cierran sus terminales y la app en vivo; después cada agente se vuelve a
    * conectar en la ruta nueva y se reabre retomando su conversación.
    */
-  const renameProject = async (name: string) => {
+  const renameProject = async (name: string): Promise<string | null> => {
     const old = project;
     const clean = cleanFolderName(name);
-    if (!old || !clean || switching || clean === projectName(old)) return;
+    if (!old || !clean || switching || clean === projectName(old)) return "No se puede renombrar ahora.";
     setSwitching(true);
     setOverlay(null);
     say(`📁 Renombrando «${projectName(old)}» a «${clean}»…`);
@@ -1548,9 +1570,10 @@ export function CommandCenter() {
       .map((p) => ({ panel: p, name: agentKeyFromCmd(p.cmd ?? "") }));
     // Los chats ya en la ruta nueva antes de que el hub avise del cambio (si no, se verían vacíos).
     const guess = `${parentDir(old)}\\${clean}`;
-    copyProjectStorage(old, guess, false);
     let target = old;
+    let renameError: string | null = null;
     try {
+      copyProjectStorage(old, guess, false);
       for (const { panel } of running) {
         if (panel.sessionId) await termKill(panel.sessionId).catch(() => {});
         removePanel(panel.id);
@@ -1571,6 +1594,7 @@ export function CommandCenter() {
     } catch (e) {
       if (projectKey(guess) !== projectKey(old)) dropProjectStorage(guess);
       say(errMsg(e), true);
+      renameError = errMsg(e);
     }
     // Con el nombre nuevo (o el de siempre si falló), cada agente vuelve a su terminal.
     let reopened = 0;
@@ -1592,6 +1616,7 @@ export function CommandCenter() {
     refresh();
     refreshDetect();
     setSwitching(false);
+    return renameError;
   };
 
   /** (Re)escribe la configuración de un agente en la carpeta del proyecto. */
@@ -2739,8 +2764,8 @@ export function CommandCenter() {
               if (p) void switchProject(p);
             })
           }
-          onCreateProject={(n) => void createProject(n)}
-          onRenameProject={(n) => void renameProject(n)}
+          onCreateProject={createProject}
+          onRenameProject={renameProject}
         />
 
         <section className="cc-conv">
@@ -2809,7 +2834,7 @@ export function CommandCenter() {
           )}
 
           {view === "research" && (
-            <Suspense fallback={null}>
+            <Suspense fallback={loadingView}>
               <ResearchTab
                 project={project}
                 tasks={tasks}
@@ -2827,7 +2852,7 @@ export function CommandCenter() {
           )}
 
           {view === "schedule" && (
-            <Suspense fallback={null}>
+            <Suspense fallback={loadingView}>
               <ScheduleTab
                 schedules={state?.schedules ?? []}
                 tasks={tasks}
@@ -2864,7 +2889,7 @@ export function CommandCenter() {
           )}
 
           {view === "history" && (
-            <Suspense fallback={null}>
+            <Suspense fallback={loadingView}>
               <HistoryTab
                 project={project}
                 tasks={tasks}
@@ -2883,7 +2908,7 @@ export function CommandCenter() {
           )}
 
           {view === "app" && (
-            <Suspense fallback={null}>
+            <Suspense fallback={loadingView}>
               <AppTab
                 project={project}
                 events={state?.events ?? []}
@@ -3121,7 +3146,7 @@ export function CommandCenter() {
       <InAppAvisos onOpen={openAviso} />
 
       {overlay === "settings" && (
-        <Suspense fallback={null}>
+        <Suspense fallback={loadingSettings}>
           <SettingsModal
             initial={settingsAt}
             state={state}
@@ -3149,7 +3174,10 @@ export function CommandCenter() {
             onDispatch={toggleDispatch}
             onDispatchClear={clearDispatch}
             onNotify={setNotify}
-            onProject={(p) => (p ? switchProject(p) : saveProject(null))}
+            onProject={async (p) => {
+              if (p) await switchProject(p);
+              else await saveProject(null);
+            }}
             onConnect={connectAgent}
             onOpenAgent={(id) => {
               void launchAgent(id, agentLabel(id), { selectTerm: false });

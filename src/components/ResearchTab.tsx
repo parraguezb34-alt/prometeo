@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { agentColor, agentLabel, ago, errMsg } from "../lib/team";
 import type { TeamTask } from "../lib/team";
@@ -36,6 +36,42 @@ const MODES: { v: ResearchMode; l: string; d: string }[] = [
 const WHO_KEY = "lienzo.research.who";
 
 const STATE_ES = { lista: "Lista", "en-curso": "En curso", parada: "Sin tareas" } as const;
+
+function sameResearchList(a: Research[], b: Research[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const ra = a[i];
+    const rb = b[i];
+    if (
+      ra.id !== rb.id ||
+      ra.question !== rb.question ||
+      ra.mode !== rb.mode ||
+      ra.created_ms !== rb.created_ms ||
+      ra.tasks.length !== rb.tasks.length ||
+      ra.roles.length !== rb.roles.length ||
+      ra.agents.length !== rb.agents.length ||
+      ra.files.length !== rb.files.length
+    ) {
+      return false;
+    }
+    for (let j = 0; j < ra.tasks.length; j++) {
+      if (ra.tasks[j] !== rb.tasks[j]) return false;
+    }
+    for (let j = 0; j < ra.roles.length; j++) {
+      if (ra.roles[j] !== rb.roles[j]) return false;
+    }
+    for (let j = 0; j < ra.agents.length; j++) {
+      if (ra.agents[j] !== rb.agents[j]) return false;
+    }
+    for (let j = 0; j < ra.files.length; j++) {
+      const fa = ra.files[j];
+      const fb = rb.files[j];
+      if (fa.name !== fb.name || fa.size !== fb.size || fa.mtime_ms !== fb.mtime_ms) return false;
+    }
+  }
+  return true;
+}
 
 /**
  * Investigación con el equipo: una pregunta se convierte en tareas encadenadas para los agentes
@@ -87,17 +123,50 @@ export function ResearchTab({
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
 
+  const reqIdRef = useRef(0);
+  const readIdRef = useRef(0);
+
+  // Al cambiar o quitar proyecto se invalidan peticiones pendientes y se vacían lista, selección y texto.
+  useEffect(() => {
+    reqIdRef.current++;
+    readIdRef.current++;
+    setList([]);
+    setSel(null);
+    setFile(null);
+    setText("");
+  }, [project]);
+
   const load = useCallback(() => {
-    if (!project) return;
+    const reqId = ++reqIdRef.current;
+    if (!project) {
+      setList([]);
+      setSel(null);
+      setFile(null);
+      setText("");
+      return;
+    }
     researchList(project)
-      .then(setList)
+      .then((res) => {
+        if (reqId !== reqIdRef.current) return;
+        setList((prev) => (sameResearchList(prev, res) ? prev : res));
+      })
       .catch(() => {});
   }, [project]);
+
   useEffect(() => {
     load();
+  }, [load]);
+
+  // Solo se sondea periódicamente si hay investigaciones en curso.
+  const hasActive = useMemo(() => {
+    return list.some((r) => overall(r, tasks) === "en-curso");
+  }, [list, tasks]);
+
+  useEffect(() => {
+    if (!project || !hasActive) return;
     const id = window.setInterval(load, 4000);
     return () => window.clearInterval(id);
-  }, [load]);
+  }, [project, hasActive, load]);
 
   const cur = list.find((r) => r.id === sel) ?? null;
   // Al elegir una investigación se abre su mejor archivo (el informe si ya está).
@@ -109,13 +178,18 @@ export function ResearchTab({
   const shown = file ?? (cur ? bestFile(cur) : null);
   const mtime = cur?.files.find((f) => f.name === shown)?.mtime_ms ?? 0;
   useEffect(() => {
+    const readId = ++readIdRef.current;
     if (!project || !cur || !shown) {
       setText("");
       return;
     }
     researchRead(project, cur.id, shown)
-      .then(setText)
-      .catch((e) => setText(`_${errMsg(e)}_`));
+      .then((res) => {
+        if (readId === readIdRef.current) setText(res);
+      })
+      .catch((e) => {
+        if (readId === readIdRef.current) setText(`_${errMsg(e)}_`);
+      });
   }, [project, cur?.id, shown, mtime]);
 
   // Quién hará cada cosa (lo mismo que decidirá el backend).

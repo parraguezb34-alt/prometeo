@@ -12,6 +12,8 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
   const [updAsk, setUpdAsk] = useState(false);
   const [updBusy, setUpdBusy] = useState(false);
   const [dev, setDev] = useState(false);
+  const [checkErr, setCheckErr] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
   const popRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -39,9 +41,24 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
       .then((a) => setDev(!!a.dev))
       .catch(() => {});
   }, []);
+
+  const check = () => {
+    setChecking(true);
+    updateCheck()
+      .then((u) => {
+        setUpd(u);
+        setCheckErr(null);
+      })
+      .catch((e) => {
+        setCheckErr(errMsg(e) || "Error al comprobar");
+      })
+      .finally(() => {
+        setChecking(false);
+      });
+  };
+
   // Se mira al abrir, cada 45 s y al volver a la ventana (es solo comparar fechas de archivos).
   useEffect(() => {
-    const check = () => void updateCheck().then(setUpd).catch(() => {});
     check();
     const id = window.setInterval(check, 45_000);
     window.addEventListener("focus", check);
@@ -67,6 +84,26 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
         DEV
       </span>
     );
+  if (checkErr && !upd?.available) {
+    return (
+      <div className="cc-upd">
+        <button
+          className="cc-upd-btn"
+          style={{
+            color: "var(--warn)",
+            background: "color-mix(in srgb, var(--warn) 14%, transparent)",
+          }}
+          onClick={check}
+          disabled={checking}
+          title={`No se pudo comprobar si hay actualizaciones (${checkErr}). Clic para reintentar.`}
+          aria-label="Reintentar comprobación de actualizaciones"
+        >
+          <Icon name="refresh" size={12} />
+          {checking ? "Comprobando…" : "Sin comprobar"}
+        </button>
+      </div>
+    );
+  }
   if (!upd?.available) return null;
   return (
     <div className="cc-upd">

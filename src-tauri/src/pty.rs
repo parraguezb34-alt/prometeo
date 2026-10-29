@@ -12,10 +12,13 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 
 /// Maximum bytes kept per session for re-attach repaints.
 const SCROLLBACK_LIMIT: usize = 512 * 1024;
+/// Tiempo para repintar una terminal terminada tras recargar la interfaz.
+const EXIT_RETAIN: Duration = Duration::from_secs(60);
 
 /// Cada cuánto, como mucho, se manda a la interfaz lo que escribió una terminal (~60 por segundo).
 const FLUSH_MS: u64 = 16;
@@ -62,16 +65,43 @@ impl Outbox {
 }
 
 pub struct PtySession {
-    pub writer: Box<dyn Write + Send>,
-    pub master: Box<dyn MasterPty + Send>,
-    pub child: Box<dyn Child + Send + Sync>,
+    pub writer: Mutex<Box<dyn Write + Send>>,
+    pub master: Mutex<Box<dyn MasterPty + Send>>,
+    pub child: Mutex<Box<dyn Child + Send + Sync>>,
     pub buffer: Arc<Mutex<VecDeque<u8>>>,
     pub running: Arc<AtomicBool>,
     pub title: String,
 }
 
 #[derive(Default)]
-pub struct PtyManager(pub Mutex<HashMap<String, PtySession>>);
+pub struct PtyManager(pub Arc<Mutex<HashMap<String, Arc<PtySession>>>>);
+
+/// Obtiene una sesión sin retener el cerrojo del mapa durante operaciones de PTY.
+fn session_for<T>(map: &Mutex<HashMap<String, Arc<T>>>, id: &str) -> Result<Arc<T>, String> {
+    map.lock().map_err(|e| e.to_string())?.get(id).cloned().ok_or("session not found".into())
+}
+
+/// Si falla cualquier preparación posterior al spawn, el llamador mata y espera al hijo.
+fn cleanup_on_error<T, E>(result: Result<T, E>, cleanup: impl FnOnce()) -> Result<T, E> {
+    if result.is_err() {
+        cleanup();
+    }
+    result
+}
+
+/// Retira una sesión después del plazo de reenganche; libera el mapa antes de esperar al hijo.
+fn retire_after<T: Send + Sync + 'static>(
+    map: Arc<Mutex<HashMap<String, Arc<T>>>>,
+    id: &str,
+    delay: Duration,
+    cleanup: impl FnOnce(Arc<T>),
+) {
+    std::thread::sleep(delay);
+    let session = map.lock().ok().and_then(|mut sessions| sessions.remove(id));
+    if let Some(session) = session {
+        cleanup(session);
+    }
+}
 
 #[derive(Serialize)]
 pub struct SessionInfo {
@@ -361,15 +391,38 @@ pub async fn term_spawn(
         cmd.cwd(dir);
     }
 
-    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
 
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let prepared: Result<_, String> = (|| {
+        let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+        let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+        Ok((reader, writer))
+    })();
+    let (mut reader, writer) = cleanup_on_error(prepared, || {
+        let _ = child.kill();
+        let _ = child.wait();
+    })?;
 
     let id = next_id();
     let buffer: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
     let running = Arc::new(AtomicBool::new(true));
+    let session = Arc::new(PtySession {
+        writer: Mutex::new(writer),
+        master: Mutex::new(pair.master),
+        child: Mutex::new(child),
+        buffer: buffer.clone(),
+        running: running.clone(),
+        title: shell.clone(),
+    });
+    if let Ok(mut sessions) = state.0.lock() {
+        sessions.insert(id.clone(), session.clone());
+    } else {
+        let mut child = session.child.lock().map_err(|e| e.to_string())?;
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("no pude registrar la terminal".into());
+    }
 
     let thread_id = id.clone();
     let thread_buf = buffer.clone();
@@ -401,40 +454,51 @@ pub async fn term_spawn(
         }
         let _ = thread_app.emit("pty://exit", ExitPayload { id: thread_id.clone() });
     });
+    // El hijo puede morir aunque un descendiente mantenga abierto el lector del PTY.
+    // Se comprueba el proceso aparte y se retira la sesión tras el plazo de reenganche.
+    let monitor_id = id.clone();
+    let monitor_map = state.0.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let registered = monitor_map.lock().is_ok_and(|sessions| sessions.contains_key(&monitor_id));
+            if !registered {
+                return;
+            }
+            let exited = session.child.lock().is_ok_and(|mut child| matches!(child.try_wait(), Ok(Some(_))));
+            if exited || !session.running.load(Ordering::SeqCst) {
+                session.running.store(false, Ordering::SeqCst);
+                break;
+            }
+        }
+        drop(session);
+        retire_after(monitor_map, &monitor_id, EXIT_RETAIN, |session| {
+            if let Ok(mut child) = session.child.lock()
+                && !matches!(child.try_wait(), Ok(Some(_)))
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        });
+    });
 
     let info = SessionInfo {
         id: id.clone(),
         title: shell.clone(),
         running: true,
     };
-    state
-        .0
-        .lock()
-        .map_err(|e| e.to_string())?
-        .insert(
-            id,
-            PtySession {
-                writer,
-                master: pair.master,
-                child,
-                buffer,
-                running,
-                title: shell,
-            },
-        );
     Ok(info)
 }
 
 /// Send keyboard input from the terminal view to the session.
 #[tauri::command]
 pub fn term_write(state: State<'_, PtyManager>, id: String, data: String) -> Result<(), String> {
-    let mut map = state.0.lock().map_err(|e| e.to_string())?;
-    let session = map.get_mut(&id).ok_or("session not found")?;
-    session
-        .writer
+    let session = session_for(&state.0, &id)?;
+    let mut writer = session.writer.lock().map_err(|e| e.to_string())?;
+    writer
         .write_all(data.as_bytes())
         .map_err(|e| e.to_string())?;
-    let _ = session.writer.flush();
+    let _ = writer.flush();
     Ok(())
 }
 
@@ -445,10 +509,11 @@ pub fn term_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let map = state.0.lock().map_err(|e| e.to_string())?;
-    let session = map.get(&id).ok_or("session not found")?;
+    let session = session_for(&state.0, &id)?;
     session
         .master
+        .lock()
+        .map_err(|e| e.to_string())?
         .resize(PtySize {
             rows: rows.max(2),
             cols: cols.max(2),
@@ -463,11 +528,12 @@ pub fn term_resize(
 #[tauri::command]
 pub async fn term_kill(state: State<'_, PtyManager>, id: String) -> Result<(), String> {
     let session = state.0.lock().map_err(|e| e.to_string())?.remove(&id);
-    if let Some(mut session) = session {
+    if let Some(session) = session {
+        let mut child = session.child.lock().map_err(|e| e.to_string())?;
         // Con todo lo que cuelga de la terminal (el agente y sus puentes): si quedara algo vivo,
         // seguiría usando la carpeta y Windows no dejaría, por ejemplo, renombrarla.
         #[cfg(windows)]
-        if let Some(pid) = session.child.process_id() {
+        if let Some(pid) = child.process_id() {
             use std::os::windows::process::CommandExt;
             let _ = std::process::Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/T", "/F"])
@@ -476,7 +542,8 @@ pub async fn term_kill(state: State<'_, PtyManager>, id: String) -> Result<(), S
                 .creation_flags(0x0800_0000)
                 .status();
         }
-        let _ = session.child.kill();
+        let _ = child.kill();
+        let _ = child.wait();
     }
     Ok(())
 }
@@ -499,8 +566,7 @@ pub async fn term_list(state: State<'_, PtyManager>) -> Result<Vec<SessionInfo>,
 /// 512 KB por terminal cada pocos segundos.
 #[tauri::command]
 pub async fn term_scrollback(state: State<'_, PtyManager>, id: String, max: Option<usize>) -> Result<String, String> {
-    let map = state.0.lock().map_err(|e| e.to_string())?;
-    let session = map.get(&id).ok_or("session not found")?;
+    let session = session_for(&state.0, &id)?;
     let buffer = session.buffer.lock().map_err(|e| e.to_string())?;
     let skip = max.map(|m| buffer.len().saturating_sub(m)).unwrap_or(0);
     let bytes: Vec<u8> = buffer.iter().skip(skip).copied().collect();
@@ -534,5 +600,89 @@ mod outbox_tests {
         want.extend_from_slice(b"fin");
         assert_eq!(all, want, "nada se pierde ni se desordena");
         assert!(batches.len() <= 3, "50 trozos seguidos salen juntos: {} paquetes", batches.len());
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::{cleanup_on_error, retire_after, session_for};
+    use std::collections::HashMap;
+    use std::io::{self, Write};
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Duration;
+
+    #[test]
+    fn failed_pty_preparation_cleans_up_child() {
+        let mut killed_and_waited = false;
+        let result: Result<(), &str> = cleanup_on_error(Err("lector falló"), || {
+            killed_and_waited = true;
+        });
+        assert_eq!(result, Err("lector falló"));
+        assert!(killed_and_waited, "el hijo debe matarse y esperarse tras el error");
+    }
+
+    #[test]
+    fn ended_session_is_removed_after_reattach_grace() {
+        let map = Arc::new(Mutex::new(HashMap::from([("muerta".into(), Arc::new(7u8))])));
+        let (tx, rx) = mpsc::channel();
+        let worker_map = map.clone();
+        let worker = std::thread::spawn(move || {
+            retire_after(worker_map, "muerta", Duration::from_millis(10), |session| {
+                tx.send(*session).unwrap();
+            });
+        });
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), 7);
+        worker.join().unwrap();
+        assert!(map.lock().unwrap().is_empty(), "la sesión y sus recursos salen del mapa");
+    }
+
+    struct BlockingWriter {
+        started: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl Write for BlockingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.started.send(()).unwrap();
+            self.release.recv().unwrap();
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn blocked_writer_does_not_hold_session_map() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let slow: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(Box::new(BlockingWriter {
+            started: started_tx,
+            release: release_rx,
+        })));
+        let fast: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(Box::new(io::sink())));
+        let map = Arc::new(Mutex::new(HashMap::from([
+            ("lenta".into(), slow),
+            ("rápida".into(), fast),
+        ])));
+        let slow_map = map.clone();
+        let writer = std::thread::spawn(move || {
+            let session = session_for(&slow_map, "lenta").unwrap();
+            session.lock().unwrap().write_all(b"x").unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let fast_map = map.clone();
+        let (done_tx, done_rx) = mpsc::channel();
+        let other = std::thread::spawn(move || {
+            let session = session_for(&fast_map, "rápida").unwrap();
+            session.lock().unwrap().write_all(b"y").unwrap();
+            done_tx.send(()).unwrap();
+        });
+        let free = done_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        release_tx.send(()).unwrap();
+        writer.join().unwrap();
+        other.join().unwrap();
+        assert!(free, "la terminal rápida debe seguir respondiendo mientras otra escritura bloquea");
     }
 }

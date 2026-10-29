@@ -29,9 +29,12 @@ export function cleanTerm(text: string): string {
 /**
  * Avisos que se quedan con el teclado hasta cerrarlos con Esc. Codex abre uno al arrancar si falla
  * algún servidor MCP («Warnings · 1 of 1 … esc dismiss & close»): lo que se teclee mientras tanto se
- * pierde y el mensaje nunca llega.
+ * pierde y el mensaje nunca llega. Igual con sus buscadores: el del historial («Find: … No matches ·
+ * full transcript · esc cancel») y el de mensajes anteriores («reverse-i-search:»), que se quedan
+ * con todo lo tecleado (visto con Codex 0.164, 26/10/2026). Solo los de Codex: en Claude Code «esc
+ * to cancel» es rechazar un permiso.
  */
-export const DIALOG = /esc\s*dismiss/i;
+export const DIALOG = /esc\s*dismiss|full\s+transcript\s+esc\s*cancel|reverse-i-search/i;
 
 /**
  * ¿Hay que volver a pulsar Enter? Solo si el agente estaba libre al enviarlo, no se puso a trabajar

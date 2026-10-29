@@ -72,18 +72,51 @@ type Props = {
 
 // ---- imágenes ------------------------------------------------------------------
 
-const imageCache = new Map<string, Promise<string>>();
+type ImageCacheEntry = { promise: Promise<string>; bytes: number };
+const MAX_IMAGE_CACHE_ITEMS = 24;
+const MAX_IMAGE_CACHE_BYTES = 32 * 1024 * 1024;
+const imageCache = new Map<string, ImageCacheEntry>();
+let imageCacheBytes = 0;
+
+function trimImageCache() {
+  while (imageCache.size > MAX_IMAGE_CACHE_ITEMS || imageCacheBytes > MAX_IMAGE_CACHE_BYTES) {
+    const oldest = imageCache.keys().next().value;
+    if (oldest === undefined) break;
+    const entry = imageCache.get(oldest)!;
+    imageCache.delete(oldest);
+    imageCacheBytes -= entry.bytes;
+  }
+}
 
 function diskImage(path: string, project: string | null): Promise<string> {
   const key = `${project ?? ""}|${path}`;
-  let p = imageCache.get(key);
-  if (!p) {
-    p = invoke<string>("image_data", { path, project });
-    // Un fallo (aún no existe, se está escribiendo) no se queda en caché para siempre.
-    p.catch(() => window.setTimeout(() => imageCache.delete(key), 15_000));
-    imageCache.set(key, p);
+  const cached = imageCache.get(key);
+  if (cached) {
+    imageCache.delete(key);
+    imageCache.set(key, cached);
+    return cached.promise;
   }
-  return p;
+  const entry: ImageCacheEntry = { promise: invoke<string>("image_data", { path, project }), bytes: 0 };
+  imageCache.set(key, entry);
+  trimImageCache();
+  void entry.promise.then(
+    (src) => {
+      if (imageCache.get(key) !== entry) return;
+      // La URL data: es ASCII; su longitud equivale a sus bytes codificados.
+      entry.bytes = src.length;
+      imageCacheBytes += entry.bytes;
+      trimImageCache();
+    },
+    () => {
+      // Un archivo aún en escritura se puede volver a pedir tras el breve plazo anterior.
+      window.setTimeout(() => {
+        if (imageCache.get(key) !== entry) return;
+        imageCache.delete(key);
+        imageCacheBytes -= entry.bytes;
+      }, 15_000);
+    },
+  );
+  return entry.promise;
 }
 
 type Loader = (path: string, project: string | null) => Promise<string>;

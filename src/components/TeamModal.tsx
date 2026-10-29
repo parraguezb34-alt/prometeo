@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { CSSProperties } from "react";
 import { agentColor, agentCommands, agentInitial, agentLabel, ago, HANDOVER_SAVE_PROMPT } from "../lib/team";
 import type { AgentUsage, InboxInfo, ModelCatalog, TeamAgent, TeamEvent } from "../lib/team";
@@ -11,6 +12,7 @@ import { fmtReset, level, windowLabel, worst } from "../lib/limits";
 import type { AgentLimits } from "../lib/limits";
 import { stallText } from "../lib/stall";
 import type { Stall } from "../lib/stall";
+import { useModalFocus } from "./useModalFocus";
 
 /** work = con tarea · idle = libre · blocked = espera tu respuesta · login = su terminal pide iniciar sesión · starting = terminal abierta, aún sin conectar · off = sin sesión */
 export type AgentState = "work" | "idle" | "blocked" | "login" | "starting" | "off";
@@ -219,12 +221,14 @@ export function TeamModal({
   /** Esc en su terminal, como el botón ⎋. */
   onInterrupt: (name: string) => void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  useModalFocus(dialogRef);
   const online = agents.filter((a) => a.online).length;
   const teamUsage = sumUsage(Object.keys(usage ?? {}).map((n) => usageOf(usage, n)!));
   return (
     <>
       <div className="cc-scrim" onClick={onClose} />
-      <section className="cc-modal" role="dialog" aria-label="Equipo activo">
+      <section ref={dialogRef} className="cc-modal" role="dialog" aria-modal="true" aria-label="Equipo activo" tabIndex={-1}>
         <div className="cc-modal-top">
           <div>
             <h3>Equipo activo</h3>

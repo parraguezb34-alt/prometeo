@@ -50,6 +50,8 @@ if (run) {
   // Sin las variables del hub de quien lo lanza (una terminal de Prometeo): Prometeo Dev monta el suyo.
   const env = { ...process.env };
   for (const k of ["LIENZO_HUB", "LIENZO_TOKEN", "LIENZO_DATA", "LIENZO_AGENT"]) delete env[k];
+  // Solo el proceso Dev expone CDP, y solo en loopback. El instalable normal no hereda este ajuste.
+  env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9333 --remote-debugging-address=127.0.0.1";
   spawn(exe, [], { detached: true, stdio: "ignore", env }).unref();
   console.log("Prometeo Dev abierto. Ábrele una carpeta de pruebas, no un proyecto del Prometeo normal.");
 }

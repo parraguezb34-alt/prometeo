@@ -41,7 +41,7 @@
   gap: 12px;
   padding: 12px 14px 13px 12px;
   border-radius: 16px;
-  background: #262629;
+  background: var(--surface-card);
   box-shadow:
     inset 0 0 0 0.5px rgba(255, 255, 255, 0.1),
     0 12px 32px rgba(0, 0, 0, 0.45),
@@ -54,7 +54,7 @@
   transition: background-color 0.14s;
 }
 .av-card:hover {
-  background: #2c2c30;
+  background: var(--surface-card-hover);
 }
 .av-card[data-leaving="1"] {
   animation: av-out 0.24s var(--ease-io, ease-in) forwards;
@@ -86,7 +86,7 @@
   font-style: normal;
   color: #fff;
   background: var(--dim);
-  box-shadow: 0 0 0 2px #262629;
+  box-shadow: 0 0 0 2px var(--surface-card);
 }
 .av-badge[data-kind="ask"] {
   background: var(--accent);
@@ -146,7 +146,7 @@
   place-items: center;
   cursor: pointer;
   color: var(--text);
-  background: #3a3a3e;
+  background: var(--surface-control);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   opacity: 0;
   transform: scale(0.8);

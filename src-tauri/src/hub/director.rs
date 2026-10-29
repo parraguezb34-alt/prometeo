@@ -30,6 +30,10 @@ pub fn limits_pace(limits: &serde_json::Value, now: u64) -> f64 {
     let Some(ws) = limits["windows"].as_array() else { return 0.0 };
     let mut worst = f64::NEG_INFINITY;
     for w in ws {
+        // Ventana ya reiniciada (el agente aún no volvió a informar): no cuenta.
+        if w["resets_at"].as_u64().is_some_and(|t| t <= now) {
+            continue;
+        }
         let used = w["used_pct"].as_f64().unwrap_or(0.0);
         if used >= 80.0 {
             return f64::INFINITY;
