@@ -59,7 +59,7 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
         '"Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace',
       cursorBlink: true,
       // Lo justo para mirar atrás: cada línea ocupa memoria en cada terminal, también en las ocultas.
-      scrollback: 3000,
+      scrollback: 2000,
       theme: THEME,
     });
     termRef.current = term;

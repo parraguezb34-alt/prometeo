@@ -1274,6 +1274,7 @@ select {
   height: 520px;
   overflow: hidden;
   pointer-events: none;
+  visibility: hidden;
 }
 
 /* .cc-toast: ver avisos.css */

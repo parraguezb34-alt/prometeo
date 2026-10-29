@@ -6,7 +6,7 @@ import type { HDiff, HEntry, HFile, HList, HOutcome } from "../lib/history";
 import { Icon } from "./Icon";
 import "../history.css";
 
-const MAX_LINES = 3000;
+const MAX_LINES = 800;
 
 function lineKind(line: string): string {
   if (line.startsWith("+++") || line.startsWith("---")) return "h";
@@ -32,8 +32,15 @@ function whoOf(e: HEntry): string {
 }
 
 function DiffView({ diff, truncated }: { diff: string; truncated: boolean }) {
+  const [showAll, setShowAll] = useState(false);
+  const prevDiff = useRef(diff);
+  if (prevDiff.current !== diff) {
+    prevDiff.current = diff;
+    setShowAll(false);
+  }
   const lines = diff.split(/\r?\n/);
-  const shown = lines.slice(0, MAX_LINES);
+  const hasMore = lines.length > MAX_LINES;
+  const shown = showAll ? lines : lines.slice(0, MAX_LINES);
   return (
     <div className="cc-diff hs-diff">
       {shown.map((line, i) => (
@@ -41,9 +48,26 @@ function DiffView({ diff, truncated }: { diff: string; truncated: boolean }) {
           {line || " "}
         </div>
       ))}
-      {(lines.length > shown.length || truncated) && (
+      {!showAll && hasMore && (
+        <div
+          className="cc-diff-line"
+          data-k="m"
+          style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 8px" }}
+        >
+          <span>… recortado para no frenar la vista</span>
+          <button
+            type="button"
+            className="hs-link"
+            style={{ fontWeight: 600, cursor: "pointer" }}
+            onClick={() => setShowAll(true)}
+          >
+            Mostrar todo ({lines.length} líneas)
+          </button>
+        </div>
+      )}
+      {(showAll || !hasMore) && truncated && (
         <div className="cc-diff-line" data-k="m">
-          … el diff sigue (recortado para no frenar la vista)
+          … el diff sigue en disco (recortado para no frenar la vista)
         </div>
       )}
     </div>

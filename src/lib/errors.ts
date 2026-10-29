@@ -35,6 +35,16 @@ export function reportError(source: string, message: string, detail = ""): void 
   const now = Date.now();
   if (now - (recent.get(key) ?? 0) < 10_000) return;
   recent.set(key, now);
+  if (recent.size > 200) {
+    for (const [k, t] of recent) {
+      if (now - t > 10_000) recent.delete(k);
+    }
+    while (recent.size > 200) {
+      const oldest = recent.keys().next().value;
+      if (oldest !== undefined) recent.delete(oldest);
+      else break;
+    }
+  }
   if (!("__TAURI_INTERNALS__" in window)) return;
   void invoke("errors_report", { source, message: msg, detail }).catch(() => {});
 }
