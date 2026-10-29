@@ -241,6 +241,7 @@ Trabajas con otros agentes de IA en este proyecto, coordinados por lienzo con la
 - Tareas: `team_task_claim` (trae las entregas previas) y `team_task_done` con `summary`, `files` y `evidence`.\n\
 - 📬 Buzón: cuando una herramienta avise de mensajes, léelos con `team_inbox` y contesta con `team_message` (`to`, `reply_to`). `to: \"líder\"` llega al líder.\n\
 - Avances en 1 línea con `team_update`; notas de una tarea con `team_task_comment`.\n\
+- Jerarquía: el líder coordina y reparte; los demás ejecutan su parte sin pelear el mando. Sin líder, decide quien reservó primero el archivo.\n\
 - ¿Dudas sobre lo que quiere el usuario? Pregúntale con `team_ask_user` (preguntas con opciones concretas) en vez de suponer. Usa las rutas exactas de la tarea.\n\
 - ¿Te falta una guía para el trabajo (diseño, pruebas…)? Propón una skill con `team_skill_propose`; el usuario decide.\n\
 - Ahorro de tokens: llamadas independientes en un mismo turno (varias lecturas o búsquedas a la vez); busca antes de leer y lee solo el tramo necesario; acota la salida de los comandos; respuesta final breve.\n\n\
@@ -1533,6 +1534,26 @@ pub async fn team_agent_session(agent: String, project: String) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn protocolo_regenerado_reemplaza_bloque_sin_duplicarlo() {
+        let dir = std::env::temp_dir().join(format!("lienzo-protocol-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["CLAUDE.md", "AGENTS.md"] {
+            std::fs::write(dir.join(name), format!("prefacio\n{BLOCK_START}\nbloque viejo\n{BLOCK_END}\nfinal\n")).unwrap();
+        }
+        assert_eq!(refresh_protocol(&dir).len(), 2);
+        assert!(refresh_protocol(&dir).is_empty());
+        for name in ["CLAUDE.md", "AGENTS.md"] {
+            let text = std::fs::read_to_string(dir.join(name)).unwrap();
+            assert_eq!(text.matches(BLOCK_START).count(), 1);
+            assert_eq!(text.matches(BLOCK_END).count(), 1);
+            assert!(text.contains("Jerarquía: el líder coordina y reparte"));
+            assert!(text.starts_with("prefacio\n") && text.ends_with("final\n"));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn reconoce_el_puente_en_la_config() {

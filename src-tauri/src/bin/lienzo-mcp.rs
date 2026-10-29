@@ -587,8 +587,10 @@ revísala (skill lienzo-revision) y decide con team_task_review: ok, fix o lider
             }
         }
     }
-    if let Some(charter) = state["charter"].as_str().filter(|s| !s.is_empty()) {
-        lead.push_str(&format!("Normas del equipo:\n{}\n", trunc(charter, 520)));
+    // El protocolo predeterminado ya vive en CLAUDE.md/AGENTS.md. Si el usuario
+    // personalizó las normas desde la app, sí hay que comunicarlas, completas.
+    if let Some(charter) = state["charter"].as_str().filter(|s| !s.is_empty() && !is_default_charter(s)) {
+        lead.push_str(&format!("Normas del equipo (personalizadas):\n{charter}\n"));
     }
     sections.push(("lead", lead));
 
@@ -700,6 +702,12 @@ revísala (skill lienzo-revision) y decide con team_task_review: ok, fix o lider
     }
     sections.push(("claims", cl));
     sections
+}
+
+/// El valor efectivo de `/state` no distingue las normas predeterminadas de
+/// las personalizadas. Usa la misma fuente que el hub; no copies su texto.
+fn is_default_charter(charter: &str) -> bool {
+    charter == lienzo_lib::hub::default_charter()
 }
 
 /// Actividad reciente (sin acciones de herramientas), solo la posterior a `since_seq` y,
@@ -955,25 +963,17 @@ fn render_tasks(state: &Value, all: bool) -> String {
 // ---------------------------------------------------------------------------
 
 fn initialize_result(params: &Value, client: Option<&HubClient>) -> Value {
-    let mut instructions = String::from(
-        "Herramientas del equipo compartido de lienzo: varios agentes de IA trabajan juntos en el mismo proyecto. \
-Empieza con team_context, publica avances con team_update, reserva archivos con team_claim_files antes de editarlos y revisa team_feed. \
-Si una herramienta te avisa de 📬 mensajes, léelos con team_inbox y contesta con team_message (to + reply_to); no contestes agradecimientos. \
-Cuando tu contexto esté muy lleno, guarda tu memoria con team_handover_save (incluye tu task_id): queda pegada a la tarea y la app compactará tu contexto sin perder el hilo.",
-    );
-    if let Some(c) = client
-        && let Ok(state) = c.get("/state?limit=1") {
-            if let Some(leader) = state["leader"].as_str().filter(|s| !s.is_empty()) {
-                instructions.push_str(&format!(
-                    "\nLíder del equipo: {} (coordina y reparte; no compitas por el mando).",
-                    leader
-                ));
-            }
-            if let Some(charter) = state["charter"].as_str().filter(|s| !s.is_empty()) {
-                instructions.push_str("\nNormas del equipo:\n");
-                instructions.push_str(&trunc(charter, 600));
-            }
-        }
+    // El protocolo está en CLAUDE.md/AGENTS.md. Aquí solo indicamos cómo obtener
+    // el estado dinámico; repetir el charter en MCP y hooks triplica el contexto.
+    let mut instructions = String::from("Equipo compartido de Prometeo. Empieza con team_context; usa team_feed para novedades y team_inbox si hay 📬. Las reglas del proyecto están en CLAUDE.md/AGENTS.md.");
+    // OpenCode y Antigravity no tienen hooks: esta línea es su única pista de
+    // liderazgo al arrancar. Las normas no se repiten aquí.
+    if let Some(leader) = client
+        .and_then(|c| c.get("/state?limit=1").ok())
+        .and_then(|state| state["leader"].as_str().map(str::to_owned))
+        .filter(|leader| !leader.is_empty()) {
+            instructions.push_str(&format!("\nLíder: {leader} (coordina y reparte; no compitas por el mando)."));
+    }
     let wanted = params["protocolVersion"].as_str().unwrap_or("2025-06-18");
     json!({
         "protocolVersion": if wanted.is_empty() { "2025-06-18" } else { wanted },
@@ -1010,6 +1010,97 @@ fn with_load_hints(mut catalog: Value) -> Value {
         for t in list {
             if t["name"].as_str().is_some_and(|n| RARE_TOOLS.contains(&n)) {
                 t["_meta"] = json!({ "anthropic/alwaysLoad": false });
+            }
+        }
+    }
+    catalog
+}
+
+/// Solo ocultamos herramientas de líder cuando el hub confirma tanto el nombre
+/// del agente como el líder. Si falta cualquiera de esos datos, no filtramos.
+fn filter_catalog(mut catalog: Value, agent: &str, leader: Option<&str>, dev_visible: bool) -> Value {
+    let worker = !agent.is_empty()
+        && leader.filter(|name| !name.is_empty()).is_some_and(|name| !name.eq_ignore_ascii_case(agent));
+    if let Some(tools) = catalog.as_array_mut() {
+        tools.retain(|t| {
+            let name = t["name"].as_str().unwrap_or("");
+            if name.starts_with("dev_") { return dev_visible; }
+            !worker || !matches!(name,
+                "team_memory_save" | "team_memory_forget" | "team_memory_resolve"
+                | "team_plan_approve" | "team_task_brief" | "team_task_handoff")
+        });
+        if worker && let Some(review) = tools.iter_mut().find(|t| t["name"] == "team_task_review") {
+            // `take` lo decide solo el líder; la ruta tools/call sigue intacta.
+            review["inputSchema"]["properties"]["verdict"]["enum"] = json!(["ok", "fix", "lider"]);
+            review["description"] = json!("Revisa una entrega asignada: ok aprueba; fix devuelve órdenes en notes; lider escala al líder.");
+        }
+    }
+    catalog
+}
+
+fn visible_catalog(catalog: Value, agent: &str, client: Option<&HubClient>, dev_visible: bool) -> Value {
+    let leader = client
+        .and_then(|c| c.get("/state?limit=1").ok())
+        .and_then(|s| s["leader"].as_str().map(str::to_owned));
+    filter_catalog(catalog, agent, leader.as_deref(), dev_visible)
+}
+
+/// El catálogo Dev se anuncia en el repo de Prometeo o con una ventana Dev
+/// comprobada en CDP local. La llamada directa conserva su mensaje de error.
+fn dev_tools_visible() -> bool {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent();
+    let here = std::env::current_dir().ok().and_then(|p| p.canonicalize().ok());
+    if repo.zip(here.as_deref()).is_some_and(|(root, cwd)| cwd.starts_with(root)) {
+        return true;
+    }
+    local_json(DEV_CDP_PORT, "/json", None)
+        .and_then(|targets| dev_page_url(&targets))
+        .is_ok()
+}
+
+/// `alwaysLoad` hace que cada descripción se pague en cada sesión. El esquema
+/// mantiene nombres, tipos y opciones; estas frases solo explican el uso.
+fn compact_catalog(mut catalog: Value) -> Value {
+    const DESCRIPTIONS: &[(&str, &str)] = &[
+        ("dev_captura", "Captura Prometeo Dev; guarda y devuelve PNG."),
+        ("dev_ver", "Texto y controles visibles de Prometeo Dev, con índices."),
+        ("dev_clic", "Clic en Dev por índice de dev_ver, texto o selector CSS."),
+        ("dev_escribir", "Escribe en el campo enfocado o selector; enviar pulsa Enter."),
+        ("dev_tecla", "Tecla en Dev: Enter, Escape, Tab, flechas, Ctrl+A, etc."),
+        ("dev_seccion", "Abre Chat, Tareas, Investigar, Programadas, App, Historial, Terminal o Ajustes."),
+        ("team_context", "Estado del equipo: agentes, tareas, reservas y actividad. Úsalo al empezar."),
+        ("team_update", "Publica un avance de una línea en el feed visible al usuario."),
+        ("team_feed", "Actividad reciente; all incluye conexiones y herramientas."),
+        ("team_message", "Mensaje a un agente o al equipo. Al responder, usa reply_to."),
+        ("team_inbox", "Lee mensajes pendientes de tu buzón y los marca leídos."),
+        ("team_task_create", "Crea una tarea; parents espera a tareas previas."),
+        ("team_task_brief", "Solo líder: completa el encargo de una tarea antes de repartirla."),
+        ("team_task_review", "Revisa una entrega: ok aprueba; fix devuelve órdenes en notes; take la asume el líder; lider la escala."),
+        ("team_schedule_create", "Programa una tarea repetida. Queda pendiente hasta aprobación del usuario en Programadas."),
+        ("team_schedule_list", "Lista tareas programadas y su estado."),
+        ("team_feed_search", "Busca en todo el historial; query requiere todas las palabras o #id."),
+        ("team_task_handoff", "Solo líder: reasigna una tarea tomada por otro agente."),
+        ("team_plan_approve", "Solo líder: libera tareas del plan tras aprobación escrita del usuario."),
+        ("team_task_list", "Lista tareas abiertas y últimas entregas; all incluye todas."),
+        ("team_task_claim", "Toma una tarea disponible y recibe las entregas de sus dependencias."),
+        ("team_task_done", "Entrega tarea con resumen, archivos y pruebas; pasa a revisión si corresponde."),
+        ("team_task_comment", "Nota en el tablón de una tarea para quien la lleva o depende de ella."),
+        ("team_memory_list", "Lista memoria del proyecto y propuestas pendientes."),
+        ("team_memory_propose", "Propone memoria; el líder decide. Si eres líder, la guarda."),
+        ("team_memory_save", "Solo líder: guarda memoria del proyecto."),
+        ("team_memory_resolve", "Solo líder: acepta o descarta una propuesta de memoria."),
+        ("team_memory_forget", "Solo líder: retira una entrada de memoria."),
+        ("team_claim_files", "Reserva rutas absolutas antes de editar; avisa de conflictos."),
+        ("team_release_files", "Libera tus reservas de archivos."),
+        ("team_ask_user", "Pregunta al usuario en un panel: 1–4 preguntas, 2–4 opciones cada una. Espera su respuesta antes de decidir."),
+        ("team_skill_list", "Lista skills de lienzo y su estado."),
+        ("team_skill_propose", "Propone instalar una skill al usuario; source admite nombre o enlace GitHub/SKILL.md."),
+        ("team_handover_save", "Guarda relevo de tarea para compactar contexto sin perder avances."),
+    ];
+    if let Some(tools) = catalog.as_array_mut() {
+        for tool in tools {
+            if let Some((_, description)) = DESCRIPTIONS.iter().find(|(name, _)| tool["name"] == *name) {
+                tool["description"] = json!(description);
             }
         }
     }
@@ -2033,7 +2124,7 @@ fn mcp_mode() {
             | "notifications/cancelled"
             | "notifications/roots/list_changed" => None,
             "ping" => Some(Ok(json!({}))),
-            "tools/list" => Some(Ok(json!({ "tools": with_load_hints(tools_catalog()) }))),
+            "tools/list" => Some(Ok(json!({ "tools": with_load_hints(visible_catalog(compact_catalog(tools_catalog()), &agent, client.as_ref(), dev_tools_visible())) }))),
             "tools/call" if params["name"].as_str().is_some_and(|n| n.starts_with("dev_")) => {
                 let name = params["name"].as_str().unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
@@ -3438,6 +3529,44 @@ mod tests {
         for core in ["team_task_review", "team_task_create", "team_task_claim", "team_task_done", "team_message"] {
             assert!(list.iter().any(|t| t["name"] == core && t.get("_meta").is_none()));
         }
+    }
+
+    #[test]
+    fn catalogo_por_rol_y_dev_con_fallback_seguro() {
+        let names = |catalog: Value| -> Vec<String> {
+            catalog.as_array().unwrap().iter()
+                .filter_map(|t| t["name"].as_str().map(str::to_owned)).collect()
+        };
+        let leader = names(filter_catalog(tools_catalog(), "claude", Some("claude"), true));
+        let worker = filter_catalog(tools_catalog(), "codex", Some("claude"), false);
+        let worker_names = names(worker.clone());
+        assert!(leader.contains(&"team_memory_save".into()));
+        assert!(leader.contains(&"dev_ver".into()));
+        assert!(!worker_names.contains(&"team_memory_save".into()));
+        assert!(!worker_names.contains(&"team_task_handoff".into()));
+        assert!(!worker_names.contains(&"dev_ver".into()));
+        let review = worker.as_array().unwrap().iter().find(|t| t["name"] == "team_task_review").unwrap();
+        assert_eq!(review["inputSchema"]["properties"]["verdict"]["enum"], json!(["ok", "fix", "lider"]));
+        // Sin estado fiable del hub no se ocultan las herramientas del líder.
+        let unknown = names(filter_catalog(tools_catalog(), "codex", None, false));
+        assert!(unknown.contains(&"team_memory_save".into()));
+    }
+
+    #[test]
+    fn hook_no_repite_roster_y_preserva_normas_personalizadas() {
+        let state = json!({"leader":"claude","director":false,"charter":"norma única",
+            "agents":[{"name":"claude","online":true}],"tasks":[],"events":[]});
+        let mut cache = json!({});
+        let (start, _) = context_for_prompt(&state, "codex", &mut cache, true);
+        assert!(start.contains("Agentes en línea"));
+        assert!(start.contains("Normas del equipo (personalizadas):\nnorma única"));
+        let (same, _) = context_for_prompt(&state, "codex", &mut cache, false);
+        assert!(!same.contains("Agentes en línea"));
+        assert!(!same.contains("Normas del equipo"));
+        let mut changed = state.clone();
+        changed["agents"][0]["online"] = json!(false);
+        let (next, _) = context_for_prompt(&changed, "codex", &mut cache, false);
+        assert!(next.contains("No hay otros agentes en línea"));
     }
 
     #[test]
