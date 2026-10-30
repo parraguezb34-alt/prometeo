@@ -32,7 +32,8 @@ pub use usage::*;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const MAX_EVENTS: usize = 500;
@@ -845,8 +846,40 @@ fn write_state_to(main: &std::path::Path, raw: &str) -> std::io::Result<()> {
 /// Hay cambios sin guardar (los guarda el hilo de `persist`).
 static DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static FLUSHER: std::sync::Once = std::sync::Once::new();
+static FLUSH_SIGNAL: (Mutex<()>, Condvar) = (Mutex::new(()), Condvar::new());
 /// Una sola escritura a la vez (el hilo y el cierre de la app comparten el temporal).
 static WRITING: Mutex<()> = Mutex::new(());
+
+/// Marcar bajo el mismo mutex que usa la espera evita perder el aviso justo antes de dormir.
+fn request_flush(
+    dirty: &std::sync::atomic::AtomicBool,
+    signal: &(Mutex<()>, Condvar),
+) {
+    let _guard = signal.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+    signal.1.notify_one();
+}
+
+/// Espera sin timeout en reposo; tras la primera marca mantiene una ventana fija
+/// de coalescencia. Los avisos posteriores no adelantan ni prolongan el flush.
+fn wait_for_flush(
+    dirty: &std::sync::atomic::AtomicBool,
+    signal: &(Mutex<()>, Condvar),
+    delay: Duration,
+) {
+    let (lock, ready) = signal;
+    let mut guard = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    while !dirty.load(std::sync::atomic::Ordering::SeqCst) {
+        guard = ready.wait(guard).unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    let deadline = Instant::now() + delay;
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        if remaining.is_zero() { break; }
+        let (next, _) = ready.wait_timeout(guard, remaining)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard = next;
+    }
+}
 
 /// Pide guardar el estado. Mientras los agentes trabajan llegan varios eventos por segundo, y
 /// escribir cada vez ~1 MB (con su copia) frenaba el hub: se marca y un hilo lo guarda como
@@ -857,13 +890,13 @@ pub fn persist(inner: &HubInner) {
         persist_now(inner);
         return;
     }
-    DIRTY.store(true, std::sync::atomic::Ordering::SeqCst);
     FLUSHER.call_once(|| {
         std::thread::spawn(|| loop {
-            std::thread::sleep(std::time::Duration::from_millis(1000));
+            wait_for_flush(&DIRTY, &FLUSH_SIGNAL, Duration::from_secs(1));
             flush_pending();
         });
     });
+    request_flush(&DIRTY, &FLUSH_SIGNAL);
 }
 
 /// Guarda ya lo pendiente, si hay algo (el hilo de `persist` y el cierre de la app).
@@ -924,6 +957,55 @@ pub fn set_dirty(val: bool) {
 #[cfg(test)]
 mod dirty_tests {
     use super::*;
+
+    #[test]
+    fn flusher_coalesces_burst_and_stays_asleep_without_changes() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, mpsc};
+
+        let dirty = Arc::new(AtomicBool::new(false));
+        let signal = Arc::new((Mutex::new(()), Condvar::new()));
+        let (tx, rx) = mpsc::channel();
+        let worker_dirty = dirty.clone();
+        let worker_signal = signal.clone();
+        let worker = std::thread::spawn(move || {
+            for _ in 0..2 {
+                wait_for_flush(&worker_dirty, &worker_signal, Duration::from_millis(60));
+                tx.send(worker_dirty.swap(false, Ordering::SeqCst)).unwrap();
+            }
+        });
+
+        let first_mark = Instant::now();
+        for _ in 0..3 {
+            request_flush(&dirty, &signal);
+        }
+        assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        assert!(first_mark.elapsed() >= Duration::from_millis(60));
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "sin nuevos cambios no debe haber otro flush");
+
+        request_flush(&dirty, &signal);
+        assert!(rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn flusher_retries_dirty_after_failure_without_another_notification() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dirty = AtomicBool::new(false);
+        let signal = (Mutex::new(()), Condvar::new());
+        request_flush(&dirty, &signal);
+        wait_for_flush(&dirty, &signal, Duration::from_millis(10));
+        assert!(dirty.swap(false, Ordering::SeqCst));
+
+        // flush_pending_raw restaura DIRTY ante un fallo; no envía un aviso nuevo.
+        dirty.store(true, Ordering::SeqCst);
+        let retry_started = Instant::now();
+        wait_for_flush(&dirty, &signal, Duration::from_millis(10));
+        assert!(retry_started.elapsed() >= Duration::from_millis(10));
+        assert!(dirty.swap(false, Ordering::SeqCst));
+    }
 
     #[test]
     fn flush_fallido_restaura_dirty_y_reintenta() {

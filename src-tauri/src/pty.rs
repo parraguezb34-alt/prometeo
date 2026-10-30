@@ -22,6 +22,8 @@ const EXIT_RETAIN: Duration = Duration::from_secs(60);
 
 /// Cada cuánto, como mucho, se manda a la interfaz lo que escribió una terminal (~60 por segundo).
 const FLUSH_MS: u64 = 16;
+/// Cada cuánto se mira si el hijo murió: en reposo cada terminal despierta solo esto.
+const EXIT_POLL: Duration = Duration::from_millis(2500);
 
 /// Lo que una terminal escribió y aún no se mandó a la interfaz.
 #[derive(Default)]
@@ -460,7 +462,7 @@ pub async fn term_spawn(
     let monitor_map = state.0.clone();
     std::thread::spawn(move || {
         loop {
-            std::thread::sleep(Duration::from_millis(500));
+            std::thread::sleep(EXIT_POLL);
             let registered = monitor_map.lock().is_ok_and(|sessions| sessions.contains_key(&monitor_id));
             if !registered {
                 return;

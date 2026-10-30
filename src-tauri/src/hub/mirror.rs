@@ -17,6 +17,8 @@ use std::time::Duration;
 use tauri::AppHandle;
 
 const TICK: Duration = Duration::from_secs(3);
+/// Sin OpenCode ni Antigravity conectados se consulta SQLite mucho menos.
+const IDLE_TICK: Duration = Duration::from_secs(20);
 const REPLY_CAP: usize = 6000;
 
 struct Ev {
@@ -45,9 +47,14 @@ struct State {
 pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
         let mut st = State::default();
+        let mut wait = TICK;
         loop {
-            std::thread::sleep(TICK);
-            let Some(project) = hub::with_inner(&app, |i| i.project.clone()).flatten() else {
+            std::thread::sleep(wait);
+            let Some((project, mirrored)) = hub::with_inner(&app, |i| (i.project.clone(), mirrored_online(i))) else {
+                continue;
+            };
+            wait = if mirrored { TICK } else { IDLE_TICK };
+            let Some(project) = project else {
                 continue;
             };
             if project.trim().is_empty() {
@@ -68,6 +75,11 @@ pub fn start(app: AppHandle) {
             hub::notify_ui();
         }
     });
+}
+
+/// ¿Hay algún agente cuyo historial se copia de SQLite?
+fn mirrored_online(inner: &hub::HubInner) -> bool {
+    inner.agents.values().any(|a| a.name.starts_with("opencode") || a.name.starts_with("antigravity"))
 }
 
 /// Sesión del hub del agente (para que el evento cuente como suyo), o una genérica.
