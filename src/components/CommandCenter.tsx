@@ -74,6 +74,7 @@ import { AgentQuickCmds, fmtTokens } from "./AgentCard";
 import { ChatView } from "./ChatView";
 import { AskDock } from "./AskDock";
 import { formatQuote } from "../lib/quote";
+import { useVisibleInterval } from "../lib/useVisibleInterval";
 import type { LiveAgent } from "./ChatView";
 import { ChatsSidebar } from "./ChatsSidebar";
 import { DestPicker } from "./DestPicker";
@@ -254,21 +255,28 @@ export function CommandCenter() {
     teamDetect().then(setDetect).catch(() => {});
   }, []);
 
+  const lastDetect = useRef(Date.now());
+  // Los cambios llegan por evento; esto es solo el respaldo (10 s visible, 60 s oculta) y los CLIs instalados (~30 s).
+  useVisibleInterval(
+    () => {
+      refresh();
+      const now = Date.now();
+      if (now - lastDetect.current >= 30_000) {
+        lastDetect.current = now;
+        refreshDetect();
+      }
+    },
+    10_000,
+    60_000
+  );
+
   useEffect(() => {
     refresh();
     refreshDetect();
     teamDetails().then((d) => setHubUrl(d.url)).catch(() => {});
     const unlisten = onTeamUpdate(refresh);
-    // Los cambios llegan por evento; esto es solo el respaldo (cada 10 s) y los CLIs instalados (~30 s).
-    let tick = 0;
-    const interval = window.setInterval(() => {
-      refresh();
-      tick += 1;
-      if (tick % 3 === 0) refreshDetect();
-    }, 10_000);
     return () => {
       unlisten.then((f) => f());
-      window.clearInterval(interval);
       if (flashTimer.current !== undefined) window.clearTimeout(flashTimer.current);
     };
   }, [refresh, refreshDetect]);
@@ -1741,46 +1749,43 @@ export function CommandCenter() {
   const projectRef = useRef(project);
   projectRef.current = project;
   const trustedRef = useRef(new Map<string, number>());
-  useEffect(() => {
-    const scan = () => {
-      const next: Record<string, TermPrompt> = {};
-      for (const p of getLayout().panels) {
-        if (p.kind !== "terminal" || !p.cmd || !p.sessionId) continue;
-        const screen = readScreen(p.sessionId);
-        const trust = detectTrust(screen, projectRef.current);
-        if (trust) {
-          const at = trustedRef.current.get(p.sessionId) ?? 0;
-          if (Date.now() - at > 4000) {
-            trustedRef.current.set(p.sessionId, Date.now());
-            void termWrite(p.sessionId, trust).catch(() => {});
-          }
-          continue;
+  const scan = () => {
+    const next: Record<string, TermPrompt> = {};
+    for (const p of getLayout().panels) {
+      if (p.kind !== "terminal" || !p.cmd || !p.sessionId) continue;
+      const screen = readScreen(p.sessionId);
+      const trust = detectTrust(screen, projectRef.current);
+      if (trust) {
+        const at = trustedRef.current.get(p.sessionId) ?? 0;
+        if (Date.now() - at > 4000) {
+          trustedRef.current.set(p.sessionId, Date.now());
+          void termWrite(p.sessionId, trust).catch(() => {});
         }
-        const found = detectPrompt(screen);
-        if (found) next[agentKeyFromCmd(p.cmd)] = found;
+        continue;
       }
-      const key = Object.entries(next)
-        .map(([a, q]) => `${a}:${q.key}`)
-        .sort()
-        .join("\n");
-      if (key === promptKeyRef.current) return;
-      // Avisa de las nuevas (no de las que ya estaban).
-      const before = promptKeyRef.current;
-      promptKeyRef.current = key;
-      setTermPrompts(next);
-      if (loadFlag(NOTIFY_KEY, true) && getSettings().notify.ask) {
-        for (const [a, q] of Object.entries(next)) {
-          if (!before.includes(`${a}:${q.key}`))
-            notify(`${agentLabel(a)} necesita tu permiso`, [q.title, ...q.detail].join(" · ").slice(0, 180), {
-              agent: a,
-              kind: "ask",
-            });
-        }
+      const found = detectPrompt(screen);
+      if (found) next[agentKeyFromCmd(p.cmd)] = found;
+    }
+    const key = Object.entries(next)
+      .map(([a, q]) => `${a}:${q.key}`)
+      .sort()
+      .join("\n");
+    if (key === promptKeyRef.current) return;
+    // Avisa de las nuevas (no de las que ya estaban).
+    const before = promptKeyRef.current;
+    promptKeyRef.current = key;
+    setTermPrompts(next);
+    if (loadFlag(NOTIFY_KEY, true) && getSettings().notify.ask) {
+      for (const [a, q] of Object.entries(next)) {
+        if (!before.includes(`${a}:${q.key}`))
+          notify(`${agentLabel(a)} necesita tu permiso`, [q.title, ...q.detail].join(" · ").slice(0, 180), {
+            agent: a,
+            kind: "ask",
+          });
       }
-    };
-    const id = window.setInterval(scan, 1000);
-    return () => window.clearInterval(id);
-  }, []);
+    }
+  };
+  useVisibleInterval(scan, 1000, 5000);
 
   /** Contesta desde el chat la pregunta que un agente tiene en su terminal. */
   const answerPrompt = async (agent: string, keys: string) => {

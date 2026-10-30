@@ -19,6 +19,7 @@ import { parseNotice, splitOrders } from "../lib/notices";
 import type { Notice } from "../lib/notices";
 import { doingOf, statusEs, stepOf, workSummary } from "../lib/steps";
 import { truncateQuote } from "../lib/quote";
+import { useVisibleInterval } from "../lib/useVisibleInterval";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import { Markdown } from "./Markdown";
@@ -535,13 +536,9 @@ export function ChatView({
     return null;
   }, [rows]);
   const ticking = busy.size > 0 || (!!lastUser && Date.now() - lastUser.e.ts_ms < 10 * 60_000);
-  useEffect(() => {
-    if (!ticking) return;
-    // Cada 15 s basta para los acuses («Enviado», «Recibido»…); el cronómetro de «Pensando…» va
-    // en su propio componente y es lo único que se repinta cada segundo.
-    const id = window.setInterval(() => setNow(Date.now()), 15_000);
-    return () => window.clearInterval(id);
-  }, [ticking]);
+  // Cada 15 s basta para los acuses («Enviado», «Recibido»…); el cronómetro de «Pensando…» va
+  // en su propio componente y es lo único que se repinta cada segundo. Pausado con la ventana oculta.
+  useVisibleInterval(() => setNow(Date.now()), ticking ? 15_000 : null, null);
 
   // Solo se anima lo que llega después de abrir la conversación, no todo el historial.
   const born = useRef<{ key: string; keys: Set<string>; at: number }>({ key: "", keys: new Set(), at: 0 });
@@ -1397,9 +1394,6 @@ export function ChatView({
 /** Cronómetro que se repinta solo él cada segundo (no todo el chat). */
 function LiveClock({ since }: { since: number }) {
   const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
+  useVisibleInterval(() => setNow(Date.now()), 1000, null);
   return <span className="cv-think-clock">{clock(now - since)}</span>;
 }

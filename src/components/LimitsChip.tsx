@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { agentColor, agentLabel, ago } from "../lib/team";
 import { fmtReset, level, windowLabel, worst } from "../lib/limits";
 import type { AgentLimits } from "../lib/limits";
+import { useVisibleInterval } from "../lib/useVisibleInterval";
 import { Icon } from "./Icon";
 
 /** Orden fijo: primero Claude, luego OpenCode y Antigravity. */
@@ -32,12 +33,8 @@ export function LimitsChip({
 }) {
   const [open, setOpen] = useState(false);
   const [, tick] = useState(0);
-  // Los «se reinicia en…» avanzan solos mientras el panel está abierto.
-  useEffect(() => {
-    if (!open) return;
-    const id = window.setInterval(() => tick((n) => n + 1), 30_000);
-    return () => window.clearInterval(id);
-  }, [open]);
+  // Los «se reinicia en…» avanzan solos mientras el panel está abierto (pausado con la ventana oculta).
+  useVisibleInterval(() => tick((n) => n + 1), open ? 30_000 : null, null);
 
   const entries = Object.entries(limits ?? {})
     .filter(([, l]) => l.windows.length > 0)

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { onPtyData } from "./pty";
 import { DIALOG, SUBMIT_CHECK_MS, bracketedAfter, cleanTerm, needsResubmit } from "./submit";
+import { useVisibleInterval } from "./useVisibleInterval";
 
 /**
  * Qué está haciendo cada agente ahora mismo, leído de su terminal. Al ponerse
@@ -147,30 +148,32 @@ export function useTermActivity(): Map<string, Activity> {
       lastOut.set(sid, t.lastMs);
       tracks.current.set(sid, t);
     });
-    const id = window.setInterval(() => {
-      const now = Date.now();
-      const next = new Map<string, Activity>();
-      let changed = false;
-      for (const [sid, t] of tracks.current) {
-        if (now - t.lastMs > QUIET_MS) t.armed = false;
-        const busy = t.armed;
-        if (busy && !t.busy) t.since = now;
-        const status = busy ? lastPhrase(t.tail) : "";
-        if (busy !== t.busy || status !== t.status) changed = true;
-        t.busy = busy;
-        t.status = status;
-        next.set(sid, { busy, since: t.since, status });
-      }
-      if (changed || next.size !== sizeRef.current) {
-        sizeRef.current = next.size;
-        setSnap(next);
-      }
-    }, 1000);
     return () => {
       un.then((f) => f());
-      window.clearInterval(id);
     };
   }, []);
+
+  const tick = () => {
+    const now = Date.now();
+    const next = new Map<string, Activity>();
+    let changed = false;
+    for (const [sid, t] of tracks.current) {
+      if (now - t.lastMs > QUIET_MS) t.armed = false;
+      const busy = t.armed;
+      if (busy && !t.busy) t.since = now;
+      const status = busy ? lastPhrase(t.tail) : "";
+      if (busy !== t.busy || status !== t.status) changed = true;
+      t.busy = busy;
+      t.status = status;
+      next.set(sid, { busy, since: t.since, status });
+    }
+    if (changed || next.size !== sizeRef.current) {
+      sizeRef.current = next.size;
+      setSnap(next);
+    }
+  };
+  // Oculta no se pausa: el reparto y el buzón dependen de saber quién quedó libre.
+  useVisibleInterval(tick, 1000, 5000);
 
   return snap;
 }
