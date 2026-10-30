@@ -3,7 +3,9 @@ import type { Skill } from "../lib/skills";
 import { findSkill } from "../lib/skills";
 import type { TermPrompt } from "../lib/prompts";
 import { agentLabel } from "../lib/team";
-import type { QAnswer, TeamQuestion } from "../lib/team";
+import type { QAnswer, QItem, TeamQuestion } from "../lib/team";
+import { changeQuestionOther, chooseQuestionOption, emptyQuestionPicks, questionAnswers, questionPickReady, questionSummary } from "../lib/askDock";
+import type { QuestionPick } from "../lib/askDock";
 import { Icon } from "./Icon";
 
 /**
@@ -11,7 +13,67 @@ import { Icon } from "./Icon";
  * sus opciones para elegir o escribir otra, y las skills que propone instalar.
  */
 
-type Pick = { choices: string[]; other: string; otherOn: boolean };
+/** Opciones de un paso, compartidas por la tarjeta y el panel sobre el compositor. */
+export function QuestionOptions({
+  item, pick, index, busy, activeOption, onChoose, onOther, onEnter,
+}: {
+  item: QItem;
+  pick: QuestionPick;
+  index: number;
+  busy: boolean;
+  activeOption?: number;
+  onChoose: (label: string) => void;
+  onOther: (patch: Partial<QuestionPick>) => void;
+  onEnter: () => void;
+}) {
+  return (
+    <fieldset className="qa-q">
+      <legend>
+        {item.header && <span className="qa-tag">{item.header}</span>}
+        {item.question}
+        {item.multi && <small>Puedes elegir varias</small>}
+      </legend>
+      <div className="qa-opts" role={item.multi ? "group" : "radiogroup"}>
+        {item.options.map((option, k) => {
+          const on = pick.choices.includes(option.label);
+          return (
+            <button key={option.label} type="button" className="qa-opt"
+              role={item.multi ? "checkbox" : "radio"} aria-checked={on}
+              data-on={on ? "1" : "0"} data-kbd={activeOption === k ? "1" : undefined} disabled={busy}
+              onClick={() => onChoose(option.label)}
+              style={{ animationDelay: `${index * 60 + k * 40}ms` }}
+            >
+              <span className="qa-mark" data-multi={item.multi ? "1" : "0"}>
+                {on && <Icon name="check" size={11} />}
+              </span>
+              <span className="qa-opt-t">
+                <b>{option.label}</b>
+                {option.description && <small>{option.description}</small>}
+              </span>
+            </button>
+          );
+        })}
+        <div className="qa-other" data-on={pick.otherOn ? "1" : "0"}>
+          {pick.otherOn ? (
+            <input autoFocus value={pick.other} placeholder="Escribe tu respuesta…"
+              onChange={(e) => onOther({ other: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); onEnter(); }
+                if (e.key === "Escape") onOther({ otherOn: false, other: "" });
+              }}
+              disabled={busy}
+            />
+          ) : (
+            <button type="button" className="qa-other-btn" onClick={() => onOther({ otherOn: true })} disabled={busy}>
+              <Icon name="pencil" size={12} />
+              Otra respuesta…
+            </button>
+          )}
+        </div>
+      </div>
+    </fieldset>
+  );
+}
 
 export function QuestionCard({
   q,
@@ -20,31 +82,17 @@ export function QuestionCard({
   q: TeamQuestion;
   onAnswer: (id: number, answers: QAnswer[] | null) => Promise<void>;
 }) {
-  const [picks, setPicks] = useState<Pick[]>(() => q.items.map(() => ({ choices: [], other: "", otherOn: false })));
+  const [picks, setPicks] = useState(() => emptyQuestionPicks(q));
   const [busy, setBusy] = useState(false);
   const [warnMissing, setWarnMissing] = useState(false);
   const done = q.answers != null || q.dismissed;
   const who = agentLabel(q.agent);
 
-  const toggle = (i: number, label: string) =>
-    setPicks((cur) =>
-      cur.map((p, j) => {
-        if (j !== i) return p;
-        if (q.items[i].multi) {
-          const has = p.choices.includes(label);
-          return { ...p, choices: has ? p.choices.filter((c) => c !== label) : [...p.choices, label] };
-        }
-        return { ...p, choices: [label], otherOn: false, other: "" };
-      }),
-    );
-  const setOther = (i: number, patch: Partial<Pick>) =>
-    setPicks((cur) =>
-      cur.map((p, j) =>
-        j !== i ? p : { ...p, ...patch, choices: !q.items[i].multi && patch.otherOn ? [] : p.choices },
-      ),
-    );
+  const toggle = (i: number, label: string) => setPicks((cur) => chooseQuestionOption(q, cur, i, label));
+  const setOther = (i: number, patch: Partial<(typeof picks)[number]>) =>
+    setPicks((cur) => changeQuestionOther(q, cur, i, patch));
 
-  const ready = picks.every((p) => p.choices.length > 0 || (p.otherOn && p.other.trim()));
+  const ready = picks.every(questionPickReady);
   const send = async (answers: QAnswer[] | null) => {
     setBusy(true);
     try {
@@ -53,40 +101,13 @@ export function QuestionCard({
       setBusy(false);
     }
   };
-  const submit = () =>
-    void send(
-      q.items.map((it, i) => ({
-        question: it.question,
-        choices: picks[i].choices,
-        other: picks[i].otherOn ? picks[i].other.trim() : "",
-      })),
-    );
+  const submit = () => void send(questionAnswers(q, picks));
 
   if (done) {
     return (
-      <div className="qa" data-done="1">
-        <div className="qa-head">
-          <span className="qa-ic" data-done="1">
-            <Icon name={q.dismissed ? "x" : "check"} size={12} />
-          </span>
-          <b>{q.dismissed ? `Preferiste no contestar a ${who}` : `Contestaste a ${who}`}</b>
-        </div>
-        {!q.dismissed && (
-          <ul className="qa-sum">
-            {q.items.map((it, i) => {
-              const a = q.answers?.find((x) => x.question === it.question) ?? q.answers?.[i];
-              const picked = [...(a?.choices ?? []), ...(a?.other ? [a.other] : [])];
-              return (
-                <li key={i}>
-                  <span>{it.header || it.question}</span>
-                  <span className="qa-chips">
-                    {picked.length ? picked.map((p) => <i key={p}>{p}</i>) : <em>sin respuesta</em>}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+      <div className="qa-brief" title={questionSummary(q)}>
+        <Icon name={q.dismissed ? "x" : "check"} size={12} />
+        <span>{q.dismissed ? `Preferiste no contestar a ${who}` : `Contestaste a ${who}: ${questionSummary(q)}`}</span>
       </div>
     );
   }
@@ -107,66 +128,14 @@ export function QuestionCard({
       </div>
       {q.context && <p className="qa-ctx">{q.context}</p>}
       {q.items.map((it, i) => (
-        <fieldset className="qa-q" key={i}>
-          <legend>
-            {it.header && <span className="qa-tag">{it.header}</span>}
-            {it.question}
-            {it.multi && <small>Puedes elegir varias</small>}
-          </legend>
-          <div className="qa-opts" role={it.multi ? "group" : "radiogroup"}>
-            {it.options.map((o, k) => {
-              const on = picks[i].choices.includes(o.label);
-              return (
-                <button
-                  key={o.label}
-                  className="qa-opt"
-                  role={it.multi ? "checkbox" : "radio"}
-                  aria-checked={on}
-                  data-on={on ? "1" : "0"}
-                  disabled={busy}
-                  onClick={() => toggle(i, o.label)}
-                  style={{ animationDelay: `${i * 60 + k * 40}ms` }}
-                >
-                  <span className="qa-mark" data-multi={it.multi ? "1" : "0"}>
-                    {on && <Icon name="check" size={11} />}
-                  </span>
-                  <span className="qa-opt-t">
-                    <b>{o.label}</b>
-                    {o.description && <small>{o.description}</small>}
-                  </span>
-                </button>
-              );
-            })}
-            <div className="qa-other" data-on={picks[i].otherOn ? "1" : "0"}>
-              {picks[i].otherOn ? (
-                <input
-                  autoFocus
-                  value={picks[i].other}
-                  placeholder="Escribe tu respuesta…"
-                  title={ready ? "Pulsa Enter para enviar respuestas" : "Responde a todas las preguntas para poder enviar"}
-                  onChange={(e) => setOther(i, { other: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      if (ready) {
-                        submit();
-                      } else {
-                        setWarnMissing(true);
-                        window.setTimeout(() => setWarnMissing(false), 2500);
-                      }
-                    }
-                    if (e.key === "Escape") setOther(i, { otherOn: false, other: "" });
-                  }}
-                  disabled={busy}
-                />
-              ) : (
-                <button className="qa-other-btn" onClick={() => setOther(i, { otherOn: true })} disabled={busy}>
-                  <Icon name="pencil" size={12} />
-                  Otra respuesta…
-                </button>
-              )}
-            </div>
-          </div>
-        </fieldset>
+        <QuestionOptions key={i} item={it} pick={picks[i]} index={i} busy={busy}
+          onChoose={(label) => toggle(i, label)}
+          onOther={(patch) => setOther(i, patch)}
+          onEnter={() => {
+            if (ready) submit();
+            else { setWarnMissing(true); window.setTimeout(() => setWarnMissing(false), 2500); }
+          }}
+        />
       ))}
       <div className="qa-foot">
         <span
@@ -194,11 +163,13 @@ export function PromptCard({
   prompt,
   onPick,
   onTerminal,
+  activeOption,
 }: {
   agent: string;
   prompt: TermPrompt;
   onPick: (keys: string) => void;
   onTerminal?: () => void;
+  activeOption?: number;
 }) {
   const [sent, setSent] = useState<string | null>(null);
   return (
@@ -229,11 +200,12 @@ export function PromptCard({
         </pre>
       )}
       <div className="tp-opts">
-        {prompt.options.map((o) => (
+        {prompt.options.map((o, index) => (
           <button
             key={o.label}
             className="tp-opt"
             data-tone={o.tone}
+            data-kbd={activeOption === index ? "1" : undefined}
             disabled={sent !== null}
             onClick={() => {
               setSent(o.label);

@@ -72,6 +72,7 @@ import { getSettings, stallConfig, rememberProject, renameRecentProject, useSett
 import type { Chat } from "../lib/chats";
 import { AgentQuickCmds, fmtTokens } from "./AgentCard";
 import { ChatView } from "./ChatView";
+import { AskDock } from "./AskDock";
 import type { LiveAgent } from "./ChatView";
 import { ChatsSidebar } from "./ChatsSidebar";
 import { DestPicker } from "./DestPicker";
@@ -2496,6 +2497,9 @@ export function CommandCenter() {
 
   const composer = (
     <div className="cc-comp">
+      <AskDock questions={openQuestions} prompts={termPrompts} onAnswer={answerQuestion}
+        onPick={(agent, keys) => void answerPrompt(agent, keys)}
+        onTerminal={openTerm} />
       <div
         className="cc-cbox"
         data-drop={dragOver ? "1" : "0"}
@@ -2647,9 +2651,6 @@ export function CommandCenter() {
     </div>
   );
 
-  // Agentes que esperan algo de ti: un permiso en su terminal (aunque no haya avisado el hub).
-  const waiting = blocked.length + Object.keys(termPrompts).filter((a) => !blocked.some((b) => b.name === a)).length;
-
   return (
     <div className="cc">
       <header className="cc-top" data-tauri-drag-region>
@@ -2671,31 +2672,6 @@ export function CommandCenter() {
         </div>
 
         <TeamStrip agents={roster} states={states} onOpen={() => setOverlay("team")} />
-        {waiting + openQuestions.length > 0 && (
-          <button
-            className="cc-alert"
-            onClick={() => {
-              // Las preguntas se contestan en el chat; los permisos, en su terminal (tareas).
-              if (openQuestions.length > 0 || Object.keys(termPrompts).length > 0) {
-                setOverlay(null);
-                setView("feed");
-              } else {
-                setDrawerTab("tasks");
-                setOverlay("tasks");
-              }
-            }}
-          >
-            <Icon name={openQuestions.length > 0 ? "msg" : "warn"} size={14} />
-            {openQuestions.length > 0 && waiting === 0
-              ? openQuestions.length === 1
-                ? "Una pregunta para ti"
-                : `${openQuestions.length} preguntas para ti`
-              : waiting + openQuestions.length === 1
-                ? "1 espera tu respuesta"
-                : `${waiting + openQuestions.length} esperan tu respuesta`}
-          </button>
-        )}
-
         <div className="cc-top-r" data-tauri-drag-region>
           <UpdateChip working={workingNow} onError={(m) => say(m, true)} />
           <button
@@ -2794,7 +2770,6 @@ export function CommandCenter() {
               onInterrupt={(n) => void interrupt(n)}
               questions={state?.questions}
               onAnswer={answerQuestion}
-              onPrompt={(a, keys) => void answerPrompt(a, keys)}
               onPlan={decidePlan}
               skills={skillLib}
               onSkill={skillFromChat}

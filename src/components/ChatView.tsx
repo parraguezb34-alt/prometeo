@@ -7,7 +7,7 @@ import { stampLabel } from "../lib/chats";
 import { agentColor, agentInitial, agentLabel, shortPath } from "../lib/team";
 import type { QAnswer, TeamEvent, TeamQuestion } from "../lib/team";
 import type { Skill } from "../lib/skills";
-import { PromptCard, QuestionCard, SkillCard } from "./AskCards";
+import { QuestionCard, SkillCard } from "./AskCards";
 import type { TermPrompt } from "../lib/prompts";
 
 const NO_QUESTIONS: TeamQuestion[] = [];
@@ -59,11 +59,10 @@ type Props = {
   /** Preguntas de los agentes (team_ask_user) y cómo contestarlas. */
   questions?: TeamQuestion[];
   onAnswer?: (id: number, answers: QAnswer[] | null) => Promise<void>;
+  onPrompt?: (agent: string, keys: string) => void;
   /** Biblioteca de skills (para las propuestas de los agentes) y cómo instalar una. */
   skills?: Skill[];
   onSkill?: (source: string, agent: string) => Promise<void>;
-  /** Teclas para contestar la pregunta que un agente tiene en su terminal. */
-  onPrompt?: (agent: string, keys: string) => void;
   /** Modo plan: apruebas (se reparten) o descartas las tareas que esperan tu OK. */
   onPlan?: (op: "approve" | "discard") => Promise<void>;
   /** Para la página de pruebas: de dónde salen las imágenes (por defecto, del disco vía Tauri). */
@@ -380,7 +379,6 @@ export function ChatView({
   onAnswer = noop,
   skills = NO_SKILLS,
   onSkill = noop,
-  onPrompt = () => {},
   onPlan,
   loadImage,
 }: Props) {
@@ -760,7 +758,9 @@ export function ChatView({
     if (part.k === "note" && e.kind === "question") {
       const id = Number(/^❓ q(\d+)/.exec(e.text)?.[1] ?? 0);
       const q = questions.find((x) => x.id === id);
-      if (q) return <QuestionCard key={part.key} q={q} onAnswer={onAnswer} />;
+      if (q) return q.answers || q.dismissed
+        ? <QuestionCard key={part.key} q={q} onAnswer={onAnswer} />
+        : null;
     }
     if (part.k === "note" && e.kind === "skill" && e.files[0]) {
       return (
@@ -836,17 +836,7 @@ export function ChatView({
    * o la frase de su CLI), cuánto lleva y cómo pararlo.
    */
   const thinking = (l: LiveAgent) => {
-    if (l.prompt) {
-      return (
-        <PromptCard
-          key={`prompt-${l.name}-${l.prompt.key}`}
-          agent={l.name}
-          prompt={l.prompt}
-          onPick={(keys) => onPrompt(l.name, keys)}
-          onTerminal={l.hasTerminal ? () => onTerminal(l.name) : undefined}
-        />
-      );
-    }
+    if (l.prompt) return null;
     const act = l.lastAction ? doingOf(l.lastAction) : null;
     const phrase = statusEs(l.status);
     const label = act && !phrase ? `${act.verb} ${act.detail}`.trim() : phrase || "Pensando…";
@@ -1174,6 +1164,13 @@ export function ChatView({
         </div>
       );
     }
+    // Las preguntas abiertas viven solo en el panel sobre el compositor.
+    if (r.parts.every((part) => {
+      if (part.k !== "note" || part.e.kind !== "question") return false;
+      const id = Number(/^❓ q(\d+)/.exec(part.e.text)?.[1] ?? 0);
+      const q = questions.find((question) => question.id === id);
+      return !q?.answers && !q?.dismissed;
+    })) return null;
     // Turno de un agente.
     const l = busy.get(r.agent);
     const isLatest = lastTurnOf.get(r.agent) === r.key;
@@ -1197,7 +1194,7 @@ export function ChatView({
   };
 
   // Agentes trabajando cuyo último turno no es lo último del chat: un turno provisional al final.
-  const pending = [...busy.values()].filter((l) => tailAgent !== l.name).sort((a, b) => a.since - b.since);
+  const pending = [...busy.values()].filter((l) => tailAgent !== l.name && !l.prompt).sort((a, b) => a.since - b.since);
 
   return (
     <div className="cv-wrap">
