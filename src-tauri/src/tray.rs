@@ -17,6 +17,8 @@ pub fn show_main(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        // La interfaz vuelve a su ritmo normal (WebView2 no lo avisa con visibilitychange).
+        let _ = app.emit_to("main", "app://mostrada", ());
     }
 }
 

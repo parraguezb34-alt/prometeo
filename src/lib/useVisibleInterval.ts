@@ -1,4 +1,6 @@
 import { useEffect, useRef } from "react";
+// Con extensión: las pruebas cargan este módulo compilado en Node, que no adivina el «.js».
+import { windowVisibility } from "./windowVisibility.js";
 
 export type VisibleIntervalFn = () => void;
 
@@ -92,7 +94,7 @@ export function startVisibleInterval(
  * Hook useVisibleInterval(fn, visibleMs, hiddenMs | null).
  * - hiddenMs=null significa pausa con la ventana oculta.
  * - Usa la última fn mediante un ref.
- * - Escucha visibilitychange y, al volver a visible, ejecuta fn() inmediatamente y reprograma.
+ * - Escucha si la ventana se oculta o se minimiza (windowVisibility) y, al volver a visible, ejecuta fn() inmediatamente y reprograma.
  * - Limpia el listener y el timer al desmontar.
  */
 export function useVisibleInterval(
@@ -105,6 +107,6 @@ export function useVisibleInterval(
 
   useEffect(() => {
     if (visibleMs === null || visibleMs <= 0) return;
-    return startVisibleInterval(() => fnRef.current(), visibleMs, hiddenMs);
+    return startVisibleInterval(() => fnRef.current(), visibleMs, hiddenMs, windowVisibility);
   }, [visibleMs, hiddenMs]);
 }

@@ -103,5 +103,6 @@ pub async fn aviso_open(app: AppHandle, item: Aviso) {
         let _ = main.show();
         let _ = main.set_focus();
     }
+    let _ = app.emit_to("main", "app://mostrada", ());
     let _ = app.emit_to("main", "aviso://open", item);
 }
