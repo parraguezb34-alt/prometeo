@@ -39,8 +39,10 @@ function QuestionStep({ q, onAnswer }: {
   const choose = (label: string) => {
     if (busy) return;
     const next = chooseQuestionOption(q, picks, step, label);
+    // Elegir solo marca: se avanza con Continuar o Enter, así da tiempo a cambiar de opción.
     setPicks(next);
-    if (!item.multi) advance(next);
+    const at = item.options.findIndex((option) => option.label === label);
+    if (at >= 0) setActiveOption(at);
   };
   const other = (patch: Partial<QuestionPick>) =>
     setPicks((current) => changeQuestionOther(q, current, step, patch));
@@ -59,8 +61,10 @@ function QuestionStep({ q, onAnswer }: {
       setActiveOption((i) => Math.max(0, i - 1));
     } else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) {
       e.preventDefault();
-      if (item.multi && ready) advance(picks);
-      else if (item.options[activeOption]) choose(item.options[activeOption].label);
+      const active = item.options[activeOption];
+      // Enter sobre la opción ya marcada (o en multi con algo marcado) avanza; si no, la marca.
+      if (ready && (item.multi || !active || pick.choices.includes(active.label))) advance(picks);
+      else if (active) choose(active.label);
     }
   };
 
