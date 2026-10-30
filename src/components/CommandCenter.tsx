@@ -73,6 +73,7 @@ import type { Chat } from "../lib/chats";
 import { AgentQuickCmds, fmtTokens } from "./AgentCard";
 import { ChatView } from "./ChatView";
 import { AskDock } from "./AskDock";
+import { formatQuote } from "../lib/quote";
 import type { LiveAgent } from "./ChatView";
 import { ChatsSidebar } from "./ChatsSidebar";
 import { DestPicker } from "./DestPicker";
@@ -168,6 +169,11 @@ export function CommandCenter() {
   const [diffTask, setDiffTask] = useState<number | null>(null);
   const [previewRel, setPreviewRel] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [quote, setQuote] = useState<{ text: string; agent: string } | null>(null);
+  const handleQuote = useCallback((q: { text: string; agent: string }) => {
+    setQuote(q);
+    setTimeout(() => areaRef.current?.focus(), 0);
+  }, []);
   /** Adjuntos del compositor (imágenes, archivos, texto largo pegado), ya listos en disco. */
   const [atts, setAtts] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -523,6 +529,11 @@ export function CommandCenter() {
     );
     return extra.length > 0 ? [...list, ...extra].sort((a, b) => a.ts_ms - b.ts_ms) : list;
   }, [state, sel, lineage, newImages, older]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cambiar de conversación limpia la cita activa.
+  useEffect(() => {
+    setQuote(null);
+  }, [activeChat?.id, selKey]);
 
   // Se escanea al abrir un chat o cuando el feed anuncia imágenes/una entrega; el temporizador
   // lento recupera capturas que un agente dejó en disco sin mencionarlas en el feed.
@@ -1175,6 +1186,10 @@ export function CommandCenter() {
       }
       body = m[2];
     }
+
+    // El título del chat sale de lo que escribiste, no de la cita.
+    const title = body.replace(/\s*\n+\s*/g, " ");
+    if (quote && quote.text.trim()) body = formatQuote(quote.text, body);
     const flat = body.replace(/\s*\n+\s*/g, " ");
 
     // Si estás viendo un chat cerrado, lo que escribas abre uno nuevo del mismo
@@ -1187,11 +1202,12 @@ export function CommandCenter() {
         await new Promise((r) => window.setTimeout(r, 1200));
       }
     }
-    if (chat) chats.autoTitle(chat.id, flat);
+    if (chat) chats.autoTitle(chat.id, title);
 
     const clear = () => {
       setDraft("");
       setAtts([]);
+      setQuote(null);
     };
 
     try {
@@ -2584,6 +2600,29 @@ export function CommandCenter() {
             e.currentTarget.value = "";
           }}
         />
+        {quote && (
+          <div className="cc-quote-strip">
+            <div className="cc-quote-body">
+              <span className="cc-quote-who">
+                <Icon name="reply" size={12} />
+                <span>Respondiendo a <b>{agentLabel(quote.agent) || quote.agent}</b></span>
+              </span>
+              <span className="cc-quote-tx">{quote.text}</span>
+            </div>
+            <button
+              type="button"
+              className="cc-quote-close"
+              onClick={() => {
+                setQuote(null);
+                areaRef.current?.focus();
+              }}
+              aria-label="Quitar cita"
+              title="Quitar cita"
+            >
+              <Icon name="x" size={12} />
+            </button>
+          </div>
+        )}
         <textarea
           onPaste={(e) => {
             const files = [...e.clipboardData.files];
@@ -2773,6 +2812,7 @@ export function CommandCenter() {
               onPlan={decidePlan}
               skills={skillLib}
               onSkill={skillFromChat}
+              onQuote={handleQuote}
               empty={
                 agentView ? (
                   <div className="cc-empty">

@@ -97,6 +97,7 @@ const PATHS: Record<string, ReactNode> = {
   play: <path d="M6 4l14 8-14 8z" />,
   stop: <rect x="6" y="6" width="12" height="12" rx="1.5" />,
   undo: <path d="M9 14 4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3" />,
+  reply: <path d="M9 17 4 12l5-5M4 12h11a5 5 0 0 1 5 5v1" />,
   redo: <path d="m15 14 5-5-5-5M20 9H9a5 5 0 0 0 0 10h3" />,
   external: <path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />,
   app: (

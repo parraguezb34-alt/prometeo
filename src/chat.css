@@ -2631,3 +2631,46 @@ ol.md-list li::marker {
 :root[data-motion="off"] .tp-ic {
   animation: none !important;
 }
+
+/* ---- botón flotante Responder sobre selección ----------------------------- */
+
+.cv-quote-btn {
+  position: fixed;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--surface);
+  color: var(--text-strong);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  user-select: none;
+  transform: translateX(-50%);
+  animation: cv-quote-pop 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.08s ease;
+}
+.cv-quote-btn:hover {
+  background: var(--raised-2);
+  border-color: var(--text-soft);
+}
+.cv-quote-btn:active {
+  transform: translateX(-50%) scale(0.96);
+}
+.cv-quote-btn .ic {
+  color: var(--accent);
+}
+@keyframes cv-quote-pop {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+}

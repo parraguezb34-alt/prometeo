@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { displayName, kindOf, splitAttachments } from "../lib/attach";
 import { stampLabel } from "../lib/chats";
@@ -18,6 +18,7 @@ import type { Part, Row, TaskInfo, Turn } from "../lib/timeline";
 import { parseNotice, splitOrders } from "../lib/notices";
 import type { Notice } from "../lib/notices";
 import { doingOf, statusEs, stepOf, workSummary } from "../lib/steps";
+import { truncateQuote } from "../lib/quote";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import { Markdown } from "./Markdown";
@@ -67,6 +68,7 @@ type Props = {
   onPlan?: (op: "approve" | "discard") => Promise<void>;
   /** Para la página de pruebas: de dónde salen las imágenes (por defecto, del disco vía Tauri). */
   loadImage?: (path: string, project: string | null) => Promise<string>;
+  onQuote?: (quote: { text: string; agent: string }) => void;
 };
 
 // ---- imágenes ------------------------------------------------------------------
@@ -381,6 +383,7 @@ export function ChatView({
   onSkill = noop,
   onPlan,
   loadImage,
+  onQuote,
 }: Props) {
   const load = loadImage ?? diskImage;
   const rows = useMemo(() => buildTimeline(events), [events]);
@@ -400,6 +403,108 @@ export function ChatView({
   const [copied, setCopied] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const lastCount = useRef(0);
+
+  type FloatingQuote = {
+    top: number;
+    left: number;
+    text: string;
+    agent: string;
+  } | null;
+  const [floatingQuote, setFloatingQuote] = useState<FloatingQuote>(null);
+  const floatBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const handleSelection = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      setFloatingQuote(null);
+      return;
+    }
+    const text = sel.toString().trim();
+    if (!text) {
+      setFloatingQuote(null);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const container = scrollRef.current;
+    if (!container) return;
+
+    const startEl =
+      range.startContainer instanceof Element
+        ? range.startContainer
+        : range.startContainer.parentElement;
+    if (!startEl || !container.contains(startEl)) {
+      setFloatingQuote(null);
+      return;
+    }
+
+    const rowEl = startEl.closest("[data-agent]");
+    const agent = rowEl?.getAttribute("data-agent") || "";
+
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      setFloatingQuote(null);
+      return;
+    }
+
+    const btnHeight = 32;
+    const gap = 6;
+    let top = rect.top - btnHeight - gap;
+    if (top < 10) {
+      top = rect.bottom + gap;
+    }
+    const left = Math.max(50, Math.min(window.innerWidth - 50, rect.left + rect.width / 2));
+
+    setFloatingQuote({
+      top,
+      left,
+      text: truncateQuote(text),
+      agent,
+    });
+  }, []);
+
+  useEffect(() => {
+    const onMouseUp = (e: MouseEvent) => {
+      if (floatBtnRef.current?.contains(e.target as Node)) return;
+      setTimeout(handleSelection, 10);
+    };
+    document.addEventListener("mouseup", onMouseUp);
+    return () => document.removeEventListener("mouseup", onMouseUp);
+  }, [handleSelection]);
+
+  useEffect(() => {
+    const onDocPointerDown = (e: PointerEvent) => {
+      if (floatBtnRef.current && !floatBtnRef.current.contains(e.target as Node)) {
+        setFloatingQuote(null);
+      }
+    };
+    document.addEventListener("pointerdown", onDocPointerDown);
+    return () => document.removeEventListener("pointerdown", onDocPointerDown);
+  }, []);
+
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+        setFloatingQuote(null);
+      }
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFloatingQuote(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    const onScrollHide = () => setFloatingQuote(null);
+    window.addEventListener("scroll", onScrollHide, true);
+    return () => window.removeEventListener("scroll", onScrollHide, true);
+  }, []);
 
   const busy = useMemo(() => new Map(live.filter((l) => l.busy).map((l) => [l.name, l])), [live]);
   const taskTitle = useMemo(() => new Map(tasks.map((t) => [t.id, t.title])), [tasks]);
@@ -452,6 +557,7 @@ export function ChatView({
   // ---- scroll: pegado al final como un chat --------------------------------------------
   const lastTop = useRef(0);
   const onScroll = () => {
+    if (floatingQuote) setFloatingQuote(null);
     const el = scrollRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -1046,7 +1152,7 @@ export function ChatView({
       sub = "Hasta que lo escriba, la tarea no se reparte";
     }
     return (
-      <div className="cv-notice" key={r.key} data-kind={n.kind} data-open={isOpen ? "1" : "0"} data-new={isNew(r.key)}>
+      <div className="cv-notice" key={r.key} data-agent={"by" in n ? n.by : (e.agent || "sistema")} data-kind={n.kind} data-open={isOpen ? "1" : "0"} data-new={isNew(r.key)}>
         <button
           className="cv-notice-head"
           onClick={() => body && toggle(r.key)}
@@ -1077,7 +1183,7 @@ export function ChatView({
 
   /** El líder devuelve una entrega: sus órdenes como lista, sin las instrucciones para el agente. */
   const renderFix = (key: string, e: TeamEvent, n: Extract<Notice, { kind: "fix" }>) => (
-    <div className="cv-fix" key={key} data-new={isNew(key)}>
+    <div className="cv-fix" key={key} data-agent={e.agent || "sistema"} data-new={isNew(key)}>
       <div className="cv-fix-head">
         <span className="cv-fix-ic">
           <Icon name="refresh" size={12} />
@@ -1115,7 +1221,7 @@ export function ChatView({
       const said = rest.replace(PLAN_PREFIX, "").trim();
       const to = e.kind === "broadcast" || !e.to ? "Al equipo" : `A ${agentLabel(e.to)}`;
       return (
-        <div className="cv-user" key={r.key} data-new={isNew(r.key)}>
+        <div className="cv-user" key={r.key} data-agent="tú" data-new={isNew(r.key)}>
           <div className="cv-user-meta">
             {plan && <span className="cv-tag">Plan</span>}
             {to}
@@ -1154,7 +1260,7 @@ export function ChatView({
               ? `Tú: ${e.text}`
               : e.text;
       return (
-        <div className="cv-sys" key={r.key} data-new={isNew(r.key)}>
+        <div className="cv-sys" key={r.key} data-agent={e.agent || "sistema"} data-new={isNew(r.key)}>
           <div className="cv-sys-line">
             <Icon name={e.kind === "image" ? "eye" : "list"} size={12} />
             <span>{text}</span>
@@ -1180,6 +1286,7 @@ export function ChatView({
       <div
         className="cv-turn"
         key={r.key}
+        data-agent={r.agent}
         data-new={isNew(r.key)}
         style={{ "--ac": agentColor(r.agent) } as CSSProperties}
       >
@@ -1213,6 +1320,7 @@ export function ChatView({
               <div
                 className="cv-turn"
                 key={`live-${l.name}`}
+                data-agent={l.name}
                 data-new="1"
                 data-provisional="1"
                 style={{ "--ac": agentColor(l.name) } as CSSProperties}
@@ -1263,6 +1371,24 @@ export function ChatView({
           onIndex={(i) => setBox((b) => (b ? { ...b, index: i } : b))}
           onClose={() => setBox(null)}
         />
+      )}
+      {floatingQuote && (
+        <button
+          ref={floatBtnRef}
+          type="button"
+          className="cv-quote-btn"
+          style={{ top: `${floatingQuote.top}px`, left: `${floatingQuote.left}px` }}
+          onMouseDown={(e) => {
+            e.preventDefault();
+          }}
+          onClick={() => {
+            onQuote?.({ text: floatingQuote.text, agent: floatingQuote.agent });
+            setFloatingQuote(null);
+          }}
+        >
+          <Icon name="reply" size={13} />
+          <span>Responder</span>
+        </button>
       )}
     </div>
   );
