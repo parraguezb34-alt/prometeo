@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, isRemote, listen } from "../lib/bridge";
 import { agentColor, agentInitial } from "../lib/team";
 import { onInAppAviso } from "../lib/notify";
 import type { Aviso } from "../lib/notify";
@@ -120,7 +119,11 @@ function useStack() {
 /** Avisos dentro de Prometeo (cuando lo estás mirando), arriba a la derecha. */
 export function InAppAvisos({ onOpen }: { onOpen: (a: Aviso) => void }) {
   const { items, add, close } = useStack();
-  useEffect(() => onInAppAviso(add), [add]);
+  const addVisible = useCallback((a: Aviso) => {
+    if (isRemote() && a.kind === "info" && /cuota|l[ií]mite/i.test(`${a.title} ${a.body}`)) return;
+    add(a);
+  }, [add]);
+  useEffect(() => onInAppAviso(addVisible), [addVisible]);
   if (items.length === 0) return null;
   return (
     <div className="av-stack av-inapp" aria-live="polite">

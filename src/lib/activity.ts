@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { isPrimary, remoteToken } from "./bridge";
 import { onPtyData } from "./pty";
 import { DIALOG, SUBMIT_CHECK_MS, bracketedAfter, cleanTerm, needsResubmit } from "./submit";
 import { useVisibleInterval } from "./useVisibleInterval";
@@ -115,8 +116,8 @@ export function useTermActivity(): Map<string, Activity> {
   const sizeRef = useRef(0);
 
   useEffect(() => {
-    // Fuera de la app de escritorio (Vite en un navegador) no hay terminales que escuchar.
-    if (!("__TAURI_INTERNALS__" in window)) return;
+    // Fuera de la app de escritorio solo hay terminales que escuchar con el acceso remoto (iPad).
+    if (!isPrimary() && !remoteToken()) return;
     const decoder = new TextDecoder();
     const un = onPtyData((bytes, sid) => {
       let text = "";

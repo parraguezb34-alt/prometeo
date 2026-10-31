@@ -1064,3 +1064,18 @@
   color: var(--faint);
   font-size: 11px;
 }
+
+/* Acceso remoto: el enlace con token es largo y el aviso tiene que leerse. */
+.st-remote-url {
+  word-break: break-all;
+}
+.st-remote-warn {
+  margin: 4px 16px 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.45;
+}

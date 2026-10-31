@@ -3,6 +3,7 @@ import { ago, errMsg } from "../../lib/team";
 import { appAbout, updateApply, updateCheck } from "../../lib/update";
 import type { UpdateInfo } from "../../lib/update";
 import { Icon } from "../Icon";
+import { isRemote } from "../../lib/bridge";
 
 /**
  * «Actualizar» arriba a la derecha: aparece cuando hay una versión compilada nueva. Al aceptar, Prometeo se cierra, se instala solo y se vuelve a abrir.
@@ -37,12 +38,14 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
     };
   }, [updAsk]);
   useEffect(() => {
+    if (isRemote()) return;
     void appAbout()
       .then((a) => setDev(!!a.dev))
       .catch(() => {});
   }, []);
 
   const check = () => {
+    if (isRemote()) return;
     setChecking(true);
     updateCheck()
       .then((u) => {
@@ -59,6 +62,7 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
 
   // Se mira al abrir, cada 45 s y al volver a la ventana (es solo comparar fechas de archivos).
   useEffect(() => {
+    if (isRemote()) return;
     check();
     const id = window.setInterval(check, 45_000);
     window.addEventListener("focus", check);
@@ -67,6 +71,7 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
       window.removeEventListener("focus", check);
     };
   }, []);
+  if (isRemote()) return null;
   const applyUpdate = async () => {
     setUpdBusy(true);
     try {

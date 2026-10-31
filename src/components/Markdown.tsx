@@ -1,4 +1,4 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "../lib/bridge";
 import { memo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 

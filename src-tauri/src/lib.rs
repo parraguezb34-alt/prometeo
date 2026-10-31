@@ -1,4 +1,5 @@
 mod aviso;
+mod autostart;
 mod cleanup;
 
 /// Argumentos del visor web (los mismos en `tauri.conf.json` y en la ventana de avisos): los de
@@ -13,8 +14,11 @@ pub mod hub;
 pub mod workspace;
 mod limits;
 mod project;
+mod pcstatus;
 mod pty;
 mod rename;
+mod remote;
+mod remote_files;
 mod research;
 pub mod skills;
 mod tray;
@@ -43,6 +47,9 @@ pub fn run() {
             if let Err(e) = hub::init(app.handle().clone()) {
                 errlog::log("hub", "No se pudo iniciar el hub del equipo", &e);
             }
+            // Un acceso remoto que ya estaba encendido no debe aceptar RPC antes de que `Hub`
+            // exista en el estado de Tauri (en especial `team_state` al abrir el enlace).
+            remote::init(app.handle().clone());
             // Las skills de esta versión de Prometeo al proyecto abierto (y su lista en CLAUDE.md y
             // AGENTS.md): si los agentes ya estaban conectados, nadie más las pondría al día.
             let project = hub::with_inner(app.handle(), |i| i.project.clone()).flatten();
@@ -57,10 +64,22 @@ pub fn run() {
             if let Err(e) = tray::init(app.handle()) {
                 errlog::log("bandeja", "No se pudo crear el icono de la bandeja", &e.to_string());
             }
+            autostart::hide_for_startup(app.handle());
             Ok(())
         })
         .on_window_event(tray::on_window_event)
         .invoke_handler(tauri::generate_handler![
+            autostart::autostart_status,
+            autostart::autostart_set,
+            remote::remote_status,
+            remote::remote_set,
+            remote::remote_rotate_token,
+            remote::remote_layout_set,
+            remote::remote_layout_get,
+            remote::remote_push_vapid_key,
+            remote::remote_push_subscribe,
+            remote::remote_push_unsubscribe,
+            remote::remote_push_send,
             pty::term_spawn,
             pty::term_write,
             pty::term_resize,

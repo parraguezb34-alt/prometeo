@@ -4,6 +4,7 @@ import type { TeamEvent } from "./team";
 import { chatsRead, chatsWrite, mergeChats, sameChats } from "./chatsDisk";
 import { notify } from "./notify";
 import { reportError } from "./errors";
+import { isRemote } from "./bridge";
 
 /**
  * Chats = ventanas de tiempo sobre el feed del hub. El hub no sabe de chats:
@@ -72,7 +73,9 @@ function load(project: string | null): Chat[] {
   } catch {
     /* almacenamiento no disponible: se parte de cero */
   }
-  return bootstrap();
+  // El navegador remoto tiene otro localStorage. No inventar un chat local que luego
+  // se mezcle con el historial real del PC al terminar la lectura de disco.
+  return isRemote() ? [] : bootstrap();
 }
 
 /** Proyectos cuyo disco ya se leyó: hasta entonces no se escribe en él (la copia rápida podría
@@ -330,6 +333,17 @@ export function useChats(project: string | null) {
       .then((disk) => {
         if (!alive || projectRef.current !== project) return;
         synced.add(storageKey(project));
+        if (isRemote()) {
+          // El PC es la fuente de verdad del cliente remoto. La carga inicial solo
+          // hidrata estado; no debe escribirlo de vuelta ni combinar datos locales.
+          const remoteChats = (disk ?? []).slice(0, MAX_CHATS);
+          ref.current = remoteChats;
+          setChats(remoteChats);
+          const want = pendingActive.get(storageKey(project));
+          pendingActive.delete(storageKey(project));
+          setActiveId(want && remoteChats.some((c) => c.id === want) ? want : (remoteChats[0]?.id ?? ""));
+          return;
+        }
         // Sin nada en disco (la primera vez), se guarda lo de aquí; si no, los dos juntos.
         const merged = disk ? mergeChats(ref.current, disk).slice(0, MAX_CHATS) : ref.current;
         if (sameChats(merged, ref.current)) save(project, merged);

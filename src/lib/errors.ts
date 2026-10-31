@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke } from "./bridge";
+import { listen } from "./bridge";
 
 // Registro de errores (Ajustes → Errores). Los de Rust se anotan allí mismo; los de la interfaz
 // llegan por `reportError`. Todos se guardan en %APPDATA%/lienzo/errores.jsonl.

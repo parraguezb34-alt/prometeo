@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./bridge";
 
 // Investigación con el equipo: Prometeo crea las tareas encadenadas y cada agente busca con sus
 // propias herramientas web. Aquí: llamadas al backend, la fase de cada investigación y la

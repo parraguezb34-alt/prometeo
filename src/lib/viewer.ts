@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./bridge";
 
 // Qué vista toca a cada archivo en la pestaña App, y las llamadas al backend para leerlo.
 // Lógica pura (salvo las llamadas) para poder probarla.

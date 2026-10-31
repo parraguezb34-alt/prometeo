@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./bridge";
 
 /** ¿Hay una versión de Prometeo recién compilada distinta de la que corre? (ver updater.rs) */
 export type UpdateInfo = { available: boolean; setup: string; built_ms: number; version: string; reason: string };

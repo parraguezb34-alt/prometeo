@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { isPrimary, listen, revealItemInDir } from "../lib/bridge";
 import { ago, errMsg } from "../lib/team";
 import { SOURCE_ES, errorsClear, errorsFile, errorsList, markErrorsSeen } from "../lib/errors";
 import type { ErrEntry } from "../lib/errors";
@@ -152,17 +151,19 @@ export function ErrorsPanel({ say }: { say: (text: string, err?: boolean) => voi
               );
             })}
           </div>
-          <button
-            className="er-file"
-            onClick={() =>
-              void errorsFile()
-                .then((p) => revealItemInDir(p))
-                .catch(() => say("No pude abrir la carpeta del registro."))
-            }
-          >
-            <Icon name="folder" size={13} />
-            Ver el archivo del registro
-          </button>
+          {isPrimary() && (
+            <button
+              className="er-file"
+              onClick={() =>
+                void errorsFile()
+                  .then((p) => revealItemInDir(p))
+                  .catch(() => say("No pude abrir la carpeta del registro."))
+              }
+            >
+              <Icon name="folder" size={13} />
+              Ver el archivo del registro
+            </button>
+          )}
         </>
       )}
     </section>

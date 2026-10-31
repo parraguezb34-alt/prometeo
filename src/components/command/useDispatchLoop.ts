@@ -8,6 +8,7 @@ import type { InboxInfo, TeamAgent, TeamEvent, TeamTask } from "../../lib/team";
 import { dispatchPrompt, remindPrompt, sendFailed, tick as dispatchTick, verdictHold } from "../../lib/dispatcher";
 import type { DAgent, DispatchState } from "../../lib/dispatcher";
 import { termWrite } from "../../lib/pty";
+import { isPrimary } from "../../lib/bridge";
 import { termLastBusyMs } from "../../lib/activity";
 import { dispatchConfig, getSettings } from "../../lib/settings";
 import { quotaPace } from "../../lib/limits";
@@ -53,7 +54,8 @@ export function useDispatchLoop({
   setDispatchView: Dispatch<SetStateAction<DispatchState>>;
 }) {
   useEffect(() => {
-    if (!dispatchOn) return;
+    // El despacho lo hace solo la ventana del PC; en el iPad se dispararía dos veces.
+    if (!dispatchOn || !isPrimary()) return;
     const run = async () => {
       const cur = latestRef.current;
       if (!cur || dispatchBusy.current) return;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { isRemote, openDialog } from "../lib/bridge";
 import { ago, errMsg } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
 import { friendlySize, projectRecent } from "../lib/project";
@@ -219,8 +219,14 @@ export function PreviewTab({
       <div className="cc-empty vw-empty">
         <Icon name="file" size={26} />
         <div>
-          Elige un archivo de la izquierda o ábrelo con <b>Abrir…</b>. Se ven páginas web, Markdown, tablas, PDF, imágenes,
-          vídeo, audio y documentos de Word, Excel y PowerPoint.
+          {isRemote() ? (
+            "Elige un archivo de la izquierda. "
+          ) : (
+            <>
+              Elige un archivo de la izquierda o ábrelo con <b>Abrir…</b>.{" "}
+            </>
+          )}
+          Se ven páginas web, Markdown, tablas, PDF, imágenes, vídeo, audio y documentos de Word, Excel y PowerPoint.
         </div>
       </div>
     );
@@ -230,10 +236,12 @@ export function PreviewTab({
     body = (
       <div className="cc-empty vw-empty">
         <div>{err || `Los archivos ${kindLabel(sel)} no se pueden ver aquí.`}</div>
-        <button className="hs-btn hs-btn-go" onClick={() => external("open")}>
-          <Icon name="external" size={13} />
-          Abrir con su programa
-        </button>
+        {!isRemote() && (
+          <button className="hs-btn hs-btn-go" onClick={() => external("open")}>
+            <Icon name="external" size={13} />
+            Abrir con su programa
+          </button>
+        )}
       </div>
     );
   } else if (data.kind === "blob") {
@@ -260,10 +268,12 @@ export function PreviewTab({
     body = (
       <div className="cc-empty vw-empty">
         <div>Es un archivo binario; no hay vista previa.</div>
-        <button className="hs-btn hs-btn-go" onClick={() => external("open")}>
-          <Icon name="external" size={13} />
-          Abrir con su programa
-        </button>
+        {!isRemote() && (
+          <button className="hs-btn hs-btn-go" onClick={() => external("open")}>
+            <Icon name="external" size={13} />
+            Abrir con su programa
+          </button>
+        )}
       </div>
     );
   } else if (k === "html" || k === "svg") {
@@ -298,10 +308,12 @@ export function PreviewTab({
             <span>
               Mostrando {MAX_CSV_ROWS} de {rows.length} filas (archivo grande).
             </span>
-            <button className="hs-btn hs-btn-go" onClick={() => external("open")}>
-              <Icon name="external" size={12} />
-              Abrir completo con su programa
-            </button>
+            {!isRemote() && (
+              <button className="hs-btn hs-btn-go" onClick={() => external("open")}>
+                <Icon name="external" size={12} />
+                Abrir completo con su programa
+              </button>
+            )}
           </div>
         )}
         <table>
@@ -355,12 +367,16 @@ export function PreviewTab({
               <button className="cc-mini-btn" onClick={() => open(sel)} disabled={loading} title="Recargar" aria-label="Recargar">
                 {loading ? "…" : <Icon name="refresh" size={12} />}
               </button>
-              <button className="ap-icon" onClick={() => external("reveal")} title="Mostrar en la carpeta" aria-label="Mostrar en la carpeta">
-                <Icon name="folder" size={14} />
-              </button>
-              <button className="ap-icon" onClick={() => external("open")} title="Abrir con su programa" aria-label="Abrir con su programa">
-                <Icon name="external" size={14} />
-              </button>
+              {!isRemote() && (
+                <>
+                  <button className="ap-icon" onClick={() => external("reveal")} title="Mostrar en la carpeta" aria-label="Mostrar en la carpeta">
+                    <Icon name="folder" size={14} />
+                  </button>
+                  <button className="ap-icon" onClick={() => external("open")} title="Abrir con su programa" aria-label="Abrir con su programa">
+                    <Icon name="external" size={14} />
+                  </button>
+                </>
+              )}
               <button
                 className="ap-icon"
                 data-on={full ? "1" : "0"}
@@ -382,10 +398,12 @@ export function PreviewTab({
     <div className="cc-art">
       <div className="cc-art-side vw-side" hidden={hideList}>
         <div className="vw-tools">
-          <button className="hs-btn vw-open" onClick={() => void pickFile()} title="Abrir cualquier archivo">
-            <Icon name="folder" size={13} />
-            Abrir…
-          </button>
+          {!isRemote() && (
+            <button className="hs-btn vw-open" onClick={() => void pickFile()} title="Abrir cualquier archivo">
+              <Icon name="folder" size={13} />
+              Abrir…
+            </button>
+          )}
           <button className="cc-mini-btn" onClick={loadList} title="Volver a buscar archivos en el proyecto" aria-label="Volver a buscar">
             <Icon name="refresh" size={12} />
           </button>

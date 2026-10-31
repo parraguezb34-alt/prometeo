@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { saveDialog } from "../../lib/bridge";
 import { agentLabel, teamEventsRange } from "../../lib/team";
 import { buildTimeline } from "../../lib/timeline";
 import { chatHtml, chatMarkdown, fileSlug } from "../../lib/exportChat";

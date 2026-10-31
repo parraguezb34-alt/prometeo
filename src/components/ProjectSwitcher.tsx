@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { cleanFolderName, parentDir, projectName } from "../lib/project";
+import { isRemote } from "../lib/bridge";
 import { Icon } from "./Icon";
 
 export type ProjectItem = { path: string; openTasks?: number };
@@ -70,6 +71,7 @@ export function ProjectSwitcher({
     }
   };
   const cur = project ? projectName(project) : "";
+  const remote = isRemote();
   const nextName = cleanFolderName(newName);
 
   return (
@@ -115,11 +117,11 @@ export function ProjectSwitcher({
               <div className="ps-cur">
                 <span>
                   <b>Ninguno</b>
-                  <small>Elige una carpeta para empezar</small>
+                  <small>{remote ? "Elige un proyecto reciente del PC" : "Elige una carpeta para empezar"}</small>
                 </span>
               </div>
             )}
-            {project &&
+            {project && !remote &&
               (renaming ? (
                 <form
                   className="ps-new"
@@ -193,6 +195,10 @@ export function ProjectSwitcher({
                 </span>
               </button>
             ))}
+            {remote && others.length === 0 && (
+              <div className="ps-cur"><small>No hay proyectos recientes disponibles en este PC.</small></div>
+            )}
+            {!remote && <>
             <div className="cc-menu-sep">Otro</div>
             <button
               className="cc-mi"
@@ -246,6 +252,7 @@ export function ProjectSwitcher({
                 </span>
               </button>
             )}
+            </>}
           </div>
         </>
       )}

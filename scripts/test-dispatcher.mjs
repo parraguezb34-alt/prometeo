@@ -1,7 +1,7 @@
 // Compila las piezas puras del frontend (despachador y adjuntos) y corre sus pruebas con Node.
 // Uso: npm test
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -33,6 +33,7 @@ execFileSync(
     "src/lib/quote.ts",
     "src/lib/useVisibleInterval.ts",
     "src/components/Markdown.tsx",
+    "src/lib/bridge.ts",
     "--jsx",
     "react-jsx",
     "--rootDir",
@@ -51,6 +52,17 @@ execFileSync(
   { cwd: root, stdio: "inherit" },
 );
 writeFileSync(join(out, "package.json"), '{"type":"module"}');
+// Node no resuelve imports relativos sin extensión: el puente (lib/bridge) es el único que se importa
+// en tiempo de ejecución desde lo que se prueba, así que se le pone su «.js».
+for (const dir of [out, join(out, "lib"), join(out, "components")]) {
+  for (const name of existsSync(dir) ? readdirSync(dir) : []) {
+    if (!name.endsWith(".js")) continue;
+    const p = join(dir, name);
+    const src = readFileSync(p, "utf8");
+    const fixed = src.replace(/from "((?:\.\.?\/)+(?:lib\/)?bridge)"/g, 'from "$1.js"');
+    if (fixed !== src) writeFileSync(p, fixed);
+  }
+}
 for (const s of suites) {
   writeFileSync(join(out, `${s}.test.mjs`), readFileSync(join(root, "scripts", `${s}.test.mjs`), "utf8"));
   execFileSync(process.execPath, [join(out, `${s}.test.mjs`)], { stdio: "inherit" });

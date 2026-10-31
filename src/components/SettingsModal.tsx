@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { invoke, isRemote, revealItemInDir } from "../lib/bridge";
 import type { AgentPref } from "../lib/agentPrefs";
 import type { DispatchState } from "../lib/dispatcher";
 import { testNotify } from "../lib/notify";
@@ -22,7 +22,7 @@ import { appAbout, updateCheck } from "../lib/update";
 import type { About, UpdateInfo } from "../lib/update";
 import { useModalFocus } from "./useModalFocus";
 
-export type SettingsSection = "general" | "agents" | "team" | "skills" | "usage" | "dispatch" | "notify" | "hub" | "errors" | "about";
+export type SettingsSection = "general" | "agents" | "team" | "skills" | "usage" | "dispatch" | "notify" | "hub" | "remote" | "errors" | "about";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: IconName; hint: string }[] = [
   { id: "general", label: "General", icon: "settings", hint: "Proyecto y arranque" },
@@ -33,6 +33,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: IconName; hint: stri
   { id: "dispatch", label: "Despacho", icon: "zap", hint: "Reparto de tareas" },
   { id: "notify", label: "Avisos", icon: "bell", hint: "Notificaciones" },
   { id: "hub", label: "Conexión", icon: "plug", hint: "Hub y diagnóstico" },
+  { id: "remote", label: "Acceso remoto (iPad)", icon: "external", hint: "Enlace y token" },
   { id: "errors", label: "Errores", icon: "warn", hint: "Registro de fallos" },
   { id: "about", label: "Acerca de", icon: "app", hint: "Versión y novedades" },
 ];
@@ -69,6 +70,7 @@ type Props = {
   prefs: Record<string, AgentPref>;
   opening: string | null;
   autoStart: boolean;
+  windowsStartup: boolean;
   shoot: "plan" | "exec";
   chatsMin: boolean;
   dispatchOn: boolean;
@@ -78,6 +80,7 @@ type Props = {
   say: (text: string, err?: boolean) => void;
   onPref: (name: string, patch: AgentPref) => void;
   onAutoStart: (on: boolean) => void;
+  onWindowsStartup: (on: boolean) => void;
   onShoot: (m: "plan" | "exec") => void;
   onChatsMin: (min: boolean) => void;
   onDispatch: (on: boolean) => void;
@@ -89,12 +92,16 @@ type Props = {
   onTeamRules: (charter: string | null, leader: string | null) => Promise<void>;
 };
 
+/** En el iPad la sección de acceso remoto no se enseña: se configura desde el PC. */
+const REMOTE = isRemote();
+
 export function SettingsModal(props: Props) {
   const dialogRef = useRef<HTMLElement>(null);
   useModalFocus(dialogRef);
   const [section, setSection] = useState<SettingsSection>(props.initial);
   useEffect(() => setSection(props.initial), [props.initial]);
-  const cur = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
+  const sections = REMOTE ? SECTIONS.filter((s) => s.id !== "remote") : SECTIONS;
+  const cur = sections.find((s) => s.id === section) ?? sections[0];
   const unseen = useUnseenErrors();
 
   return (
@@ -103,7 +110,7 @@ export function SettingsModal(props: Props) {
       <section ref={dialogRef} className="cc-modal st" role="dialog" aria-modal="true" aria-label="Ajustes" tabIndex={-1}>
         <nav className="st-nav" aria-label="Secciones de ajustes">
           <div className="st-nav-title">Ajustes</div>
-          {SECTIONS.map((s) => (
+          {sections.map((s) => (
             <button
               key={s.id}
               className="st-nav-item"
@@ -141,6 +148,7 @@ export function SettingsModal(props: Props) {
             {section === "dispatch" && <Dispatch {...props} />}
             {section === "notify" && <Notify {...props} />}
             {section === "hub" && <Hub {...props} />}
+            {section === "remote" && !REMOTE && <Remote {...props} />}
             {section === "errors" && <ErrorsPanel say={props.say} />}
             {section === "about" && <AboutPanel />}
           </div>
@@ -299,7 +307,7 @@ function MotionGroup() {
   );
 }
 
-function General({ state, info, autoStart, shoot, chatsMin, say, onAutoStart, onShoot, onChatsMin, onProject }: Props) {
+function General({ state, info, autoStart, windowsStartup, shoot, chatsMin, say, onAutoStart, onWindowsStartup, onShoot, onChatsMin, onProject }: Props) {
   const settings = useSettings();
   const saved = state?.project ?? "";
   const [draft, setDraft] = useState(saved);
@@ -349,13 +357,15 @@ function General({ state, info, autoStart, shoot, chatsMin, say, onAutoStart, on
                 <span className="st-pill" data-tone={info?.repo ? "ok" : undefined}>
                   {info?.repo ? `git · ${info.branch || "sin rama"}` : "sin git"}
                 </span>
-                <button
-                  className="st-link"
-                  onClick={() => revealItemInDir(saved).catch((e) => say(errMsg(e), true))}
-                >
-                  <Icon name="folder" size={13} />
-                  Mostrar en el explorador
-                </button>
+                {!REMOTE && (
+                  <button
+                    className="st-link"
+                    onClick={() => revealItemInDir(saved).catch((e) => say(errMsg(e), true))}
+                  >
+                    <Icon name="folder" size={13} />
+                    Mostrar en el explorador
+                  </button>
+                )}
               </>
             ) : (
               <span className="st-pill" data-tone="warn">
@@ -378,6 +388,14 @@ function General({ state, info, autoStart, shoot, chatsMin, say, onAutoStart, on
       </Group>
 
       <Group title="Al abrir Prometeo">
+        {!REMOTE && (
+          <Row
+            label="Abrir Prometeo al iniciar Windows"
+            hint="Se inicia minimizado en la bandeja. Solo afecta a esta versión de Prometeo."
+          >
+            <Switch on={windowsStartup} onChange={onWindowsStartup} label="Abrir Prometeo al iniciar Windows" />
+          </Row>
+        )}
         <Row
           label="Abrir el equipo al iniciar"
           hint="Conecta los agentes instalados y abre los que no estén en marcha. Los que quites del equipo en Agentes no se abren."
@@ -419,6 +437,18 @@ function General({ state, info, autoStart, shoot, chatsMin, say, onAutoStart, on
         </Row>
         <Row label="Cerrar la ventana de arriba">
           <span className="cc-kbd">Esc</span>
+        </Row>
+        <Row label="Enviar el mensaje">
+          <span className="st-keys">
+            <span className="cc-kbd">⌘ / Ctrl</span>
+            <span className="cc-kbd">Enter</span>
+          </span>
+        </Row>
+        <Row label="Buscar chats">
+          <span className="st-keys">
+            <span className="cc-kbd">⌘ / Ctrl</span>
+            <span className="cc-kbd">K</span>
+          </span>
         </Row>
       </Group>
     </>
@@ -1181,6 +1211,7 @@ function Notify({ notifyOn, onNotify, say }: Props) {
         title="Avisos"
         desc="Si estás mirando Prometeo, salen arriba a la derecha; si estás en otra ventana, en la esquina de la pantalla."
       >
+        {REMOTE && <RemotePushControl />}
         <Row label="Activar avisos" hint="También con la campana de la barra superior.">
           <Switch on={notifyOn} onChange={onNotify} label="Avisos" />
         </Row>
@@ -1255,6 +1286,106 @@ function Notify({ notifyOn, onNotify, say }: Props) {
   );
 }
 
+type RemotePushState = "loading" | "ready" | "active" | "https" | "install" | "denied" | "unsupported" | "error";
+
+function standaloneApp(): boolean {
+  const iosStandalone = (navigator as Navigator & { standalone?: boolean }).standalone === true;
+  return iosStandalone || window.matchMedia("(display-mode: standalone)").matches;
+}
+
+function vapidBytes(encoded: string): ArrayBuffer {
+  const raw = atob(encoded.replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function RemotePushControl() {
+  const [status, setStatus] = useState<RemotePushState>("loading");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const check = async () => {
+    setError(null);
+    if (!window.isSecureContext) { setStatus("https"); return; }
+    if (!standaloneApp()) { setStatus("install"); return; }
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+      setStatus("unsupported");
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      const subscription = await registration.pushManager.getSubscription();
+      if (Notification.permission === "denied") { setStatus("denied"); return; }
+      setStatus(subscription ? "active" : "ready");
+    } catch (e) {
+      setError(errMsg(e));
+      setStatus("error");
+    }
+  };
+
+  useEffect(() => { void check(); }, []);
+
+  const activate = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (!window.isSecureContext) { setStatus("https"); return; }
+      if (!standaloneApp()) { setStatus("install"); return; }
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") { setStatus(permission === "denied" ? "denied" : "ready"); return; }
+      const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      const key = await invoke<string>("remote_push_vapid_key");
+      const subscription = await registration.pushManager.getSubscription()
+        ?? await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidBytes(key) });
+      await invoke("remote_push_subscribe", { subscription: subscription.toJSON() });
+      setStatus("active");
+    } catch (e) {
+      setError(errMsg(e));
+      setStatus("error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deactivate = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const registration = await navigator.serviceWorker.getRegistration("/");
+      const subscription = await registration?.pushManager.getSubscription();
+      if (subscription) {
+        await invoke("remote_push_unsubscribe", { endpoint: subscription.endpoint });
+        await subscription.unsubscribe();
+      }
+      setStatus("ready");
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const hint = {
+    loading: "Comprobando si este iPad puede recibir avisos…",
+    ready: "Al tocar Activar, Safari pedirá permiso para mostrar avisos.",
+    active: "Este iPad recibirá avisos cuando Prometeo esté en segundo plano.",
+    https: "Los avisos requieren el enlace HTTPS de Tailscale Serve. Abre el enlace HTTPS que aparece en el PC.",
+    install: "Añade Prometeo a la pantalla de inicio y ábrelo desde su icono para activar avisos.",
+    denied: "Safari bloqueó los avisos. Permítelos en Ajustes del iPad → Notificaciones → Prometeo.",
+    unsupported: "Los avisos requieren iPadOS 16.4 o posterior, Safari y Prometeo añadido a la pantalla de inicio.",
+    error: error || "No pude activar los avisos. Comprueba la conexión con el PC e inténtalo de nuevo.",
+  }[status];
+
+  return (
+    <Row label="Avisos push en este iPad" hint={hint}>
+      <button className="cc-btn" disabled={busy || status === "loading" || status === "https" || status === "install" || status === "unsupported" || status === "denied"} onClick={() => void (status === "active" ? deactivate() : activate())}>
+        {busy ? "Guardando…" : status === "active" ? "Desactivar avisos" : status === "error" ? "Reintentar" : "Activar avisos"}
+      </button>
+    </Row>
+  );
+}
+
 // ---- Conexión ------------------------------------------------------------------------
 
 /** La versión que corre, si hay otra lista para instalar y los últimos cambios. */
@@ -1271,7 +1402,7 @@ function AboutPanel() {
   };
   useEffect(() => {
     appAbout().then(setAbout).catch(() => setAbout(null));
-    check();
+    if (!REMOTE) check();
   }, []);
   return (
     <>
@@ -1283,17 +1414,19 @@ function AboutPanel() {
           <code>{about?.commit || "—"}</code>
         </Row>
         <Row label="Compilada">{about?.built_ms ? `hace ${ago(about.built_ms)}` : "—"}</Row>
-        <Row
-          label="Actualización"
-          hint={upd?.available ? "Usa el botón «Actualizar» de arriba a la derecha." : upd?.reason || undefined}
-        >
-          <span className="st-pill" data-tone={upd?.available ? "ok" : undefined}>
-            {upd?.available ? `Lista: ${upd.version || "versión nueva"}` : "Al día"}
-          </span>
-          <button className="hs-btn" onClick={check} disabled={checking}>
-            {checking ? "Buscando…" : "Buscar ahora"}
-          </button>
-        </Row>
+        {!REMOTE && (
+          <Row
+            label="Actualización"
+            hint={upd?.available ? "Usa el botón «Actualizar» de arriba a la derecha." : upd?.reason || undefined}
+          >
+            <span className="st-pill" data-tone={upd?.available ? "ok" : undefined}>
+              {upd?.available ? `Lista: ${upd.version || "versión nueva"}` : "Al día"}
+            </span>
+            <button className="hs-btn" onClick={check} disabled={checking}>
+              {checking ? "Buscando…" : "Buscar ahora"}
+            </button>
+          </Row>
+        )}
       </Group>
       <Group title="Últimos cambios" desc="Lo que trae esta versión, del más nuevo al más viejo.">
         <ul className="st-changes">
@@ -1345,14 +1478,16 @@ function Hub({ state, detect, hubOk, say }: Props) {
           {details && (
             <>
               <CopyBtn text={details.state_file} say={say} />
-              <button
-                className="cc-icon-btn st-mini"
-                title="Mostrar en el explorador"
-                aria-label="Mostrar en el explorador"
-                onClick={() => revealItemInDir(details.state_file).catch((e) => say(errMsg(e), true))}
-              >
-                <Icon name="folder" size={14} />
-              </button>
+              {!REMOTE && (
+                <button
+                  className="cc-icon-btn st-mini"
+                  title="Mostrar en el explorador"
+                  aria-label="Mostrar en el explorador"
+                  onClick={() => revealItemInDir(details.state_file).catch((e) => say(errMsg(e), true))}
+                >
+                  <Icon name="folder" size={14} />
+                </button>
+              )}
             </>
           )}
         </Row>
@@ -1407,5 +1542,146 @@ function Hub({ state, detect, hubOk, say }: Props) {
         </Row>
       </Group>
     </>
+  );
+}
+
+// ---- Acceso remoto (iPad) -------------------------------------------------------------
+
+type RemoteStatus = {
+  enabled: boolean;
+  port: number;
+  /** Enlaces para el iPad: el https de `tailscale serve` (si está) y el de la IP 100.x. */
+  urls: string[];
+  token: string;
+  /** IP de Tailscale del PC; null = Tailscale no está conectado. */
+  tailscale: string | null;
+  /** https://<pc>.<red>.ts.net si `tailscale serve` apunta a este puerto. */
+  https: string | null;
+};
+
+const GUIDE_URL = "https://tailscale.com/download/windows";
+
+/**
+ * El interruptor del acceso remoto y los enlaces con token para abrir Prometeo desde el iPad.
+ * Solo se pinta en la ventana del PC: el cliente remoto no puede cambiar su propio acceso.
+ */
+function Remote({ say }: Props) {
+  const [status, setStatus] = useState<RemoteStatus | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = async () => {
+    const s = await invoke<RemoteStatus>("remote_status");
+    setStatus(s);
+    setErr(null);
+  };
+
+  useEffect(() => {
+    refresh().catch((e) => setErr(errMsg(e)));
+  }, []);
+
+  // Mientras falte Tailscale, se vuelve a mirar: el servidor se enlaza solo cuando aparece.
+  const waiting = !!status?.enabled && !status.tailscale;
+  useEffect(() => {
+    if (!waiting) return;
+    const id = window.setInterval(() => void refresh().catch(() => {}), 5000);
+    return () => window.clearInterval(id);
+  }, [waiting]);
+
+  const setEnabled = async (enabled: boolean) => {
+    setBusy(true);
+    try {
+      await invoke("remote_set", { enabled });
+      await refresh();
+      say(enabled ? "✓ Acceso remoto encendido." : "Acceso remoto apagado.");
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rotate = async () => {
+    setBusy(true);
+    try {
+      await invoke("remote_rotate_token");
+      await refresh();
+      say("✓ Token cambiado: copia los enlaces nuevos.");
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Group
+      title="Acceso remoto (iPad)"
+      desc="Abre Prometeo en el navegador del iPad. Los agentes y las terminales siguen viviendo en este PC; el iPad solo manda órdenes."
+      aside={
+        <span className="st-pill" data-tone={status?.enabled ? "ok" : undefined}>
+          {status?.enabled ? "encendido" : "apagado"}
+        </span>
+      }
+    >
+      <Row
+        label="Encendido"
+        hint="Escucha solo en Tailscale y en este PC (nunca en la wifi). Al apagarlo, los enlaces repartidos dejan de funcionar."
+      >
+        <Switch
+          on={!!status?.enabled}
+          disabled={busy || (!status && !!err)}
+          onChange={(on) => void setEnabled(on)}
+          label="Acceso remoto"
+        />
+      </Row>
+
+      {!status && !err && <div className="st-empty-row">Leyendo el estado…</div>}
+      {err && <div className="st-empty-row">No pude leer el acceso remoto: {err}</div>}
+
+      {status?.enabled && (
+        <>
+          {status.urls.length === 0 ? (
+            <div className="st-empty-row">
+              Tailscale no está conectado en este PC, así que el iPad todavía no puede entrar. Instálalo y entra
+              con la misma cuenta que en el iPad ({GUIDE_URL}); el enlace aparecerá aquí solo, sin reiniciar
+              Prometeo. Guía: docs/acceso-remoto.md.
+            </div>
+          ) : (
+            status.urls.map((u) => {
+              const full = `${u}?t=${status.token}`;
+              const https = u.startsWith("https://");
+              return (
+                <Row
+                  key={u}
+                  label={https ? "Enlace HTTPS (recomendado)" : "Enlace Tailscale"}
+                  hint={<code className="st-remote-url">{full}</code>}
+                >
+                  <CopyBtn text={full} say={say} />
+                </Row>
+              );
+            })
+          )}
+          <Row label="Cambiar token" hint="Invalida los enlaces que ya hayas repartido; tendrás que copiarlos otra vez.">
+            <ConfirmButton className="cc-btn sec" disabled={busy} onConfirm={() => void rotate()} confirmText="Pulsa otra vez">
+              Cambiar token
+            </ConfirmButton>
+          </Row>
+          <p className="st-remote-warn">Quien tenga este enlace controla tus agentes y tu PC. Úsalo solo con Tailscale.</p>
+          <p className="st-row-h">
+            Puerto {status.port}
+            {status.tailscale ? ` · IP de Tailscale ${status.tailscale}` : ""}
+            {status.tailscale && !status.https
+              ? " · Para HTTPS (avisos en el iPad): tailscale serve --bg " + status.port
+              : ""}
+            .
+          </p>
+        </>
+      )}
+
+      {status && !status.enabled && (
+        <p className="st-row-h">Al encenderlo aparecerá aquí el enlace para abrir Prometeo en el iPad.</p>
+      )}
+    </Group>
   );
 }

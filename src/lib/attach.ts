@@ -90,3 +90,25 @@ export function textToBase64(text: string): string {
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(bin);
 }
+
+/**
+ * Las fotos del iPad pueden llegar en HEIC, que los agentes no saben leer. Safari sí las
+ * decodifica: se pasan a JPG antes de guardarlas. Si no se puede, se devuelve el original.
+ */
+export async function heicToJpeg(file: File): Promise<File> {
+  const heic = /^image\/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+  if (!heic || typeof createImageBitmap !== "function") return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const canvas = document.createElement("canvas");
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    canvas.getContext("2d")?.drawImage(bmp, 0, 0);
+    bmp.close();
+    const blob = await new Promise<Blob | null>((ok) => canvas.toBlob(ok, "image/jpeg", 0.9));
+    if (!blob) return file;
+    return new File([blob], file.name.replace(/\.hei[cf]$/i, "") + ".jpg", { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
+}

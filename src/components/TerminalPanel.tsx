@@ -1,8 +1,8 @@
 import { memo, useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { listen } from "@tauri-apps/api/event";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import { isPrimary, isRemote, listen } from "../lib/bridge";
+import type { UnlistenFn } from "../lib/bridge";
 import "@xterm/xterm/css/xterm.css";
 import {
   base64ToBytes,
@@ -41,6 +41,14 @@ const THEME = {
   brightCyan: "#a5f3fc",
   brightWhite: "#fafafa",
 };
+
+// xterm responde a consultas ANSI al renderizar el scrollback (DA/DSR, posición,
+// tamaño, colores y capacidades). En un espejo remoto son respuestas del navegador,
+// no teclas del usuario; reenviarlas puede escribir basura en la entrada del agente.
+function isTerminalQueryReply(data: string): boolean {
+  const replies = /(?:\x1bP1\+r[^\x1b\x07]*(?:\x1b\\|\x07)|\x1b\](?:4;\d+;|10;|11;|12;)[^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[(?:[IO]|[?>][0-9;]*c|\??[0-9;]*n|\d+;\d+R|8;\d+;\d+t))+/;
+  return replies.test(data) && data.replace(replies, "") === "";
+}
 
 export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Panel }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -128,6 +136,11 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
           sid = null; // session no longer exists: spawn a fresh one
         }
       }
+      if (!sid && !isPrimary()) {
+        // Desde el iPad no se abren terminales: se mira (y se escribe en) las del PC.
+        term.write("\x1b[90mEsta terminal no está abierta en el PC. Ábrela allí.\x1b[0m\r\n");
+        return;
+      }
       if (!sid) {
         // Al reabrir un agente se retoma la conversación del chat actual (ver respawnCmd).
         const cmd = hadSession ? respawnCmd(panel) : (panel.cmd ?? null);
@@ -150,7 +163,7 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
       } catch {
         /* ignore */
       }
-      termResize(sid, term.cols, term.rows).catch(() => {});
+      (isPrimary() ? termResize(sid, term.cols, term.rows) : Promise.resolve()).catch(() => {});
       // Lo que el agente ya escribió mientras se abría la sesión (sus preguntas al terminal
       // incluidas): en una sesión nueva se entrega entero; en una re-adjuntada ya iba en el historial.
       if (!reattached) {
@@ -167,6 +180,7 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
     });
 
     const dataSub = term.onData((data) => {
+      if (isRemote() && isTerminalQueryReply(data)) return;
       const sid = sessionRef.current;
       if (sid) termWrite(sid, data).catch(() => {});
     });
@@ -179,7 +193,7 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
         return;
       }
       const sid = sessionRef.current;
-      if (sid) termResize(sid, term.cols, term.rows).catch(() => {});
+      if (sid) (isPrimary() ? termResize(sid, term.cols, term.rows) : Promise.resolve()).catch(() => {});
     });
     ro.observe(host);
 

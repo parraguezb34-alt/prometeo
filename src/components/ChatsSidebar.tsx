@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { agentColor, agentInitial } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
@@ -69,6 +69,23 @@ export function ChatsSidebar({
   const [query, setQuery] = useState("");
   const [openProj, setOpenProj] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [openActionsChatId, setOpenActionsChatId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!openActionsChatId) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.target instanceof Element && !e.target.closest(".cc-chat-actions-wrap")) setOpenActionsChatId(null);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenActionsChatId(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openActionsChatId]);
 
   const grouped = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -166,7 +183,10 @@ export function ChatsSidebar({
                   key={c.id}
                   className="cc-chat-item"
                   data-active={c.id === activeId ? "1" : "0"}
-                  onClick={() => onSelect(c)}
+                  onClick={() => {
+                    setOpenActionsChatId(null);
+                    onSelect(c);
+                  }}
                   tabIndex={0}
                   aria-label={`Chat: ${c.title}`}
                   onKeyDown={(e) => {
@@ -213,38 +233,59 @@ export function ChatsSidebar({
                     {c.endMs == null && <span className="cc-live" title="Chat abierto" />}
                     <time>{stampLabel(c.createdMs)}</time>
                   </div>
-                  <button
-                    className="cc-chat-del cc-chat-exp"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onExport(c);
-                    }}
-                    title="Exportar el chat (Markdown o página web)"
-                    aria-label="Exportar chat"
-                  >
-                    <Icon name="download" size={12} />
-                  </button>
-                  <button
-                    className="cc-chat-del cc-chat-ren"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditing(c.id);
-                    }}
-                    title="Renombrar (F2)"
-                    aria-label="Renombrar chat"
-                  >
-                    <Icon name="pencil" size={12} />
-                  </button>
-                  <ConfirmButton
-                    className="cc-chat-del"
-                    onConfirm={() => onRemove(c)}
-                    confirmText="¿Seguro? Pulsa otra vez"
-                    title="Quitar de la lista (los eventos siguen en el feed)"
-                    aria-label="Quitar chat"
-                    style={{ width: "auto", minWidth: 20, zIndex: 3, background: "var(--raised-2, #1e1e1e)", borderRadius: 6, padding: "0 6px", fontSize: 11, opacity: 1 }}
-                  >
-                    <Icon name="x" size={13} />
-                  </ConfirmButton>
+                  <div className="cc-chat-actions-wrap">
+                    <button
+                      className="cc-chat-more"
+                      type="button"
+                      aria-label={`Acciones de ${c.title}`}
+                      aria-expanded={openActionsChatId === c.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenActionsChatId((id) => (id === c.id ? null : c.id));
+                      }}
+                    >
+                      {"\u22ef"}
+                    </button>
+                    {openActionsChatId === c.id && (
+                      <div className="cc-chat-actions-menu" role="menu" aria-label={`Acciones de ${c.title}`}>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenActionsChatId(null);
+                            onExport(c);
+                          }}
+                        >
+                          <Icon name="download" size={15} /> Exportar
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenActionsChatId(null);
+                            setEditing(c.id);
+                          }}
+                        >
+                          <Icon name="pencil" size={15} /> Renombrar
+                        </button>
+                        <ConfirmButton
+                          className="cc-chat-action is-danger"
+                          role="menuitem"
+                          onConfirm={() => {
+                            setOpenActionsChatId(null);
+                            onRemove(c);
+                          }}
+                          confirmText="Seguro? Pulsa otra vez"
+                          title="Quitar de la lista"
+                          aria-label="Quitar chat"
+                        >
+                          <Icon name="x" size={15} /> Quitar
+                        </ConfirmButton>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}

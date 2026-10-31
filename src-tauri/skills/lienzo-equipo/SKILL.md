@@ -23,6 +23,7 @@ Trabajas con otros agentes de IA en el mismo proyecto. lienzo os coordina con la
 | Para… | Usa |
 |---|---|
 | Avisar de un avance (1 línea) | `team_update` |
+| Darle al usuario un archivo que hiciste (PDF, imagen, zip…) | `team_share_file` con la ruta: le sale en el chat con «Descargar», también en el iPad |
 | Preguntar o pedir algo a un agente | `team_message` con `to` |
 | Datos o decisiones sobre una tarea concreta | `team_task_comment` (queda en su tablón para quien la lleve) |
 | Algo que todos deban recordar siempre | `team_memory_propose` (el líder decide; guía: `lienzo-memoria`) |

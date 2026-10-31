@@ -1,7 +1,9 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isPrimary, isRemote } from "../lib/bridge";
+import { emit } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { addAgentTerminal, getLayout, removePanel, setRespawnResolver, useLayout } from "../store";
+import { addAgentTerminal, consumeRemoteActionResult, getLayout, publishRecentProjects, removePanel, requestPrimaryAction, setRespawnResolver, useLayout, useRemoteRecentProjects } from "../store";
+import type { RemoteAction } from "../store";
 import {
   agentColor,
   agentCommands,
@@ -50,7 +52,7 @@ import { leaderRelayDue } from "../lib/leaderBatch";
 import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, savePrefs } from "../lib/agentPrefs";
 import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openDialog } from "../lib/bridge";
 import { cleanFolderName, copyProjectStorage, dropProjectStorage, projectRename } from "../lib/project";
 import { parentDir, projectCreateDir, projectKey, projectName } from "../lib/project";
 import { projectAttachPath, projectInfo, projectRecent, projectSaveAttachment, projectSaveImage } from "../lib/project";
@@ -58,7 +60,7 @@ import { dropOwner } from "../lib/dropzone";
 import { detectPrompt, detectTrust } from "../lib/prompts";
 import type { TermPrompt } from "../lib/prompts";
 import { readScreen } from "../lib/screens";
-import { attachMeta, attachmentLine, countLines, isLongPaste, PASTED_NAME, textToBase64 } from "../lib/attach";
+import { attachMeta, attachmentLine, countLines, heicToJpeg, isLongPaste, PASTED_NAME, textToBase64 } from "../lib/attach";
 import type { Attachment } from "../lib/attach";
 import type { ProjectInfo } from "../lib/project";
 import { chatLineage, currentTeamChat, inChat, prepareChat, useChats } from "../lib/chats";
@@ -85,7 +87,7 @@ import { LimitsChip } from "./LimitsChip";
 import { burnAlerts, fmtReset, level as limitLevel, opencodeGoUsage, parseUsagePanel, quotaAlerts, teamLimitsSet, windowLabel } from "../lib/limits";
 import type { BurnSample } from "../lib/limits";
 import { InAppAvisos, Toast } from "./Avisos";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../lib/bridge";
 import { taskPaths } from "../lib/history";
 import { appStop } from "../lib/devapp";
 import { reportError, useUnseenErrors } from "../lib/errors";
@@ -123,6 +125,17 @@ import { useOlderEvents } from "./command/useOlderEvents";
 import { UpdateChip } from "./command/UpdateChip";
 import { NewsCard } from "./command/NewsCard";
 
+/** La ventana del PC (manda); en el iPad (acceso remoto) la interfaz es pasiva. */
+const PRIMARY = isPrimary();
+
+type RemoteActionRequest = { id: string; action: RemoteAction };
+type RemoteActionResult = { id: string; ok: boolean; text: string };
+
+function emitRemoteActionResult(id: string | undefined, ok: boolean, text: string) {
+  if (!id || !isPrimary()) return;
+  void emit("remote://action-result", { id, ok, text }).catch(() => {});
+}
+
 // Lo que no se ve al abrir se carga la primera vez que se usa: el arranque procesa menos código.
 const ScheduleTab = lazy(() => import("./ScheduleTab").then((m) => ({ default: m.ScheduleTab })));
 const HistoryTab = lazy(() => import("./HistoryTab").then((m) => ({ default: m.HistoryTab })));
@@ -151,6 +164,7 @@ const loadingSettings = (
  * listas para verse bajo demanda.
  */
 export function CommandCenter() {
+  const remoteActionHandler = useRef<(request: RemoteActionRequest) => void>(() => {});
   const layout = useLayout();
   const [state, setState] = useState<TeamState | null>(null);
   const [detect, setDetect] = useState<DetectResult | null>(null);
@@ -183,6 +197,7 @@ export function CommandCenter() {
   const [prefs, setPrefs] = useState<Record<string, AgentPref>>(loadPrefs);
   const [catalogs, setCatalogs] = useState<Record<string, ModelCatalog | null | undefined>>({});
   const [autoStart, setAutoStart] = useState(loadAutoStart);
+  const [windowsStartup, setWindowsStartup] = useState(false);
   /** Lo último que se aplicó a la sesión de cada agente (modelo y esfuerzo). */
   const appliedRef = useRef<Record<string, AgentPref | undefined>>(loadApplied());
   const markApplied = (name: string, p: AgentPref) => {
@@ -221,6 +236,45 @@ export function CommandCenter() {
     if (flashTimer.current !== undefined) window.clearTimeout(flashTimer.current);
     flashTimer.current = window.setTimeout(() => setFlash(null), 8000);
   }, []);
+
+  useEffect(() => {
+    if (PRIMARY) return;
+    const report = () => {
+      const visible = !document.hidden && document.visibilityState === "visible";
+      void invoke("remote_push_visibility", { visible }).catch(() => {});
+    };
+    const reportHidden = () => {
+      void invoke("remote_push_visibility", { visible: false }).catch(() => {});
+    };
+    const timer = window.setInterval(() => {
+      if (!document.hidden) report();
+    }, 10_000);
+    document.addEventListener("visibilitychange", report);
+    window.addEventListener("pageshow", report);
+    window.addEventListener("pagehide", reportHidden);
+    report();
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", report);
+      window.removeEventListener("pageshow", report);
+      window.removeEventListener("pagehide", reportHidden);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!PRIMARY) return;
+    void invoke<boolean>("autostart_status")
+      .then(setWindowsStartup)
+      .catch((e) => say(errMsg(e), true));
+  }, [say]);
+
+  const toggleWindowsStartup = useCallback(async (enabled: boolean) => {
+    try {
+      setWindowsStartup(await invoke<boolean>("autostart_set", { enabled }));
+    } catch (e) {
+      say(errMsg(e), true);
+    }
+  }, [say]);
 
   // Mientras los agentes trabajan, el hub avisa varias veces por segundo: las recargas se juntan
   // (una en marcha y, como mucho, otra al acabar) para no pedir y repintar el estado entero a cada evento.
@@ -289,10 +343,21 @@ export function CommandCenter() {
         e.preventDefault();
         setOverlay((o) => (o === "settings" ? null : "settings"));
       }
+      if (e.key.toLowerCase() === "k" && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        e.preventDefault();
+        setOverlay(null);
+        if (chatsMin) {
+          saveFlag(CHATS_MIN_KEY, false);
+          setChatsMin(false);
+        }
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.cc-chats-search input[placeholder="Buscar en chats"]')?.focus());
+        });
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [overlay]);
+  }, [overlay, chatsMin]);
 
   // Pulsaste un aviso (dentro o en la esquina de la pantalla): al chat, que es donde está.
   const openAviso = useCallback(() => {
@@ -704,13 +769,24 @@ export function CommandCenter() {
   const launchAgent = async (
     id: string,
     label: string,
-    opts: { selectTerm?: boolean; force?: boolean } = { selectTerm: true },
+    opts: { selectTerm?: boolean; force?: boolean; remoteRequestId?: string } = { selectTerm: true },
   ): Promise<boolean> => {
     // Una terminal por agente: si ya tiene una, se muestra en lugar de abrir otra.
     if (!opts.force && panelForAgent(layout.panels, id)) {
       if (opts.selectTerm) showTerminal(id);
-      say(`${label} ya tiene una terminal abierta.`);
+      const text = `${label} ya tiene una terminal abierta.`;
+      say(text);
+      emitRemoteActionResult(opts.remoteRequestId, true, text);
       return true;
+    }
+    if (!isPrimary()) {
+      try {
+        await requestPrimaryAction({ kind: "open-agent", agent: id });
+        return true;
+      } catch (e) {
+        say(errMsg(e), true);
+        return false;
+      }
     }
     setOpening(id);
     try {
@@ -723,7 +799,9 @@ export function CommandCenter() {
       const r = await teamOpen(id, shoot, { model: p.model, effort: p.effort });
       markApplied(id, p);
       if (r.kind === "app") {
-        say(`✓ ${label} se está abriendo en su app de escritorio…`);
+        const text = `✓ ${label} se está abriendo en su app de escritorio…`;
+        say(text);
+        emitRemoteActionResult(opts.remoteRequestId, true, text);
       } else {
         // Si ya trabajó en este chat, retoma esa conversación; si no, empieza una nueva.
         addAgentTerminal(label, withResume(r.cmd, sessionRef(id)));
@@ -731,12 +809,16 @@ export function CommandCenter() {
           showTerminal(agentKeyFromCmd(r.cmd));
           setOverlay(null);
         }
-        say(`✓ ${label} lanzado${shoot === "plan" ? " en modo plan" : ""}.`);
+        const text = `✓ ${label} lanzado${shoot === "plan" ? " en modo plan" : ""}.`;
+        say(text);
+        emitRemoteActionResult(opts.remoteRequestId, true, text);
       }
       refresh();
       return true;
     } catch (e) {
-      say(errMsg(e), true);
+      const text = errMsg(e);
+      say(text, true);
+      emitRemoteActionResult(opts.remoteRequestId, false, text);
       return false;
     } finally {
       setOpening(null);
@@ -796,6 +878,15 @@ export function CommandCenter() {
 
   /** Cierra la terminal de un agente y abre otra nueva (p. ej. si se quedó sin conectar). */
   const restartAgent = async (name: string) => {
+    if (!isPrimary()) {
+      try {
+        await requestPrimaryAction({ kind: "restart-agent", agent: name });
+        say(`Solicitud enviada al PC para reiniciar ${agentLabel(name)}.`);
+      } catch (e) {
+        say(errMsg(e), true);
+      }
+      return;
+    }
     const panel = panelForAgent(layout.panels, name);
     if (panel?.sessionId) await termKill(panel.sessionId).catch(() => {});
     if (panel) removePanel(panel.id);
@@ -803,16 +894,51 @@ export function CommandCenter() {
     await launchAgent(name, agentLabel(name), { selectTerm: true, force: true });
   };
 
+  /** Cierra por completo la terminal de un agente que se detuvo desde el iPad. */
+  const closeAgent = async (name: string, remoteRequestId?: string) => {
+    if (!isPrimary()) {
+      try {
+        await requestPrimaryAction({ kind: "close-agent", agent: name });
+      } catch (e) {
+        say(errMsg(e), true);
+      }
+      return;
+    }
+    const panel = panelForAgent(getLayout().panels, name);
+    if (!panel) {
+      const text = `${agentLabel(name)} ya no tiene una terminal abierta.`;
+      say(text, true);
+      emitRemoteActionResult(remoteRequestId, false, text);
+      return;
+    }
+    if (panel.sessionId) await termKill(panel.sessionId).catch(() => {});
+    removePanel(panel.id);
+    delete startedAtRef.current[name];
+    refresh();
+    refreshDetect();
+    const text = `Se cerró la terminal de ${agentLabel(name)}.`;
+    say(text);
+    emitRemoteActionResult(remoteRequestId, true, text);
+  };
+
   /**
    * Reinicia un agente que ya trabaja sin perder el hilo: cierra su terminal y abre otra con el
    * mismo modo y modelo, retomando la conversación de este chat. Sirve para que cargue las
    * herramientas y skills nuevas.
    */
-  const reloadAgent = async (name: string) => {
+  const reloadAgent = async (name: string, remoteRequestId?: string) => {
+    if (!isPrimary()) {
+      try {
+        await requestPrimaryAction({ kind: "restart-agent", agent: name });
+      } catch (e) {
+        say(errMsg(e), true);
+      }
+      return;
+    }
     const label = agentLabel(name);
     const panel = panelForAgent(layout.panels, name);
     if (!panel) {
-      await launchAgent(name, label, { selectTerm: false });
+      await launchAgent(name, label, { selectTerm: false, remoteRequestId });
       return;
     }
     const p = prefs[name] ?? {};
@@ -823,10 +949,14 @@ export function CommandCenter() {
       const mode: Shoot = /(?:--mode|--permission-mode)[ =]plan/.test(panel.cmd ?? "") ? "plan" : "exec";
       const r = await teamOpen(name, mode, { model: p.model, effort: p.effort });
       if (r.kind === "pty") addAgentTerminal(label, withResume(r.cmd, sessionRef(name) ?? LATEST));
-      say(`✓ ${label} reiniciado: retoma su conversación con las herramientas nuevas.`);
+      const text = `✓ ${label} reiniciado: retoma su conversación con las herramientas nuevas.`;
+      say(text);
+      emitRemoteActionResult(remoteRequestId, true, text);
       refresh();
     } catch (e) {
-      say(errMsg(e), true);
+      const text = errMsg(e);
+      say(text, true);
+      emitRemoteActionResult(remoteRequestId, false, text);
     } finally {
       setOpening(null);
     }
@@ -892,6 +1022,7 @@ export function CommandCenter() {
   // Al abrir la app (y al elegir un proyecto): conecta los agentes instalados y
   // abre los que no estén en marcha, para que aparezcan en «Equipo activo».
   useEffect(() => {
+    if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
     if (!autoStart || !state || !detect || !project || autoRan.current === project) return;
     autoRan.current = project;
     void (async () => {
@@ -959,6 +1090,7 @@ export function CommandCenter() {
   // que ya hizo algo en él: Claude Code y Codex la dicen por sus hooks, Antigravity en su
   // historial, y de OpenCode basta con «la última de la carpeta».
   useEffect(() => {
+    if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
     const run = async () => {
       const cur = latestRef.current;
       const chat = currentTeamChat(chats.current());
@@ -1014,6 +1146,7 @@ export function CommandCenter() {
   // Una terminal de un agente que ya no está instalado (o que nunca funcionó) no se puede
   // reparar: se cierra para que no se quede en «Conectando…» para siempre.
   useEffect(() => {
+    if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
     if (!detect) return;
     for (const p of getLayout().panels) {
       const key = agentKeyFromCmd(p.cmd ?? "");
@@ -1029,6 +1162,7 @@ export function CommandCenter() {
   // puede quedar una sesión viva que ningún panel recuerda. Se cierran a los pocos segundos
   // (solo si todos los paneles ya tienen su sesión guardada, para no matar una recién creada).
   useEffect(() => {
+    if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
     const t = window.setTimeout(() => {
       const panels = getLayout().panels;
       if (panels.some((p) => !p.sessionId)) return;
@@ -1063,11 +1197,21 @@ export function CommandCenter() {
   }, [overlay, roster]);
 
   /** One click: connect + launch every agent CLI found on this machine. */
-  const launchSquad = async () => {
+  const launchSquad = async (remoteRequestId?: string) => {
+    if (!isPrimary()) {
+      try {
+        await requestPrimaryAction({ kind: "launch-squad" });
+      } catch (e) {
+        say(errMsg(e), true);
+      }
+      return;
+    }
     const skip = getSettings().skipAgents;
     const list = (detect?.agents ?? []).filter((a) => (a.cli_found || a.config_dir_found) && !skip.includes(a.id));
     if (list.length === 0) {
-      say("No encontré CLIs de agentes (claude, opencode, codex, agy) en este equipo.", true);
+      const text = "No encontré CLIs de agentes (claude, opencode, codex, agy) en este equipo.";
+      say(text, true);
+      emitRemoteActionResult(remoteRequestId, false, text);
       return;
     }
     let ok = 0;
@@ -1075,7 +1219,9 @@ export function CommandCenter() {
       const launched = await launchAgent(a.id, a.label, { selectTerm: false });
       if (launched) ok += 1;
     }
-    say(`⚡ Escuadrón: ${ok} de ${list.length} agentes en marcha${shoot === "plan" ? " (modo plan)" : ""}.`);
+    const text = `⚡ Escuadrón: ${ok} de ${list.length} agentes en marcha${shoot === "plan" ? " (modo plan)" : ""}.`;
+    say(text);
+    emitRemoteActionResult(remoteRequestId, ok === list.length, text);
   };
 
   /** Open the selected agent's terminal tab, or launch it if it has none. */
@@ -1142,6 +1288,7 @@ export function CommandCenter() {
   const handoverSeq = useRef<number | null>(null);
   const compactedAt = useRef(new Map<string, number>());
   useEffect(() => {
+    if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
     const hs = (state?.events ?? []).filter((e) => e.kind === "handover");
     const max = hs.reduce((m, e) => Math.max(m, e.seq), 0);
     if (handoverSeq.current === null) {
@@ -1302,8 +1449,9 @@ export function CommandCenter() {
       return;
     }
     if (files.length > MAX_ATTS) say(`Como mucho ${MAX_ATTS} adjuntos por mensaje.`, true);
-    for (const f of files.slice(0, MAX_ATTS)) {
-      const image = f.type.startsWith("image/");
+    for (const original of files.slice(0, MAX_ATTS)) {
+      const f = await heicToJpeg(original);
+      const image = f.type.startsWith("image/") && !/^image\/hei[cf]/i.test(f.type);
       if (f.size > (image ? 12 : 25) * 1024 * 1024) {
         say(`${f.name || "El archivo"} es demasiado grande (máx. ${image ? 12 : 25} MB).`, true);
         continue;
@@ -1461,7 +1609,12 @@ export function CommandCenter() {
   // ---- proyectos: una carpeta por proyecto, cada uno con sus chats, tareas, memoria y normas --
 
   const [switching, setSwitching] = useState(false);
-  const recentProjects = useSettings().recentProjects;
+  const localRecentProjects = settings.recentProjects;
+  const remoteRecentProjects = useRemoteRecentProjects();
+  useEffect(() => {
+    if (isPrimary()) publishRecentProjects(localRecentProjects);
+  }, [localRecentProjects]);
+  const recentProjects = isPrimary() ? localRecentProjects : remoteRecentProjects;
   /** Los otros proyectos: los que el hub tiene guardados y los usados hace poco, sin repetir. */
   const otherProjects = useMemo(() => {
     const out: { path: string; openTasks?: number }[] = [];
@@ -1484,13 +1637,36 @@ export function CommandCenter() {
    * los agentes abiertos se conectan allí (sus guías, MCP y skills) y se reabren en esa carpeta,
    * retomando la conversación que tenían en el chat que se abre (o empezando de cero si es nuevo).
    */
-  const switchProject = async (path: string, opts: { chatId?: string; newChat?: boolean } = {}) => {
+  const switchProject = async (
+    path: string,
+    opts: { chatId?: string; newChat?: boolean } = {},
+    remoteRequestId?: string,
+  ) => {
     const target = path.trim();
-    if (!target || switching) return false;
+    if (!target || switching) {
+      const text = !target ? "La ruta del proyecto está vacía." : "Ya se está cambiando de proyecto.";
+      emitRemoteActionResult(remoteRequestId, false, text);
+      return false;
+    }
     if (project && projectKey(project) === projectKey(target)) {
       if (opts.chatId) chats.select(opts.chatId);
       else if (opts.newChat) startChat({ kind: "team" });
+      emitRemoteActionResult(remoteRequestId, true, `«${projectName(target)}» ya es el proyecto actual.`);
       return true;
+    }
+    if (!isPrimary()) {
+      if (!otherProjects.some((item) => projectKey(item.path) === projectKey(target))) {
+        const text = "Ese proyecto ya no está en la lista de recientes del PC.";
+        say(text, true);
+        return false;
+      }
+      try {
+        await requestPrimaryAction({ kind: "switch-project", path: target });
+        return true;
+      } catch (e) {
+        say(errMsg(e), true);
+        return false;
+      }
     }
     setSwitching(true);
     setOverlay(null);
@@ -1533,14 +1709,16 @@ export function CommandCenter() {
       setView("feed");
       refresh();
       refreshDetect();
-      say(
-        reopened > 0
-          ? `📁 Ahora en «${name}»: ${reopened === 1 ? "1 agente reabierto" : `${reopened} agentes reabiertos`} en esa carpeta.`
-          : `📁 Ahora en «${name}». Abre a los agentes cuando quieras: arrancarán en esa carpeta.`,
-      );
+      const text = reopened > 0
+        ? `📁 Ahora en «${name}»: ${reopened === 1 ? "1 agente reabierto" : `${reopened} agentes reabiertos`} en esa carpeta.`
+        : `📁 Ahora en «${name}». Abre a los agentes cuando quieras: arrancarán en esa carpeta.`;
+      say(text);
+      emitRemoteActionResult(remoteRequestId, true, text);
       return true;
     } catch (e) {
-      say(errMsg(e), true);
+      const text = errMsg(e);
+      say(text, true);
+      emitRemoteActionResult(remoteRequestId, false, text);
       return false;
     } finally {
       setSwitching(false);
@@ -1854,6 +2032,7 @@ export function CommandCenter() {
   /** Avisos automáticos por tarea: cuántos, el último y si ya se avisó al líder. */
   const nudges = useRef<Record<number, { n: number; last: number; escalated: boolean }>>({});
   useEffect(() => {
+    if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
     const check = () => {
       const cur = latestRef.current;
       if (!cur) return;
@@ -1961,7 +2140,7 @@ export function CommandCenter() {
   const burnLast = useRef(new Map<string, number>());
   const limitsNow = state?.limits;
   useEffect(() => {
-    if (!limitsNow) return;
+    if (!limitsNow || isRemote()) return;
     for (const a of quotaAlerts(limitsNow, quotaSeen.current)) {
       const when = a.resetsAt ? `; se reinicia ${fmtReset(a.resetsAt)}` : "";
       const text = `${agentLabel(a.agent)} va por el ${a.pct} % de su límite «${a.window}»${when}.`;
@@ -2027,6 +2206,7 @@ export function CommandCenter() {
   ).length;
   const linkedSched = useRef(new Set<number>());
   useEffect(() => {
+    if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
     if (!project) return;
     for (const s of state?.schedules ?? []) {
       if (s.chat || linkedSched.current.has(s.id)) continue;
@@ -2135,10 +2315,17 @@ export function CommandCenter() {
         if (want.ask) notify(`${who} propone una skill`, e.text.slice(0, 160), { agent: e.agent, kind: "ask" });
       } else if (e.kind === "task") {
         const t = parseTask(e);
+        if (want.done && t?.op === "entregada")
+          notify(`${who} entregó la tarea #${t.id}`, t.detail || "Lista para revisión.", { agent: e.agent, kind: "delivery" });
         if (want.done && t?.op === "hecha")
           notify(`${who} terminó la tarea #${t.id}`, t.detail || "Tarea hecha.", { agent: e.agent, kind: "done" });
         if (want.done && t?.op === "aprobada")
           notify(`${who} aprobó la tarea #${t.id}`, "Revisada y cerrada.", { agent: e.agent, kind: "done" });
+      } else if (e.kind === "file") {
+        notify(`${who} compartió un archivo`, e.text.replace(/\s+/g, " ").slice(0, 160) || "Abre el equipo para verlo.", {
+          agent: e.agent,
+          kind: "file",
+        });
       } else if (e.kind === "reply" || (e.kind === "message" && e.to === "tú")) {
         if (want.reply) notify(`${who} respondió`, e.text.replace(/\s+/g, " ").slice(0, 160), { agent: e.agent, kind: "reply" });
       }
@@ -2175,6 +2362,7 @@ export function CommandCenter() {
   /** Desde cuándo espera el líder un aviso que se está juntando con otros. */
   const waitSince = useRef<Record<string, number>>({});
   useEffect(() => {
+    if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
     const id = window.setInterval(() => {
       const cur = latestRef.current;
       if (!cur || !getSettings().team.relayInbox) return;
@@ -2239,6 +2427,7 @@ export function CommandCenter() {
     if (directorOn !== null) prevDirector.current = directorOn;
   }, [directorOn]);
   useEffect(() => {
+    if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
     const id = window.setInterval(() => {
       const cur = latestRef.current;
       const c = cleanRef.current;
@@ -2658,6 +2847,11 @@ export function CommandCenter() {
             setDraft(e.target.value);
           }}
           onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+              e.preventDefault();
+              send();
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               send();
@@ -2695,6 +2889,70 @@ export function CommandCenter() {
     </div>
   );
 
+  remoteActionHandler.current = ({ id, action }) => {
+    if (!isPrimary()) return;
+    if (action.kind === "launch-squad") {
+      void launchSquad(id);
+      return;
+    }
+    if (action.kind === "switch-project") {
+      const target = otherProjects.find((item) => projectKey(item.path) === projectKey(action.path));
+      if (!target) {
+        const text = "El proyecto ya no está en la lista de recientes del PC.";
+        say(text, true);
+        emitRemoteActionResult(id, false, text);
+        return;
+      }
+      void switchProject(target.path, {}, id);
+      return;
+    }
+    const agent = detect?.agents.find(
+      (item) => item.id === action.agent && (item.cli_found || item.config_dir_found),
+    );
+    if (!agent) {
+      const text = "Ese agente ya no aparece instalado en el PC.";
+      say(text, true);
+      emitRemoteActionResult(id, false, text);
+      return;
+    }
+    if (action.kind === "open-agent") {
+      // El iPad puede ver la terminal; el PC conserva la pestaña que ya estaba abierta.
+      void launchAgent(agent.id, agent.label, { selectTerm: false, remoteRequestId: id });
+    } else if (action.kind === "close-agent") void closeAgent(agent.id, id);
+    else if (action.kind === "restart-agent") void reloadAgent(agent.id, id);
+  };
+
+  useEffect(() => {
+    if (!isPrimary()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void listen<RemoteActionRequest>("remote://action", (event) => remoteActionHandler.current(event.payload)).then((off) => {
+      if (cancelled) off();
+      else unlisten = off;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isPrimary()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void listen<RemoteActionResult>("remote://action-result", (event) => {
+      const result = event.payload;
+      if (consumeRemoteActionResult(result.id)) say(result.text, !result.ok);
+    }).then((off) => {
+      if (cancelled) off();
+      else unlisten = off;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [say]);
+
   return (
     <div className="cc">
       <header className="cc-top" data-tauri-drag-region>
@@ -2717,7 +2975,7 @@ export function CommandCenter() {
 
         <TeamStrip agents={roster} states={states} onOpen={() => setOverlay("team")} />
         <div className="cc-top-r" data-tauri-drag-region>
-          <UpdateChip working={workingNow} onError={(m) => say(m, true)} />
+          {PRIMARY && <UpdateChip working={workingNow} onError={(m) => say(m, true)} />}
           <button
             className="cc-hub"
             data-on={hubOk ? "1" : "0"}
@@ -2828,7 +3086,7 @@ export function CommandCenter() {
                   <div className="cc-empty">
                     <div className="cc-empty-title">Tu equipo, en un clic</div>
                     <div className="cc-quick">
-                      <button className="cc-quick-card" onClick={launchSquad}>
+                      <button className="cc-quick-card" onClick={() => void launchSquad()}>
                         <b>Lanzar escuadrón</b>
                         <span>Abre los agentes instalados ya dentro del proyecto (en modo plan si lo tienes puesto).</span>
                       </button>
@@ -2933,6 +3191,8 @@ export function CommandCenter() {
                 project={project}
                 events={state?.events ?? []}
                 openRel={previewRel}
+                otherProjects={otherProjects}
+                onSwitchProject={(p) => void switchProject(p)}
                 onChooseProject={() => openSettings("general")}
                 onSay={say}
                 onAsk={(text) => {
@@ -3048,6 +3308,9 @@ export function CommandCenter() {
           }}
           onRestart={(name) => {
             void restartAgent(name);
+          }}
+          onCloseAgent={(name) => {
+            void closeAgent(name);
           }}
           onReload={(name) => void reloadAgent(name)}
           startedAt={startedAtRef.current}
@@ -3177,6 +3440,7 @@ export function CommandCenter() {
             prefs={prefs}
             opening={opening}
             autoStart={autoStart}
+            windowsStartup={windowsStartup}
             shoot={shoot}
             chatsMin={chatsMin}
             dispatchOn={dispatchOn}
@@ -3186,6 +3450,7 @@ export function CommandCenter() {
             say={say}
             onPref={setPref}
             onAutoStart={toggleAutoStart}
+            onWindowsStartup={toggleWindowsStartup}
             onShoot={setShootMode}
             onChatsMin={(m) => {
               setChatsMin(m);

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./bridge";
 
 // Límites de uso de cada agente (sesión de 5 h, semana, mes). Claude los da exactos por su
 // «status line»; OpenCode Go se estima con su gasto local; Antigravity se lee de su /usage.

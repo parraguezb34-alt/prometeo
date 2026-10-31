@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { isRemote, openUrl } from "../lib/bridge";
 import { errMsg } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
 import { appDetect, appStart, appStatus, appStop, fixRequest } from "../lib/devapp";
 import type { AppDetect, AppStatus } from "../lib/devapp";
-import { projectKey } from "../lib/project";
+import { projectKey, projectName } from "../lib/project";
+import type { ProjectItem } from "./ProjectSwitcher";
 import { PreviewTab } from "./PreviewTab";
 import { Icon } from "./Icon";
 import "../history.css";
@@ -18,6 +19,8 @@ export function AppTab({
   events,
   openRel,
   onChooseProject,
+  otherProjects,
+  onSwitchProject,
   onAsk,
   onSay,
 }: {
@@ -26,6 +29,8 @@ export function AppTab({
   /** Archivo a abrir (un enlace del chat o del historial). */
   openRel: string | null;
   onChooseProject: () => void;
+  otherProjects: ProjectItem[];
+  onSwitchProject: (path: string) => void;
   /** Manda un mensaje al equipo (para pedir que arreglen la app). */
   onAsk: (text: string) => void;
   onSay: (text: string, err?: boolean) => void;
@@ -153,10 +158,27 @@ export function AppTab({
     body = (
       <div className="ap-empty">
         <h3>Sin proyecto</h3>
-        Elige la carpeta del proyecto para poder arrancarlo aquí.
-        <button className="hs-btn" onClick={onChooseProject}>
-          Elegir carpeta
-        </button>
+        {isRemote() ? (
+          <>
+            Elige un proyecto reciente del PC.
+            {otherProjects.length ? (
+              <div className="ap-empty-row">
+                {otherProjects.map((item) => (
+                  <button key={item.path} className="hs-btn" onClick={() => onSwitchProject(item.path)} title={item.path}>
+                    {projectName(item.path)}
+                  </button>
+                ))}
+              </div>
+            ) : <span>No hay proyectos recientes disponibles en este PC.</span>}
+          </>
+        ) : (
+          <>
+            Elige la carpeta del proyecto para poder arrancarlo aquí.
+            <button className="hs-btn" onClick={onChooseProject}>
+              Elegir carpeta
+            </button>
+          </>
+        )}
       </div>
     );
   } else if (statusError && !st) {

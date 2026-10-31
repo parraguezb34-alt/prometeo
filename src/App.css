@@ -1344,3 +1344,19 @@ select {
     opacity: 1;
   }
 }
+
+/* iPad y otras pantallas táctiles: dedos en vez de ratón. El texto no se amplía solo al girar
+   y los controles tienen un alto cómodo. El interruptor de Ajustes conserva su forma. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+@media (pointer: coarse) {
+  button:not(.st-switch):not(.wc-btn),
+  input,
+  select,
+  textarea {
+    min-height: 40px;
+  }
+}

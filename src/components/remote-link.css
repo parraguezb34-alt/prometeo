@@ -1,0 +1,146 @@
+/* Franja de conexión del iPad (RemoteLink.tsx): arriba, sobre todo, sin tapar el compositor. */
+.rl-bar {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(640px, calc(100vw - 32px));
+  padding: 8px 10px 8px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong, #3a3c44);
+  background: var(--surface, #1b1c20);
+  color: var(--text, #e8e8ea);
+  font-size: 13px;
+  line-height: 1.35;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.rl-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e5a33a;
+  animation: rl-pulse 1.2s ease-in-out infinite;
+}
+.rl-bar[data-state="offline"] .rl-dot {
+  background: var(--accent, #e5484d);
+  animation: none;
+}
+.rl-txt {
+  min-width: 0;
+}
+.rl-btn {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  flex: none;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 9px;
+  background: var(--accent, #e5484d);
+  color: #fff;
+  font-weight: 600;
+}
+@keyframes rl-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rl-dot {
+    animation: none;
+  }
+}
+
+/* Estado del PC (PcStatus.tsx): botón abajo a la izquierda, sobre la barra de chats. */
+.pcs-chip {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  position: fixed;
+  left: calc(env(safe-area-inset-left, 0px) + 16px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  z-index: 9998;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 22px;
+  border: 1px solid var(--line, #2c2e34);
+  background: var(--surface, #1b1c20);
+  color: var(--text-soft, #a9abb3);
+  font-size: 13px;
+  font-weight: 600;
+}
+.pcs-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3fb950;
+}
+.pcs-chip[data-tone="warn"] .pcs-dot {
+  background: #e5a33a;
+}
+.pcs-chip[data-tone="down"] .pcs-dot {
+  background: var(--accent, #e5484d);
+}
+.pcs-card {
+  position: fixed;
+  left: calc(env(safe-area-inset-left, 0px) + 16px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 70px);
+  z-index: 9998;
+  width: min(340px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--line-strong, #3a3c44);
+  background: var(--surface, #1b1c20);
+  color: var(--text, #e8e8ea);
+  font-size: 13px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.pcs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.pcs-x {
+  all: unset;
+  cursor: pointer;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  color: var(--text-soft, #a9abb3);
+}
+.pcs-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  margin: 0;
+}
+.pcs-grid dt {
+  color: var(--text-soft, #a9abb3);
+}
+.pcs-grid dd {
+  margin: 0;
+  text-align: right;
+}
+.pcs-warn {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(229, 163, 58, 0.12);
+  color: #f0b65a;
+}
+.pcs-muted {
+  margin: 10px 0 0;
+  color: var(--text-soft, #a9abb3);
+  font-size: 12px;
+}

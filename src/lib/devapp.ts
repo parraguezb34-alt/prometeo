@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./bridge";
 
 // «App en vivo»: el proyecto arrancado (npm run dev, o sus .html servidos) para verlo en Prometeo.
 

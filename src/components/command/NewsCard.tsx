@@ -3,6 +3,7 @@ import { ago } from "../../lib/team";
 import { appAbout, loadSeen, newSince, saveSeen } from "../../lib/update";
 import type { Change } from "../../lib/update";
 import { Icon } from "../Icon";
+import { isRemote } from "../../lib/bridge";
 
 /** «Novedades»: al abrir una versión nueva, los commits que trae (una vez). */
 export function NewsCard() {
@@ -10,6 +11,7 @@ export function NewsCard() {
   const cardRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    if (isRemote()) return;
     appAbout()
       .then((a) => {
         const seen = loadSeen();

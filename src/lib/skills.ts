@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./bridge";
 
 /** Una skill de la biblioteca de Prometeo (ver src-tauri/src/skills.rs). */
 export type Skill = {

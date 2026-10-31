@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./bridge";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { getSettings } from "./settings";
 
@@ -8,7 +8,7 @@ import { getSettings } from "./settings";
  * ventanita propia, ver aviso.rs) o como aviso de Windows, según Ajustes → Avisos.
  */
 
-export type AvisoKind = "ask" | "done" | "reply" | "late" | "info";
+export type AvisoKind = "ask" | "done" | "delivery" | "file" | "reply" | "late" | "info";
 export type Aviso = { id: string; title: string; body: string; agent?: string; kind: AvisoKind; ts_ms: number };
 
 let seq = 0;
@@ -90,6 +90,14 @@ export function notify(title: string, body: string, meta: { agent?: string; kind
   recent.set(sig, now);
   if (recent.size > 200) for (const [k, t] of recent) if (now - t > 10 * 60_000) recent.delete(k);
   const a = make(title, body, meta);
+  if (
+    "__TAURI_INTERNALS__" in window &&
+    (a.kind === "ask" || a.kind === "delivery" || a.kind === "file")
+  ) {
+    // Rust creates a fixed, path-free copy and sends it off-thread; the iPad SW suppresses it
+    // while a remote Prometeo window is visible, independently of the PC window focus.
+    void invoke("remote_push_send", { kind: a.kind, agent: a.agent }).catch(() => {});
+  }
   const focused = document.hasFocus();
   if (focused) listeners.forEach((fn) => fn(a));
   if (focused && !getSettings().notify.whenFocused) return;

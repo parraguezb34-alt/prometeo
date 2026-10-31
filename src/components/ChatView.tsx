@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { downloadRemoteFile, invoke, isPrimary, remoteFileUrl, revealItemInDir } from "../lib/bridge";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { displayName, kindOf, splitAttachments } from "../lib/attach";
@@ -171,6 +170,73 @@ function Tile({
   );
 }
 
+/**
+ * Un archivo que un agente entregó con `team_share_file`: nombre, vista previa si es imagen y
+ * «Descargar» (en el iPad baja el archivo; en el PC lo abre en el preview o en su carpeta).
+ */
+function FileCard({
+  path,
+  note,
+  project,
+  load,
+  onOpen,
+}: {
+  path: string;
+  note: string;
+  project: string | null;
+  load: Loader;
+  onOpen: (path: string) => void;
+}) {
+  const image = kindOf(path) === "image";
+  return (
+    <div className="cv-file" data-image={image ? "1" : "0"}>
+      {image && <FilePreview path={path} project={project} load={load} />}
+      <div className="cv-file-row">
+        <Icon name={image ? "eye" : "file"} size={16} />
+        <div className="cv-file-txt">
+          <b title={path}>{displayName(path)}</b>
+          {note && <span>{note}</span>}
+        </div>
+        {isPrimary() ? (
+          <>
+            <button className="cv-ghost" onClick={() => onOpen(path)} title="Abrir en el preview">
+              <Icon name="eye" size={12} />
+              Abrir
+            </button>
+            <button
+              className="cv-ghost"
+              onClick={() => void revealItemInDir(path).catch(() => {})}
+              title="Mostrar en la carpeta"
+            >
+              <Icon name="folder" size={12} />
+              Carpeta
+            </button>
+          </>
+        ) : (
+          <button className="cv-file-dl" onClick={() => downloadRemoteFile(path)} title={`Descargar ${displayName(path)}`}>
+            <Icon name="download" size={14} />
+            Descargar
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FilePreview({ path, project, load }: { path: string; project: string | null; load: Loader }) {
+  // En el iPad la imagen se pide tal cual por /files (sin pasar por base64 en el RPC).
+  const remoteSrc = isPrimary() ? null : remoteFileUrl(path, true);
+  const { src } = useImage(path, project, remoteSrc ? noLoad : load);
+  const shown = remoteSrc ?? src;
+  const [broken, setBroken] = useState(false);
+  if (!shown || broken) return null;
+  return (
+    <img className="cv-file-img" src={shown} alt={displayName(path)} loading="lazy" onError={() => setBroken(true)} />
+  );
+}
+
+const noLoad: Loader = () => new Promise<string>(() => {});
+
 /** Capturas de un turno: tres como mucho a la vista y el resto en el visor. */
 function Gallery({
   paths,
@@ -245,10 +311,12 @@ function Lightbox({
         <span className="cv-lightbox-path" title={path}>
           {path}
         </span>
-        <button className="cv-btn" onClick={() => reveal(path, project)}>
-          <Icon name="folder" size={13} />
-          Mostrar en la carpeta
-        </button>
+        {isPrimary() && (
+          <button className="cv-btn" onClick={() => reveal(path, project)}>
+            <Icon name="folder" size={13} />
+            Mostrar en la carpeta
+          </button>
+        )}
       </div>
       {many && (
         <>
@@ -865,6 +933,15 @@ export function ChatView({
         ? <QuestionCard key={part.key} q={q} onAnswer={onAnswer} />
         : null;
     }
+    if (part.k === "note" && e.kind === "file" && e.files[0]) {
+      return (
+        <div key={part.key} data-new={isNew(part.key)}>
+          {e.files.map((f) => (
+            <FileCard key={f} path={f} note={e.text} project={project} load={load} onOpen={openPath} />
+          ))}
+        </div>
+      );
+    }
     if (part.k === "note" && e.kind === "skill" && e.files[0]) {
       return (
         <SkillCard
@@ -1228,14 +1305,34 @@ export function ChatView({
           {shots.length > 0 && gallery(shots)}
           {others.length > 0 && (
             <div className="cv-atts">
-              {others.map((p) => (
-                <button className="cv-att" key={p} data-kind={kindOf(p)} onClick={() => (kindOf(p) === "dir" ? void revealItemInDir(p.replace(/[\\/]+$/, "")).catch(() => {}) : onOpenPath(p))}
-                  title={p}
-                >
-                  <Icon name={kindOf(p) === "dir" ? "folder" : "file"} size={14} />
-                  <span>{displayName(p)}</span>
-                </button>
-              ))}
+              {others.map((p) => {
+                const dir = kindOf(p) === "dir";
+                if (dir && !isPrimary())
+                  return (
+                    <span className="cv-att" key={p} data-kind="dir" title={`${p} · solo en el PC`}>
+                      <Icon name="folder" size={14} />
+                      <span>{displayName(p)}</span>
+                    </span>
+                  );
+                return (
+                  <button
+                    className="cv-att"
+                    key={p}
+                    data-kind={kindOf(p)}
+                    onClick={() =>
+                      dir
+                        ? void revealItemInDir(p.replace(/[\\/]+$/, "")).catch(() => {})
+                        : isPrimary()
+                          ? onOpenPath(p)
+                          : downloadRemoteFile(p)
+                    }
+                    title={isPrimary() ? p : `Descargar ${displayName(p)}`}
+                  >
+                    <Icon name={dir ? "folder" : isPrimary() ? "file" : "download"} size={14} />
+                    <span>{displayName(p)}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
           {r === lastUser && receipt(e)}

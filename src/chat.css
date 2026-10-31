@@ -12,6 +12,104 @@
   display: flex;
   flex-direction: column;
 }
+.cc-chat-actions-wrap { display: none; }
+
+/* En iPad el navegador extiende la vista bajo las barras del sistema. */
+.cc {
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px)
+    env(safe-area-inset-left, 0px);
+}
+
+/* iPad: controles utilizables con el dedo sin cambiar el escritorio. */
+@media (hover: none) and (pointer: coarse) {
+  .cc-top .cc-icon-btn,
+  .cc-top button,
+  .cc-vtabs button,
+  .cc-pilltabs button,
+  .cc-chat-del,
+  .cc-send,
+  .cc-send-mini,
+  .cv-head-btn,
+  .cv-btn,
+  .cv-ghost,
+  .cv-file-dl,
+  .cv-att,
+  .cc-menu button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .cc-chat-item .cc-chat-del { display: none; }
+  .cc-chat-item-t { padding-right: 56px; }
+
+  .cc-chat-actions-wrap {
+    position: absolute;
+    z-index: 40;
+    top: 4px;
+    right: 6px;
+    display: block;
+  }
+  .cc-chat-more {
+    all: unset;
+    box-sizing: border-box;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    background: var(--raised);
+    color: var(--text-soft);
+    font-size: 25px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .cc-chat-actions-menu {
+    position: absolute;
+    top: 48px;
+    right: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    min-width: 176px;
+    padding: 5px;
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.42);
+  }
+  .cc-chat-actions-menu > button {
+    all: unset;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
+    border-radius: 8px;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .cc-chat-actions-menu > button:hover,
+  .cc-chat-actions-menu > button:focus-visible { background: var(--raised-2); }
+  .cc-chat-actions-menu > .is-danger { color: var(--err); }
+  .cc-chat-actions-menu > .is-danger.is-confirming { color: var(--err); }
+
+  .cc-comp button,
+  .cc-comp input,
+  .cc-comp textarea,
+  .cc-comp select {
+    min-height: 44px;
+  }
+
+  .cv-head-btn {
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+  }
+}
 .cv {
   flex: 1;
   min-height: 0;
@@ -2673,4 +2771,74 @@ ol.md-list li::marker {
     opacity: 1;
     transform: translateX(-50%) scale(1);
   }
+}
+
+
+/* archivo entregado por un agente (team_share_file): vista previa y «Descargar» */
+.cv-file {
+  margin: 6px 0;
+  max-width: 460px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.cv-file-img {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  background: var(--bg, #111);
+  border-bottom: 1px solid var(--line);
+}
+.cv-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+.cv-file-row > .ic {
+  flex: none;
+  color: var(--accent);
+}
+.cv-file-txt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cv-file-txt b,
+.cv-file-txt span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cv-file-txt b {
+  font-size: 13px;
+  color: var(--text);
+}
+.cv-file-txt span {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+.cv-file-dl {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.cv-file-dl:focus-visible {
+  outline: 2px solid var(--line-strong);
+  outline-offset: 2px;
 }

@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isRemote } from "../lib/bridge";
 
 const inTauri = () => "__TAURI_INTERNALS__" in window;
 
 /**
  * Minimizar, maximizar y cerrar, dentro de la barra de Prometeo (la ventana no lleva la barra
  * blanca de Windows). Cerrar la esconde en la bandeja: los agentes siguen trabajando.
+ * En el iPad (acceso remoto) no hay ventana que mover: no se pinta.
  */
 export function WindowControls() {
   const [max, setMax] = useState(false);
@@ -19,7 +21,7 @@ export function WindowControls() {
       void un.then((f) => f()).catch(() => {});
     };
   }, []);
-  if (!inTauri()) return null;
+  if (isRemote() || !inTauri()) return null;
   const w = getCurrentWindow();
   return (
     <div className="wc" role="group" aria-label="Ventana">

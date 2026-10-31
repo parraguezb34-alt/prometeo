@@ -1090,6 +1090,7 @@ fn compact_catalog(mut catalog: Value) -> Value {
         ("dev_seccion", "Abre Chat, Tareas, Investigar, Programadas, App, Historial, Terminal o Ajustes."),
         ("team_context", "Estado del equipo: agentes, tareas, reservas y actividad. Úsalo al empezar."),
         ("team_update", "Publica un avance de una línea en el feed visible al usuario."),
+        ("team_share_file", "Entrega un archivo al usuario en el chat, con botón Descargar (también en el iPad)."),
         ("team_feed", "Actividad reciente; all incluye conexiones y herramientas."),
         ("team_message", "Mensaje a un agente o al equipo. Al responder, usa reply_to."),
         ("team_inbox", "Lee mensajes pendientes de tu buzón y los marca leídos."),
@@ -1168,6 +1169,18 @@ fn tools_catalog() -> Value {
                     "files": { "type": "array", "items": { "type": "string" }, "description": "Archivos tocados (opcional)" }
                 },
                 "required": ["text"]
+            }
+        },
+        {
+            "name": "team_share_file",
+            "description": "Entrega al usuario un archivo del proyecto en el chat: le sale una tarjeta con vista previa y botón «Descargar» (también desde el iPad). Úsalo cuando el resultado de tu trabajo sea un archivo que el usuario quiera llevarse (PDF, imagen, zip, presentación…).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Ruta del archivo, absoluta o relativa a la carpeta del proyecto. Debe estar dentro del proyecto." },
+                    "note": { "type": "string", "description": "Una línea: qué es el archivo (opcional)" }
+                },
+                "required": ["path"]
             }
         },
         {
@@ -1525,6 +1538,7 @@ fn call_tool(client: &HubClient, session_id: &str, params: &Value) -> Result<Val
                     )
                 })
         }
+        "team_share_file" => share_file(client, &sid, &args),
         "team_ask_user" => ask_user(client, &sid, &args),
         "team_skill_list" => client.get("/skills").map(|v| text_result(&render_skills(&v), false)),
         "team_skill_propose" => {
@@ -1998,6 +2012,57 @@ fn read_resource(client: &HubClient, params: &Value) -> Result<Value, (i64, Stri
         _ => return Err((-32602, format!("recurso desconocido: {uri}"))),
     };
     Ok(json!({ "contents": [ { "uri": uri, "mimeType": "text/markdown", "text": text } ] }))
+}
+
+/// Ruta absoluta de un archivo para entregarlo al usuario: debe existir, ser un archivo y estar
+/// dentro de `project` (la descarga desde el iPad solo sirve archivos del proyecto).
+fn shareable_path(project: &std::path::Path, raw: &str) -> Result<std::path::PathBuf, String> {
+    let raw = raw.trim().trim_matches('"');
+    if raw.is_empty() {
+        return Err("falta `path`".into());
+    }
+    let p = std::path::Path::new(raw);
+    let full = if p.is_absolute() { p.to_path_buf() } else { project.join(p) };
+    let real = full
+        .canonicalize()
+        .map_err(|_| format!("no existe: {}", full.display()))?;
+    let root = project.canonicalize().map_err(|e| e.to_string())?;
+    if !real.starts_with(&root) {
+        return Err(format!(
+            "{} está fuera del proyecto ({}): cópialo dentro (p. ej. a .lienzo/entregas/) y compártelo desde ahí",
+            real.display(),
+            root.display()
+        ));
+    }
+    if !real.is_file() {
+        return Err("solo archivos: para una carpeta, comprímela en un .zip y comparte el zip".into());
+    }
+    // Sin el prefijo \\?\ de canonicalize en Windows: así lo ve el usuario y la interfaz.
+    let shown = real.display().to_string();
+    Ok(std::path::PathBuf::from(shown.strip_prefix(r"\\?\").unwrap_or(&shown)))
+}
+
+fn share_file(client: &HubClient, sid: &str, args: &Value) -> Result<Value, String> {
+    let project = std::env::current_dir().map_err(|e| e.to_string())?;
+    let path = shareable_path(&project, args["path"].as_str().unwrap_or(""))?;
+    let note = trunc(args["note"].as_str().unwrap_or("").trim(), 400);
+    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let shown = path.display().to_string();
+    client
+        .post(
+            "/event",
+            &json!({ "session_id": sid, "kind": "file", "text": note, "files": [shown], "to": "tú" }),
+        )
+        .map(|_| {
+            text_result(
+                &format!(
+                    "Entregado en el chat: {} ({} KB). El usuario lo puede descargar desde el PC o el iPad.",
+                    shown,
+                    size.div_ceil(1024)
+                ),
+                false,
+            )
+        })
 }
 
 /// Se une al hub como `agent` y devuelve el id de sesión (vacío si no se pudo).
@@ -3706,6 +3771,25 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].file_name(), "cache.json");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shared_files_must_be_existing_files_inside_the_project() {
+        let dir = std::env::temp_dir().join(format!("lienzo-share-{}", std::process::id()));
+        let proj = dir.join("proj");
+        std::fs::create_dir_all(proj.join("out")).unwrap();
+        std::fs::write(proj.join("out/informe.pdf"), "pdf").unwrap();
+        std::fs::write(dir.join("fuera.txt"), "x").unwrap();
+        let ok = shareable_path(&proj, "out/informe.pdf").unwrap();
+        assert!(ok.ends_with("informe.pdf"));
+        assert!(!ok.display().to_string().starts_with(r"\?\"));
+        let abs = proj.join("out").join("informe.pdf");
+        assert!(shareable_path(&proj, abs.to_str().unwrap()).is_ok());
+        assert!(shareable_path(&proj, "../fuera.txt").unwrap_err().contains("fuera del proyecto"));
+        assert!(shareable_path(&proj, "out").unwrap_err().contains("solo archivos"));
+        assert!(shareable_path(&proj, "nada.pdf").unwrap_err().starts_with("no existe"));
+        assert!(shareable_path(&proj, " ").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

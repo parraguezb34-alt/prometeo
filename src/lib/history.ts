@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./bridge";
 import type { TeamClaim, TeamEvent, TeamTask } from "./team";
 
 // Historial del proyecto: una entrada por entrega de tarea (sus archivos tal como quedaron),

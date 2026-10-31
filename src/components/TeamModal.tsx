@@ -13,6 +13,7 @@ import type { AgentLimits } from "../lib/limits";
 import { stallText } from "../lib/stall";
 import type { Stall } from "../lib/stall";
 import { useModalFocus } from "./useModalFocus";
+import { isRemote } from "../lib/bridge";
 
 /** work = con tarea · idle = libre · blocked = espera tu respuesta · login = su terminal pide iniciar sesión · starting = terminal abierta, aún sin conectar · off = sin sesión */
 export type AgentState = "work" | "idle" | "blocked" | "login" | "starting" | "off";
@@ -166,6 +167,7 @@ export function TeamModal({
   onApply,
   onStart,
   onRestart,
+  onCloseAgent,
   onReload,
   onAutoStart,
   onSettings,
@@ -203,6 +205,7 @@ export function TeamModal({
   onApply: (name: string) => void;
   onStart: (name: string) => void;
   onRestart: (name: string) => void;
+  onCloseAgent: (name: string) => void;
   /** Reinicia un agente en marcha retomando su conversación (p. ej. para cargar herramientas nuevas). */
   onReload: (name: string) => void;
   onAutoStart: (on: boolean) => void;
@@ -536,6 +539,18 @@ export function TeamModal({
                         <Icon name="refresh" size={14} />
                         {busy === name ? "Reiniciando…" : "Reiniciar"}
                       </button>
+                      {isRemote() && (
+                        <ConfirmButton
+                          className="cc-btn sec"
+                          disabled={busy === name}
+                          onConfirm={() => onCloseAgent(name)}
+                          confirmText="¿Cerrar agente? Pulsa otra vez"
+                          title="Cierra su terminal en el PC y detiene el agente"
+                        >
+                          <Icon name="x" size={14} />
+                          Cerrar agente
+                        </ConfirmButton>
+                      )}
                     </div>
                   )}
 
@@ -575,6 +590,18 @@ export function TeamModal({
                           <Icon name="refresh" size={14} />
                           {busy === name ? "Reiniciando…" : "Reiniciar"}
                         </button>
+                      )}
+                      {isRemote() && (
+                        <ConfirmButton
+                          className="cc-btn sec"
+                          disabled={busy === name}
+                          onConfirm={() => onCloseAgent(name)}
+                          confirmText="¿Cerrar agente? Pulsa otra vez"
+                          title="Detiene el agente en el PC; si trabaja, puede interrumpir su tarea"
+                        >
+                          <Icon name="x" size={14} />
+                          Cerrar agente
+                        </ConfirmButton>
                       )}
                       <button
                         className={ctx && ctx.pct >= 75 ? "cc-btn hot" : "cc-btn sec"}

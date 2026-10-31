@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke } from "./bridge";
+import { listen } from "./bridge";
 import { takeDialog, termBracketed, waitQuiet, watchSubmit } from "./activity";
 import { asPaste, isMessage } from "./submit";
 
