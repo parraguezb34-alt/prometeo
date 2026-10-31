@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isRemote, openUrl } from "../lib/bridge";
+import { isRemote, openUrl, remoteToken } from "../lib/bridge";
 import { errMsg } from "../lib/team";
 import type { TeamEvent } from "../lib/team";
 import { appDetect, appStart, appStatus, appStop, fixRequest } from "../lib/devapp";
@@ -9,6 +9,24 @@ import type { ProjectItem } from "./ProjectSwitcher";
 import { PreviewTab } from "./PreviewTab";
 import { Icon } from "./Icon";
 import "../history.css";
+
+/**
+ * En el iPad el `localhost` de la app es el del PC: se ve por el acceso remoto, en
+ * `/preview/<puerto>/…`. El token solo va en la primera carga (el PC lo cambia por una cookie).
+ */
+function previewSrc(url: string, withToken = true): string {
+  if (!isRemote()) return url;
+  try {
+    const u = new URL(url);
+    const port = u.port || (u.protocol === "https:" ? "443" : "80");
+    const q = new URLSearchParams(u.search);
+    if (withToken) q.set("prometeo_t", remoteToken());
+    const qs = q.toString();
+    return `/preview/${port}${u.pathname}${qs ? `?${qs}` : ""}${u.hash}`;
+  } catch {
+    return url;
+  }
+}
 
 /**
  * «App»: el proyecto arrancado y a la vista (su `npm run dev`, o sus páginas servidas), y sus
@@ -225,7 +243,7 @@ export function AppTab({
         <iframe
           key={`${url}|${reload}`}
           className="ap-frame"
-          src={url}
+          src={previewSrc(url)}
           title="Tu app"
           allow="autoplay; fullscreen; gamepad; clipboard-write; xr-spatial-tracking"
         />
@@ -396,7 +414,11 @@ export function AppTab({
                 </button>
                 <button
                   className="ap-icon"
-                  onClick={() => void openUrl(url).catch((e) => onSay(errMsg(e), true))}
+                  onClick={() =>
+                    isRemote()
+                      ? void window.open(previewSrc(url), "_blank", "noopener")
+                      : void openUrl(url).catch((e) => onSay(errMsg(e), true))
+                  }
                   title="Abrir en el navegador"
                   aria-label="Abrir en el navegador"
                 >

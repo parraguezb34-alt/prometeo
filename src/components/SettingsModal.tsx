@@ -426,6 +426,8 @@ function General({ state, info, autoStart, windowsStartup, shoot, chatsMin, say,
         </Row>
       </Group>
 
+      <SelfTestPanel />
+
       <MotionGroup />
 
       <Group title="Atajos">
@@ -452,6 +454,77 @@ function General({ state, info, autoStart, windowsStartup, shoot, chatsMin, say,
         </Row>
       </Group>
     </>
+  );
+}
+
+type SelfTestCheck = { id: string; title: string; tone: "ok" | "warn" | "err"; detail: string; fix: string };
+
+async function checkPushSubscription(): Promise<SelfTestCheck> {
+  const base = { id: "push", title: "Avisos push suscritos" };
+  if (!isRemote()) {
+    return { ...base, tone: "warn", detail: "La suscripción se comprueba desde el iPad.", fix: "Abre Prometeo desde su icono en la pantalla de inicio del iPad y pulsa «Probar todo»." };
+  }
+  if (!window.isSecureContext) {
+    return { ...base, tone: "err", detail: "La página no usa HTTPS.", fix: "Abre el enlace HTTPS de Tailscale Serve." };
+  }
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    return { ...base, tone: "err", detail: "Este navegador no admite avisos push.", fix: "Usa Safari en iPadOS 16.4 o posterior y añade Prometeo a la pantalla de inicio." };
+  }
+  if (!standaloneApp()) {
+    return { ...base, tone: "warn", detail: "Prometeo no se abrió desde su icono de la pantalla de inicio.", fix: "En Safari, comparte el enlace HTTPS y pulsa «Añadir a pantalla de inicio»; luego abre Prometeo desde el icono." };
+  }
+  if (Notification.permission === "denied") {
+    return { ...base, tone: "err", detail: "Safari bloqueó los avisos.", fix: "Permítelos en Ajustes del iPad → Notificaciones → Prometeo." };
+  }
+  try {
+    const registration = await navigator.serviceWorker.getRegistration("/");
+    const subscription = await registration?.pushManager.getSubscription();
+    return subscription
+      ? { ...base, tone: "ok", detail: "Este iPad tiene una suscripción push activa.", fix: "" }
+      : { ...base, tone: "warn", detail: "Este iPad todavía no está suscrito.", fix: "En Ajustes → Avisos, pulsa «Activar avisos» desde Prometeo instalado en la pantalla de inicio." };
+  } catch (e) {
+    return { ...base, tone: "err", detail: errMsg(e), fix: "Abre la sección Avisos e inténtalo de nuevo desde el icono de la pantalla de inicio." };
+  }
+}
+
+function SelfTestPanel() {
+  const [checks, setChecks] = useState<SelfTestCheck[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true);
+    try {
+      const [pc, push] = await Promise.all([
+        invoke<SelfTestCheck[]>("selftest_run").catch((e) => [{
+          id: "pc", title: "Comprobaciones del PC", tone: "err" as const,
+          detail: errMsg(e), fix: "Comprueba que el PC y el acceso remoto estén conectados e inténtalo otra vez.",
+        }]),
+        checkPushSubscription(),
+      ]);
+      setChecks([...pc, push]);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const label = (tone: SelfTestCheck["tone"]) => tone === "ok" ? "Bien" : tone === "warn" ? "Revisar" : "Falla";
+  return (
+    <Group title="Revisión de la víspera" desc="Comprueba al pulsar los requisitos para usar Prometeo durante la hackatón. No se ejecuta en segundo plano.">
+      <div className="st-row">
+        <div className="st-row-txt">
+          <span className="st-row-l">Estado del PC, Tailscale, energía y avisos</span>
+          <span className="st-row-h">Verde: listo · amarillo: conviene revisar · rojo: requiere acción.</span>
+        </div>
+        <button className="cc-btn" disabled={busy} onClick={() => void run()}>{busy ? "Comprobando…" : "Probar todo"}</button>
+      </div>
+      {checks?.map((item) => (
+        <div className="st-row" key={item.id}>
+          <div className="st-row-txt">
+            <span className="st-row-l">{item.title}</span>
+            <span className="st-row-h">{item.detail}{item.fix ? ` · Qué hacer: ${item.fix}` : ""}</span>
+          </div>
+          <span className="st-pill" data-tone={item.tone}>{label(item.tone)}</span>
+        </div>
+      ))}
+    </Group>
   );
 }
 

@@ -7,11 +7,12 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    io::BufRead,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket},
     path::PathBuf,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU16, Ordering},
         mpsc,
     },
     thread::JoinHandle,
@@ -572,13 +573,22 @@ fn start_server() -> Result<(), String> {
         return Ok(());
     }
     // Loopback siempre (y aquí, para que un puerto ocupado se vea como error al encender).
-    let local = Server::http((Ipv4Addr::LOCALHOST, PORT)).map_err(|e| e.to_string())?;
+    // Delante va un portero TCP: deja pasar los websockets de la vista previa de la app y el
+    // resto lo entrega, una petición por conexión, al servidor HTTP interno.
+    let local = TcpListener::bind((Ipv4Addr::LOCALHOST, PORT)).map_err(|e| e.to_string())?;
+    let inner = Server::http((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
+    let inner_port = inner
+        .server_addr()
+        .to_ip()
+        .map(|a| a.port())
+        .ok_or("sin puerto interno")?;
+    INNER_PORT.store(inner_port, Ordering::Relaxed);
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = stop.clone();
     let app = r.app.clone();
     let join = std::thread::Builder::new()
         .name("prometeo-remote".into())
-        .spawn(move || supervise(app, local, thread_stop))
+        .spawn(move || supervise(app, local, inner, inner_port, thread_stop))
         .map_err(|e| e.to_string())?;
     *state = Some((stop, join));
     Ok(())
@@ -586,8 +596,15 @@ fn start_server() -> Result<(), String> {
 
 /// Atiende loopback y vigila la IP de Tailscale: si aparece (Tailscale arrancó después que
 /// Prometeo) o cambia, se enlaza a ella sin reiniciar nada; si desaparece, deja de escuchar.
-fn supervise(app: AppHandle, local: Server, stop: Arc<AtomicBool>) {
-    let local_join = listen_on(app.clone(), local, stop.clone());
+fn supervise(
+    app: AppHandle,
+    local: TcpListener,
+    inner: Server,
+    inner_port: u16,
+    stop: Arc<AtomicBool>,
+) {
+    let inner_join = listen_on(app, inner, stop.clone());
+    let local_join = front_on(local, inner_port, stop.clone());
     let mut ts: Option<(Ipv4Addr, Arc<AtomicBool>, JoinHandle<()>)> = None;
     let mut next_check = Instant::now();
     while !stop.load(Ordering::Relaxed) {
@@ -601,10 +618,10 @@ fn supervise(app: AppHandle, local: Server, stop: Arc<AtomicBool>) {
                 }
                 // Si el enlace falla (la interfaz aún no está lista) se reintenta en 5 s.
                 if let Some(ip) = ip
-                    && let Ok(server) = Server::http((ip, PORT))
+                    && let Ok(listener) = TcpListener::bind((ip, PORT))
                 {
                     let s = Arc::new(AtomicBool::new(false));
-                    let j = listen_on(app.clone(), server, s.clone());
+                    let j = front_on(listener, inner_port, s.clone());
                     ts = Some((ip, s, j));
                 }
             }
@@ -616,6 +633,7 @@ fn supervise(app: AppHandle, local: Server, stop: Arc<AtomicBool>) {
         let _ = j.join();
     }
     let _ = local_join.join();
+    let _ = inner_join.join();
 }
 
 fn listen_on(app: AppHandle, server: Server, stop: Arc<AtomicBool>) -> JoinHandle<()> {
@@ -639,6 +657,492 @@ fn stop_server() {
         stop.store(true, Ordering::Relaxed);
         let _ = join.join();
     }
+}
+
+// ── Portero TCP y vista previa de la app (/preview/<puerto>/…) ─────────────────────────────
+//
+// El iPad no alcanza el `localhost` del PC, así que la app arrancada en la pestaña App se sirve
+// por aquí. Solo se reenvía al puerto que anuncia la app que Prometeo tiene en marcha, y solo a
+// loopback. La sesión va en una cookie (un iframe no puede llevar cabeceras): se pone al abrir
+// `/preview/<puerto>/?prometeo_t=<token>` y se quita el token de la dirección con una redirección.
+//
+// Las rutas absolutas de la app («/src/main.tsx», «/@vite/client»…) llegan sin el prefijo: si la
+// página que las pide está bajo `/preview/<puerto>/`, se redirigen allí (los módulos ES siguen la
+// redirección y toman la nueva dirección como base). El websocket de recarga en caliente de Vite
+// va a «/»: el portero lo reconoce y lo une a la última vista previa abierta.
+
+static INNER_PORT: AtomicU16 = AtomicU16::new(0);
+static PREVIEW_PORT: AtomicU16 = AtomicU16::new(0);
+const PREVIEW_COOKIE: &str = "prometeo_preview";
+/// Parámetro de la primera carga de la vista previa (`/preview/<puerto>/?prometeo_t=<token>`).
+const PREVIEW_QUERY: &str = "prometeo_t=";
+const MAX_HEAD: usize = 32 * 1024;
+
+fn front_on(listener: TcpListener, inner_port: u16, stop: Arc<AtomicBool>) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        if listener.set_nonblocking(true).is_err() {
+            return;
+        }
+        while !stop.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((stream, addr)) => {
+                    let _ = std::thread::Builder::new()
+                        .name("prometeo-remote-conn".into())
+                        .spawn(move || front_conn(stream, addr, inner_port));
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(30)),
+            }
+        }
+    })
+}
+
+fn front_conn(mut client: TcpStream, addr: SocketAddr, inner_port: u16) {
+    let _ = client.set_nonblocking(false);
+    let _ = client.set_nodelay(true);
+    if !allowed_peer(Some(&addr)) {
+        let _ = client.write_all(
+            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        return;
+    }
+    let _ = client.set_read_timeout(Some(Duration::from_secs(30)));
+    let Some((buf, head_len)) = read_head(&mut client) else {
+        return;
+    };
+    let _ = client.set_read_timeout(None);
+    let Some(head) = parse_head(&buf[..head_len]) else {
+        return;
+    };
+    if head
+        .header("upgrade")
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+    {
+        match preview_ws_target(&head, &current_token()) {
+            Some((port, target)) => ws_proxy(client, &head, port, &target, &buf[head_len..]),
+            None => {
+                let _ = client.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+            }
+        }
+        return;
+    }
+    let Ok(mut inner) = TcpStream::connect((Ipv4Addr::LOCALHOST, inner_port)) else {
+        return;
+    };
+    let _ = inner.set_nodelay(true);
+    // Una petición por conexión: así cada una pasa por el portero (un websocket nunca llega
+    // al servidor interno dentro de una conexión reutilizada).
+    if inner.write_all(&head.to_bytes_closing()).is_err()
+        || inner.write_all(&buf[head_len..]).is_err()
+    {
+        return;
+    }
+    pipe(client, inner);
+}
+
+fn read_head(s: &mut impl Read) -> Option<(Vec<u8>, usize)> {
+    let mut buf = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = s.read(&mut chunk).ok()?;
+        if n == 0 {
+            return None;
+        }
+        let from = buf.len().saturating_sub(3);
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(i) = buf[from..].windows(4).position(|w| w == b"\r\n\r\n") {
+            return Some((buf, from + i + 4));
+        }
+        if buf.len() > MAX_HEAD {
+            return None;
+        }
+    }
+}
+
+struct Head {
+    method: String,
+    target: String,
+    version: String,
+    headers: Vec<(String, String)>,
+}
+
+impl Head {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+    /// La misma petición con «Connection: close».
+    fn to_bytes_closing(&self) -> Vec<u8> {
+        let mut out = format!("{} {} {}\r\n", self.method, self.target, self.version);
+        for (k, v) in &self.headers {
+            if k.eq_ignore_ascii_case("connection") || k.eq_ignore_ascii_case("keep-alive") {
+                continue;
+            }
+            out.push_str(&format!("{k}: {v}\r\n"));
+        }
+        out.push_str("Connection: close\r\n\r\n");
+        out.into_bytes()
+    }
+}
+
+fn parse_head(raw: &[u8]) -> Option<Head> {
+    let text = String::from_utf8_lossy(raw);
+    let mut lines = text.split("\r\n");
+    let mut first = lines.next()?.splitn(3, ' ');
+    let method = first.next()?.to_string();
+    let target = first.next()?.to_string();
+    let version = first.next()?.to_string();
+    if method.is_empty() || !target.starts_with('/') || !version.starts_with("HTTP/") {
+        return None;
+    }
+    let headers = lines
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            Some((k.trim().to_string(), v.trim().to_string()))
+        })
+        .collect();
+    Some(Head {
+        method,
+        target,
+        version,
+        headers,
+    })
+}
+
+/// Une dos conexiones en ambos sentidos hasta que una de las dos cierre.
+fn pipe(a: TcpStream, b: TcpStream) {
+    let (Ok(mut a_read), Ok(mut b_read)) = (a.try_clone(), b.try_clone()) else {
+        return;
+    };
+    let up = std::thread::spawn(move || {
+        let mut b = b;
+        let _ = std::io::copy(&mut a_read, &mut b);
+        let _ = b.shutdown(Shutdown::Write);
+    });
+    let mut a = a;
+    let _ = std::io::copy(&mut b_read, &mut a);
+    let _ = a.shutdown(Shutdown::Both);
+    let _ = up.join();
+}
+
+fn current_token() -> String {
+    REMOTE
+        .get()
+        .and_then(|r| r.config.lock().ok().map(|c| c.token.clone()))
+        .unwrap_or_default()
+}
+
+/// `/preview/<puerto>/resto?consulta` → (puerto, `/resto?consulta`).
+fn preview_target(target: &str) -> Option<(u16, String)> {
+    let rest = target.strip_prefix("/preview/")?;
+    let cut = rest.find(['/', '?']).unwrap_or(rest.len());
+    let port: u16 = rest[..cut].parse().ok()?;
+    let tail = &rest[cut..];
+    let tail = if tail.is_empty() {
+        "/".to_string()
+    } else if tail.starts_with('?') {
+        format!("/{tail}")
+    } else {
+        tail.to_string()
+    };
+    Some((port, tail))
+}
+
+fn cookie_has_token(cookie: Option<&str>, expected: &str) -> bool {
+    cookie.is_some_and(|c| {
+        c.split(';').any(|p| {
+            p.trim()
+                .strip_prefix(PREVIEW_COOKIE)
+                .and_then(|v| v.strip_prefix('='))
+                .is_some_and(|v| valid_token(v, expected))
+        })
+    })
+}
+
+/// Quita nuestra cookie antes de pasar la petición a la app del usuario.
+fn strip_preview_cookie(cookie: &str) -> String {
+    cookie
+        .split(';')
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && !p.starts_with(&format!("{PREVIEW_COOKIE}=")))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn url_port(url: &str) -> Option<u16> {
+    let rest = url.split_once("://")?.1;
+    let host = rest.split(['/', '?', '#']).next()?;
+    host.rsplit_once(':')?.1.parse().ok()
+}
+
+/// Solo el puerto de la app que Prometeo tiene arrancada (nunca el suyo propio).
+fn preview_port_allowed(port: u16) -> bool {
+    if port == 0 || port == PORT || port == INNER_PORT.load(Ordering::Relaxed) {
+        return false;
+    }
+    let st = crate::devapp::status();
+    st.running && st.url.as_deref().and_then(url_port) == Some(port)
+}
+
+fn preview_ws_target(head: &Head, token: &str) -> Option<(u16, String)> {
+    if !cookie_has_token(head.header("cookie"), token) {
+        return None;
+    }
+    let (port, target) = match preview_target(&head.target) {
+        Some(t) => t,
+        None => (PREVIEW_PORT.load(Ordering::Relaxed), head.target.clone()),
+    };
+    preview_port_allowed(port).then_some((port, target))
+}
+
+/// Puerto de la vista previa desde la que se pidió esta ruta (por su cabecera Referer).
+fn referer_preview_port(referer: Option<&str>) -> Option<u16> {
+    let rest = referer?.split_once("://")?.1;
+    let path = &rest[rest.find('/')?..];
+    preview_target(path).map(|(p, _)| p)
+}
+
+fn connect_loopback(port: u16) -> Result<TcpStream, String> {
+    let mut last = String::from("sin dirección");
+    for ip in [IpAddr::V4(Ipv4Addr::LOCALHOST), IpAddr::V6(Ipv6Addr::LOCALHOST)] {
+        match TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_secs(3)) {
+            Ok(s) => {
+                let _ = s.set_nodelay(true);
+                return Ok(s);
+            }
+            Err(e) => last = e.to_string(),
+        }
+    }
+    Err(format!("la app no responde en el puerto {port}: {last}"))
+}
+
+fn rewrite_location(v: &str, port: u16) -> String {
+    for pre in [
+        format!("http://localhost:{port}"),
+        format!("http://127.0.0.1:{port}"),
+        format!("http://[::1]:{port}"),
+    ] {
+        if let Some(rest) = v.strip_prefix(&pre) {
+            let rest = if rest.is_empty() { "/" } else { rest };
+            return format!("/preview/{port}{rest}");
+        }
+    }
+    if v.starts_with('/') && !v.starts_with("//") && !v.starts_with(&format!("/preview/{port}/")) {
+        return format!("/preview/{port}{v}");
+    }
+    v.to_string()
+}
+
+fn rewrite_referer(v: &str, port: u16) -> String {
+    let path = v
+        .split_once("://")
+        .and_then(|(_, r)| r.find('/').map(|i| &r[i..]))
+        .and_then(preview_target)
+        .filter(|(p, _)| *p == port)
+        .map(|(_, rest)| rest)
+        .unwrap_or_else(|| "/".into());
+    format!("http://localhost:{port}{path}")
+}
+
+/// Cabeceras de la petición que se reescriben o no pasan a la app.
+fn skip_forward_header(k: &str) -> bool {
+    [
+        "host",
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "content-length",
+    ]
+    .iter()
+    .any(|h| k.eq_ignore_ascii_case(h))
+}
+
+fn forward_header_value(k: &str, v: &str, port: u16) -> Option<String> {
+    if k.eq_ignore_ascii_case("cookie") {
+        let c = strip_preview_cookie(v);
+        (!c.is_empty()).then_some(c)
+    } else if k.eq_ignore_ascii_case("origin") {
+        Some(format!("http://localhost:{port}"))
+    } else if k.eq_ignore_ascii_case("referer") {
+        Some(rewrite_referer(v, port))
+    } else {
+        Some(v.to_string())
+    }
+}
+
+fn ws_proxy(mut client: TcpStream, head: &Head, port: u16, target: &str, extra: &[u8]) {
+    let mut backend = match connect_loopback(port) {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = client.write_all(
+                b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            return;
+        }
+    };
+    let mut out = format!("{} {target} HTTP/1.1\r\nHost: localhost:{port}\r\n", head.method);
+    for (k, v) in &head.headers {
+        if k.eq_ignore_ascii_case("host") {
+            continue;
+        }
+        if let Some(v) = forward_header_value(k, v, port) {
+            out.push_str(&format!("{k}: {v}\r\n"));
+        }
+    }
+    out.push_str("\r\n");
+    if backend.write_all(out.as_bytes()).is_err() || backend.write_all(extra).is_err() {
+        return;
+    }
+    pipe(client, backend);
+}
+
+fn preview_page(status: u16, title: &str, text: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let body = format!(
+        "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\">\
+         <title>{title}</title><body style=\"font:15px system-ui;padding:24px;color:#444\">\
+         <h3>{title}</h3><p>{text}</p>"
+    );
+    Response::from_data(body.into_bytes())
+        .with_status_code(StatusCode(status))
+        .with_header(header("Content-Type", "text/html; charset=utf-8"))
+        .with_header(header("Cache-Control", "no-store"))
+}
+
+fn serve_preview(mut req: Request, url: &str, port: u16, rest: &str, token: &str) {
+    let (path_part, query) = url.split_once('?').unwrap_or((url, ""));
+    let bare = path_part == format!("/preview/{port}");
+    // Parámetro propio: «t» es de la app (Vite lo usa para romper la caché al recargar).
+    let preview_token = query.split('&').find_map(|p| p.strip_prefix(PREVIEW_QUERY).map(percent_decode));
+    if let Some(t) = preview_token {
+        if !valid_token(&t, token) {
+            let _ = req.respond(preview_page(401, "Sin permiso", "El enlace de la vista previa caducó. Ábrela otra vez desde la pestaña App."));
+            return;
+        }
+        let mut loc = if bare { format!("{path_part}/") } else { path_part.to_string() };
+        let q: Vec<&str> = query.split('&').filter(|p| !p.starts_with(PREVIEW_QUERY) && !p.is_empty()).collect();
+        if !q.is_empty() {
+            loc.push('?');
+            loc.push_str(&q.join("&"));
+        }
+        let cookie = format!("{PREVIEW_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax");
+        let _ = req.respond(
+            Response::empty(StatusCode(302))
+                .with_header(header("Location", &loc))
+                .with_header(header("Set-Cookie", &cookie))
+                .with_header(header("Cache-Control", "no-store")),
+        );
+        return;
+    }
+    let cookie = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Cookie"))
+        .map(|h| h.value.as_str().to_string());
+    if !cookie_has_token(cookie.as_deref(), token) {
+        let _ = req.respond(preview_page(401, "Sin permiso", "Abre la vista previa desde la pestaña App de Prometeo."));
+        return;
+    }
+    if bare {
+        let loc = if query.is_empty() { format!("{path_part}/") } else { format!("{path_part}/?{query}") };
+        let _ = req.respond(Response::empty(StatusCode(301)).with_header(header("Location", &loc)));
+        return;
+    }
+    if !preview_port_allowed(port) {
+        let _ = req.respond(preview_page(502, "La app no está en marcha", "Arráncala en la pestaña App y vuelve a intentarlo."));
+        return;
+    }
+    PREVIEW_PORT.store(port, Ordering::Relaxed);
+    match forward_http(&mut req, port, rest) {
+        Ok(resp) => {
+            let _ = req.respond(resp);
+        }
+        Err(e) => {
+            let _ = req.respond(preview_page(502, "La app no responde", &e));
+        }
+    }
+}
+
+type PreviewBody = Box<dyn Read + Send>;
+
+fn forward_http(req: &mut Request, port: u16, rest: &str) -> Result<Response<PreviewBody>, String> {
+    let mut body = Vec::new();
+    req.as_reader()
+        .take(MAX_UPLOAD_BODY as u64 + 1)
+        .read_to_end(&mut body)
+        .map_err(|e| e.to_string())?;
+    if body.len() > MAX_UPLOAD_BODY {
+        return Err("la petición es demasiado grande".into());
+    }
+    let mut s = connect_loopback(port)?;
+    // HTTP/1.0: la app responde sin trozos («chunked») y cierra al acabar.
+    let mut out = format!(
+        "{} {rest} HTTP/1.0\r\nHost: localhost:{port}\r\nConnection: close\r\n",
+        req.method().as_str()
+    );
+    for h in req.headers() {
+        let k = h.field.as_str().as_str();
+        if skip_forward_header(k) {
+            continue;
+        }
+        if let Some(v) = forward_header_value(k, h.value.as_str(), port) {
+            out.push_str(&format!("{k}: {v}\r\n"));
+        }
+    }
+    if !body.is_empty() || matches!(req.method(), Method::Post | Method::Put | Method::Patch) {
+        out.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    out.push_str("\r\n");
+    s.write_all(out.as_bytes()).map_err(|e| e.to_string())?;
+    s.write_all(&body).map_err(|e| e.to_string())?;
+
+    let mut reader = std::io::BufReader::new(s);
+    let mut line = Vec::new();
+    reader.read_until(b'\n', &mut line).map_err(|e| e.to_string())?;
+    let status_line = String::from_utf8_lossy(&line);
+    let code: u16 = status_line
+        .split(' ')
+        .nth(1)
+        .and_then(|c| c.trim().parse().ok())
+        .ok_or("la app respondió algo que no es HTTP")?;
+    let mut headers = Vec::new();
+    let mut len: Option<usize> = None;
+    loop {
+        line.clear();
+        let n = reader.read_until(b'\n', &mut line).map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&line);
+        let text = text.trim_end();
+        if n == 0 || text.is_empty() {
+            break;
+        }
+        let Some((k, v)) = text.split_once(':') else { continue };
+        let (k, v) = (k.trim(), v.trim());
+        if k.eq_ignore_ascii_case("content-length") {
+            len = v.parse().ok();
+            continue;
+        }
+        if ["connection", "keep-alive", "transfer-encoding", "proxy-connection"]
+            .iter()
+            .any(|h| k.eq_ignore_ascii_case(h))
+        {
+            continue;
+        }
+        let v = if k.eq_ignore_ascii_case("location") { rewrite_location(v, port) } else { v.to_string() };
+        if let Ok(h) = Header::from_bytes(k.as_bytes(), v.as_bytes()) {
+            headers.push(h);
+        }
+    }
+    if matches!(code, 204 | 304) {
+        len = Some(0);
+    }
+    Ok(Response::new(StatusCode(code), headers, Box::new(reader) as PreviewBody, len, None))
 }
 
 fn header(name: &str, value: &str) -> Header {
@@ -731,6 +1235,29 @@ fn handle(app: AppHandle, req: Request) {
         .get()
         .and_then(|r| r.config.lock().ok().map(|c| c.token.clone()))
         .unwrap_or_default();
+    if let Some((port, rest)) = preview_target(&url) {
+        serve_preview(req, &url, port, &rest, &token);
+        return;
+    }
+    let referer = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Referer"))
+        .map(|h| h.value.as_str().to_string());
+    if let Some(port) = referer_preview_port(referer.as_deref())
+        && !path.starts_with("/rpc/")
+        && path != "/events"
+        && path != "/files"
+    {
+        // Ruta absoluta pedida desde la vista previa: es de la app, no de Prometeo.
+        let loc = format!("/preview/{port}{url}");
+        let _ = req.respond(
+            Response::empty(StatusCode(307))
+                .with_header(header("Location", &loc))
+                .with_header(header("Cache-Control", "no-store")),
+        );
+        return;
+    }
     let is_static = method == Method::Get
         && !path.starts_with("/rpc/")
         && path != "/events"
@@ -982,6 +1509,7 @@ fn dispatch_rpc_command_allowed(command: &str) -> bool {
             | "remote_push_visibility"
             | "remote_action"
             | "pc_status"
+            | "selftest_run"
     )
 }
 
@@ -1082,13 +1610,14 @@ fn dispatch_rpc(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     use crate::{
-        chatstore, devapp, errlog, history, hub, limits, project, pty, research, skills, updater,
-        viewer,
+        chatstore, devapp, errlog, history, hub, limits, project, pty, research, selftest, skills,
+        updater, viewer,
     };
     if !dispatch_rpc_command_allowed(command) {
         return Err(format!("comando no permitido: {command}"));
     }
     match command {
+        "selftest_run" => async_call!(selftest::selftest_run(app.clone())),
         "term_spawn" => async_call!(pty::term_spawn(
             app.clone(),
             app.state::<pty::PtyManager>(),
@@ -1558,6 +2087,7 @@ mod tests {
         assert!(dispatch_rpc_command_allowed("remote_push_subscribe"));
         assert!(dispatch_rpc_command_allowed("remote_push_unsubscribe"));
         assert!(dispatch_rpc_command_allowed("remote_push_visibility"));
+        assert!(dispatch_rpc_command_allowed("selftest_run"));
         assert!(!dispatch_rpc_command_allowed("remote_push_send"));
         assert!(!dispatch_rpc_command_allowed("update_apply"));
         assert!(!dispatch_rpc_command_allowed("remote_set"));
@@ -1650,6 +2180,60 @@ mod tests {
         assert_eq!(frame, "event: team://update\ndata: {}\n\n");
         drop(tx);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn preview_paths_split_port_and_rest() {
+        assert_eq!(preview_target("/preview/5173/src/a.ts?v=1"), Some((5173, "/src/a.ts?v=1".into())));
+        assert_eq!(preview_target("/preview/5173"), Some((5173, "/".into())));
+        assert_eq!(preview_target("/preview/5173?x=1"), Some((5173, "/?x=1".into())));
+        assert_eq!(preview_target("/preview/abc/"), None);
+        assert_eq!(preview_target("/previewx/1/"), None);
+        assert_eq!(referer_preview_port(Some("https://pc.ts.net/preview/3000/src/main.tsx")), Some(3000));
+        assert_eq!(referer_preview_port(Some("https://pc.ts.net/")), None);
+        assert_eq!(referer_preview_port(None), None);
+    }
+
+    #[test]
+    fn preview_rewrites_locations_referers_and_cookies() {
+        assert_eq!(rewrite_location("http://localhost:5173/login", 5173), "/preview/5173/login");
+        assert_eq!(rewrite_location("http://127.0.0.1:5173", 5173), "/preview/5173/");
+        assert_eq!(rewrite_location("/login", 5173), "/preview/5173/login");
+        assert_eq!(rewrite_location("/preview/5173/x", 5173), "/preview/5173/x");
+        assert_eq!(rewrite_location("https://example.com/", 5173), "https://example.com/");
+        assert_eq!(rewrite_referer("https://pc/preview/5173/a?b", 5173), "http://localhost:5173/a?b");
+        assert_eq!(rewrite_referer("https://pc/", 5173), "http://localhost:5173/");
+        let t = "a".repeat(TOKEN_LEN);
+        let c = format!("x=1; {PREVIEW_COOKIE}={t}; y=2");
+        assert!(cookie_has_token(Some(&c), &t));
+        assert!(!cookie_has_token(Some("x=1"), &t));
+        assert!(!cookie_has_token(Some(&format!("{PREVIEW_COOKIE}={}", "b".repeat(TOKEN_LEN))), &t));
+        assert_eq!(strip_preview_cookie(&c), "x=1; y=2");
+        assert_eq!(url_port("http://localhost:5173/"), Some(5173));
+        assert_eq!(url_port("http://[::1]:8080"), Some(8080));
+    }
+
+    #[test]
+    fn preview_never_targets_prometeo_or_a_stopped_app() {
+        assert!(!preview_port_allowed(PORT));
+        assert!(!preview_port_allowed(0));
+        // Sin app arrancada no hay puerto permitido.
+        assert!(!preview_port_allowed(5173));
+    }
+
+    #[test]
+    fn front_reads_head_and_forces_one_request_per_connection() {
+        let raw = b"GET /x HTTP/1.1\r\nHost: a\r\nConnection: keep-alive\r\nUpgrade: websocket\r\n\r\nBODY";
+        let (buf, n) = read_head(&mut &raw[..]).unwrap();
+        assert_eq!(&buf[n..], b"BODY");
+        let head = parse_head(&buf[..n]).unwrap();
+        assert_eq!(head.target, "/x");
+        assert_eq!(head.header("upgrade"), Some("websocket"));
+        let out = String::from_utf8(head.to_bytes_closing()).unwrap();
+        assert!(out.starts_with("GET /x HTTP/1.1\r\n"));
+        assert!(out.contains("Connection: close\r\n\r\n"));
+        assert!(!out.contains("keep-alive"));
+        assert!(parse_head(b"garbage\r\n\r\n").is_none());
     }
 
     #[test]

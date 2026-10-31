@@ -84,6 +84,15 @@ La pantalla sí puede apagarse; lo que no puede es suspenderse ni hibernar. Adem
   **lanzar el escuadrón, abrir, cerrar y reiniciar agentes**, **cambiar a un proyecto reciente**,
   **adjuntar fotos y archivos** y **descargar** lo que te entregan los agentes (botón «Descargar»).
   Abajo a la izquierda, el botón **PC** muestra memoria, disco, corriente y Tailscale del PC.
+- **Ver tu app**: en la pestaña **App**, la app que arranca el proyecto (`npm run dev`) se ve y
+  se usa desde el iPad, y se recarga sola cuando un agente cambia el código. Va por el mismo acceso
+  remoto (`/preview/<puerto>/`), solo a la app que Prometeo tiene arrancada; el botón de abrir la
+  saca a una pestaña aparte de Safari.
+- **Descargar carpetas**: las carpetas adjuntas en el chat tienen «Descargar zip» (sin
+  `node_modules`, `target` ni `.git`; hasta 100 MB). Útil para entregar el proyecto.
+- **Probar todo**: en Ajustes → General revisa a un clic Tailscale, el enlace HTTPS, el arranque
+  con Windows, la suspensión, disco/RAM/corriente y los avisos de este iPad, en verde, amarillo o
+  rojo y con qué hacer. Solo se ejecuta al pulsar.
 - **No** (hazlo en el PC): elegir una carpeta nueva con el explorador de Windows, «Mostrar en la
   carpeta», actualizar Prometeo y encender, apagar o cambiar el acceso remoto.
 - Si se corta la conexión, arriba sale «Reconectando con el PC…» y se recupera sola al volver.
@@ -135,6 +144,8 @@ datos móviles del iPad** (wifi apagada): así compruebas lo mismo que en la hac
 - [ ] Lanzas el escuadrón o abres un agente, y le mandas un mensaje.
 - [ ] Adjuntas una foto de la cámara y el agente la puede leer.
 - [ ] Un agente te entrega un archivo (`team_share_file`) y lo descargas con «Descargar».
+- [ ] En Ajustes → General pulsas «Probar todo» desde el iPad y todo sale en verde.
+- [ ] Arrancas la app en la pestaña App, la ves en el iPad y se recarga al pedir un cambio.
 - [ ] Bloqueas el iPad un par de minutos, vuelves y la conexión se recupera sola.
 - [ ] Reinicias el PC desde el propio PC y, sin tocarlo más, vuelves a entrar desde el iPad.
 

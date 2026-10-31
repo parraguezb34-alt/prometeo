@@ -3,6 +3,7 @@
 //! Solo archivos que estén dentro de la carpeta del proyecto abierto (tras resolver `..`,
 //! enlaces y mayúsculas); nada de carpetas ni rutas de fuera. El token va en la consulta porque
 //! un enlace de descarga del navegador no puede llevar cabeceras; remote.rs lo comprueba antes.
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tiny_http::{Header, Request, Response, StatusCode};
@@ -53,6 +54,14 @@ fn query_param(url: &str, key: &str) -> Option<String> {
 /// La ruta real de `raw` si es un archivo dentro de `project`. `raw` puede ser absoluta o
 /// relativa al proyecto, con `/` o `\`.
 pub fn resolve_in_project(project: &Path, raw: &str) -> Result<PathBuf, String> {
+    let real = resolve_path_in_project(project, raw)?;
+    if !real.is_file() {
+        return Err("solo se pueden descargar archivos".into());
+    }
+    Ok(real)
+}
+
+fn resolve_path_in_project(project: &Path, raw: &str) -> Result<PathBuf, String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err("falta la ruta".into());
@@ -64,10 +73,63 @@ pub fn resolve_in_project(project: &Path, raw: &str) -> Result<PathBuf, String> 
     if !real.starts_with(&root) {
         return Err("fuera del proyecto".into());
     }
-    if !real.is_file() {
-        return Err("solo se pueden descargar archivos".into());
-    }
     Ok(real)
+}
+
+const ZIP_MAX_BYTES: u64 = 100 * 1024 * 1024;
+const ZIP_EXCLUDED: [&str; 3] = ["node_modules", "target", ".git"];
+
+fn add_dir_to_zip(
+    root: &Path,
+    dir: &Path,
+    zip: &mut zip::ZipWriter<Cursor<Vec<u8>>>,
+    total: &mut u64,
+) -> Result<(), String> {
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        if ZIP_EXCLUDED.iter().any(|excluded| name == *excluded) || file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            add_dir_to_zip(root, &path, zip, total)?;
+        } else if file_type.is_file() {
+            let metadata = entry.metadata().map_err(|e| e.to_string())?;
+            *total = total.saturating_add(metadata.len());
+            if *total > ZIP_MAX_BYTES {
+                return Err("La carpeta supera el límite de 100 MB para descargarla como ZIP.".into());
+            }
+            let relative = path.strip_prefix(root).map_err(|_| "ruta fuera del proyecto".to_string())?;
+            let archive_path = relative.to_string_lossy().replace('\\', "/");
+            zip.start_file(archive_path, options).map_err(|e| e.to_string())?;
+            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+            zip.write_all(&bytes).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn zip_folder(project: &Path, raw: &str) -> Result<(Vec<u8>, String), String> {
+    let dir = resolve_path_in_project(project, raw)?;
+    if !dir.is_dir() {
+        return Err("la ruta no es una carpeta".into());
+    }
+    let root = project.canonicalize().map_err(|e| e.to_string())?;
+    let relative = dir.strip_prefix(root).map_err(|_| "fuera del proyecto".to_string())?;
+    if relative.components().any(|part| ZIP_EXCLUDED.iter().any(|excluded| part.as_os_str() == *excluded)) {
+        return Err("no se pueden descargar carpetas node_modules, target o .git".into());
+    }
+    let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("proyecto");
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut total = 0;
+    add_dir_to_zip(&dir, &dir, &mut zip, &mut total)?;
+    let bytes = zip.finish().map_err(|e| e.to_string())?.into_inner();
+    Ok((bytes, format!("{name}.zip")))
 }
 
 fn mime_of(path: &Path) -> &'static str {
@@ -124,6 +186,23 @@ pub fn serve(app: &AppHandle, url: &str, req: Request) {
         return error(req, 409, "no hay proyecto abierto en el PC");
     };
     let raw = query_param(url, "path").unwrap_or_default();
+    if query_param(url, "zip").is_some_and(|v| v == "1") {
+        let (bytes, name) = match zip_folder(Path::new(&project), &raw) {
+            Ok(zip) => zip,
+            Err(e) => {
+                let status = if e.contains("límite de 100 MB") { 413 } else if e == "no existe" { 404 } else { 403 };
+                return error(req, status, &e);
+            }
+        };
+        let _ = req.respond(
+            Response::from_data(bytes)
+                .with_header(header("Content-Type", "application/zip"))
+                .with_header(header("Content-Disposition", &disposition(&name, false)))
+                .with_header(header("Cache-Control", "no-store"))
+                .with_header(header("X-Content-Type-Options", "nosniff")),
+        );
+        return;
+    }
     let path = match resolve_in_project(Path::new(&project), &raw) {
         Ok(p) => p,
         Err(e) => return error(req, if e == "no existe" { 404 } else { 403 }, &e),
@@ -192,5 +271,30 @@ mod tests {
         assert!(disposition("a.png", true).starts_with("inline;"));
         assert_eq!(mime_of(Path::new("X.PDF")), "application/pdf");
         assert_eq!(mime_of(Path::new("raro.bin")), "application/octet-stream");
+    }
+
+    #[test]
+    fn zip_contains_folder_files_skips_build_dirs_and_rejects_traversal() {
+        let dir = tmp_project();
+        let project = dir.join("proj");
+        let folder = project.join("sub");
+        std::fs::create_dir_all(folder.join("node_modules/pkg")).unwrap();
+        std::fs::create_dir_all(folder.join("target/debug")).unwrap();
+        std::fs::create_dir_all(folder.join(".git/objects")).unwrap();
+        std::fs::write(folder.join("node_modules/pkg/ignored.js"), "no").unwrap();
+        std::fs::write(folder.join("target/debug/ignored"), "no").unwrap();
+        std::fs::write(folder.join(".git/objects/ignored"), "no").unwrap();
+
+        let (bytes, filename) = zip_folder(&project, "sub").unwrap();
+        assert_eq!(filename, "sub.zip");
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let names: Vec<_> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.contains(&"a.txt".to_string()));
+        assert!(names.iter().all(|n| !n.contains("node_modules") && !n.starts_with("target/") && !n.starts_with(".git/")));
+        assert_eq!(zip_folder(&project, "../secreto.txt").unwrap_err(), "fuera del proyecto");
+        assert_eq!(zip_folder(&project, "sub/target").unwrap_err(), "no se pueden descargar carpetas node_modules, target o .git");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

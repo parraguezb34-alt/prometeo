@@ -15,6 +15,7 @@ pub mod workspace;
 mod limits;
 mod project;
 mod pcstatus;
+mod selftest;
 mod pty;
 mod rename;
 mod remote;
@@ -71,6 +72,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             autostart::autostart_status,
             autostart::autostart_set,
+            selftest::selftest_run,
             remote::remote_status,
             remote::remote_set,
             remote::remote_rotate_token,

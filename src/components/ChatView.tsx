@@ -9,6 +9,18 @@ import type { Skill } from "../lib/skills";
 import { QuestionCard, SkillCard } from "./AskCards";
 import type { TermPrompt } from "../lib/prompts";
 
+function downloadRemoteZip(path: string) {
+  const url = new URL(remoteFileUrl(path), window.location.href);
+  url.searchParams.set("zip", "1");
+  const a = document.createElement("a");
+  a.href = url.toString();
+  a.download = `${path.split(/[\\/]/).filter(Boolean).pop() || "proyecto"}.zip`;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 const NO_QUESTIONS: TeamQuestion[] = [];
 const NO_SKILLS: Skill[] = [];
 const noop = async () => {};
@@ -1309,10 +1321,18 @@ export function ChatView({
                 const dir = kindOf(p) === "dir";
                 if (dir && !isPrimary())
                   return (
-                    <span className="cv-att" key={p} data-kind="dir" title={`${p} · solo en el PC`}>
+                    <button
+                      className="cv-att"
+                      key={p}
+                      data-kind="dir"
+                      onClick={() => downloadRemoteZip(p.replace(/[\\/]+$/, ""))}
+                      title={`Descargar ${displayName(p)} como ZIP`}
+                      aria-label={`Descargar zip: ${displayName(p)}`}
+                    >
                       <Icon name="folder" size={14} />
                       <span>{displayName(p)}</span>
-                    </span>
+                      <span>Descargar zip</span>
+                    </button>
                   );
                 return (
                   <button
