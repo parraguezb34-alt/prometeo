@@ -1,6 +1,6 @@
 [package]
 name = "lienzo"
-version = "1.0.149"
+version = "1.0.150"
 description = "Prometeo: centro de mando para dirigir un equipo de agentes de IA"
 authors = ["Prometeo"]
 edition = "2024"
