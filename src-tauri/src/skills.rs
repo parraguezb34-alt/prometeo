@@ -572,10 +572,31 @@ fn temp_dir(tag: &str) -> PathBuf {
     d
 }
 
-/// Descomprime un .zip con el `tar` de Windows (lo trae desde Windows 10).
+/// Descomprime un .zip sin intentar crear los symlinks del repositorio.
 fn unzip(zip: &Path, into: &Path) -> Result<(), String> {
     std::fs::create_dir_all(into).map_err(|e| e.to_string())?;
-    run(Command::new("tar").arg("-xf").arg(zip).arg("-C").arg(into), "tar")
+    let file = std::fs::File::open(zip).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        if entry.is_symlink() {
+            continue;
+        }
+        let relative = entry
+            .enclosed_name()
+            .ok_or("el ZIP contiene una ruta no segura")?;
+        let path = into.join(relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut out = std::fs::File::create(path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn download(url: &str, to: &Path) -> Result<(), String> {
@@ -1056,6 +1077,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn unzip_omite_symlinks_y_conserva_archivos_de_la_skill() {
+        use std::io::Write;
+
+        let base = tmp("unzip-symlink");
+        let zip_path = base.join("repo.zip");
+        let file = std::fs::File::create(&zip_path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        archive
+            .add_directory("repo/skills/engineering/tdd/", options)
+            .unwrap();
+        archive
+            .start_file("repo/skills/engineering/tdd/SKILL.md", options)
+            .unwrap();
+        archive.write_all(b"skill").unwrap();
+        archive
+            .start_file("repo/skills/engineering/tdd/tests.md", options)
+            .unwrap();
+        archive.write_all(b"tests").unwrap();
+        archive
+            .add_symlink("repo/AGENTS.md", "../README.md", options)
+            .unwrap();
+        archive.finish().unwrap();
+
+        let out = base.join("out");
+        unzip(&zip_path, &out).unwrap();
+        let skill_dir = out.join("repo/skills/engineering/tdd");
+        assert_eq!(std::fs::read(skill_dir.join("SKILL.md")).unwrap(), b"skill");
+        assert_eq!(std::fs::read(skill_dir.join("tests.md")).unwrap(), b"tests");
+        assert!(!out.join("repo/AGENTS.md").exists());
     }
 
     #[test]
