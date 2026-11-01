@@ -1,0 +1,41 @@
+.term-keybar {
+  position: fixed;
+  z-index: 30;
+  left: 50%;
+  bottom: var(--kb-inset, 0px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: calc(100vw - 16px);
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--line, #3a3a3c);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: color-mix(in srgb, var(--surface, #1c1c1e) 92%, transparent);
+  box-shadow: 0 -4px 18px #0004;
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  touch-action: pan-x;
+}
+
+.term-keybar button {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--line, #3a3a3c);
+  border-radius: 9px;
+  color: var(--text, #f5f5f7);
+  background: var(--raised, #2c2c2e);
+  font: 600 13px/1 var(--mono, ui-monospace, monospace);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.term-keybar button:active {
+  background: var(--accent, #e5484d);
+  color: #fff;
+}

@@ -14,6 +14,7 @@ pub mod hub;
 pub mod workspace;
 mod limits;
 mod project;
+mod pcshot;
 mod pcstatus;
 mod selftest;
 mod pty;

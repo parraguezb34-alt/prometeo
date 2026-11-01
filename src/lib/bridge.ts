@@ -34,8 +34,6 @@ function readToken(): string {
       } catch {
         /* sin almacenamiento: vale para esta pestaña */
       }
-      url.searchParams.delete("t");
-      window.history.replaceState(null, "", url.pathname + url.search + url.hash);
       return t;
     }
   } catch {
@@ -50,6 +48,27 @@ function readToken(): string {
 
 let token = isRemote() ? readToken() : "";
 
+/**
+ * El token se queda en la barra de direcciones y en el manifiesto: «Añadir a pantalla de inicio»
+ * del iPad crea una app con almacenamiento aparte que, sin él, pediría el enlace otra vez. Así
+ * además el enlace que se copie de la barra de Safari sirve para entrar.
+ */
+function keepTokenInPage(t: string) {
+  if (!t || typeof window === "undefined") return;
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("t") !== t) {
+      url.searchParams.set("t", t);
+      window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    }
+    const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+    if (link) link.href = `/manifest.webmanifest?t=${encodeURIComponent(t)}`;
+  } catch {
+    /* sin URL o sin DOM: no pasa nada */
+  }
+}
+if (isRemote()) keepTokenInPage(token);
+
 export const remoteToken = () => token;
 
 /** Cambia el token (pantalla de «pega tu enlace»). */
@@ -60,6 +79,7 @@ export function setRemoteToken(t: string) {
   } catch {
     /* sin almacenamiento */
   }
+  keepTokenInPage(token);
   reopenEvents();
 }
 
@@ -242,9 +262,30 @@ function ensureEvents() {
   es.onerror = () => {
     if (source !== es) return;
     failing();
+    probeAuth();
     // CLOSED: el navegador ya no reintentará solo (p. ej. el PC respondió con error).
     if (es.readyState === EventSource.CLOSED) scheduleRetry();
   };
+}
+
+/**
+ * EventSource no deja ver el código de error: si el PC rechaza el token (401) el iPad solo veía
+ * «Sin conexión» para siempre. Se pregunta aparte para mostrar la pantalla de «escanea el QR».
+ */
+let probing = false;
+function probeAuth() {
+  if (probing) return;
+  probing = true;
+  fetch(`/events?t=${encodeURIComponent(token)}`, { method: "HEAD", cache: "no-store" })
+    .then((res) => {
+      if (res.status === 401) setAuth(false);
+    })
+    .catch(() => {
+      /* sin red: sigue siendo «Sin conexión» */
+    })
+    .finally(() => {
+      probing = false;
+    });
 }
 
 function reopenEvents(force = false) {

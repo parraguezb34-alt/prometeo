@@ -1,6 +1,7 @@
 import { downloadRemoteFile, invoke, isPrimary, remoteFileUrl, revealItemInDir } from "../lib/bridge";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { displayName, kindOf, splitAttachments } from "../lib/attach";
 import { stampLabel } from "../lib/chats";
 import { agentColor, agentInitial, agentLabel, shortPath } from "../lib/team";
@@ -1476,16 +1477,19 @@ export function ChatView({
           {unseen === 1 ? "1 novedad" : `${unseen} novedades`}
         </button>
       )}
-      {box && (
-        <Lightbox
-          paths={box.paths}
-          index={box.index}
-          project={project}
-          load={load}
-          onIndex={(i) => setBox((b) => (b ? { ...b, index: i } : b))}
-          onClose={() => setBox(null)}
-        />
-      )}
+      {/* En <body>: dentro del chat un ancestro con transform encerraba el visor en el panel (iPad). */}
+      {box &&
+        createPortal(
+          <Lightbox
+            paths={box.paths}
+            index={box.index}
+            project={project}
+            load={load}
+            onIndex={(i) => setBox((b) => (b ? { ...b, index: i } : b))}
+            onClose={() => setBox(null)}
+          />,
+          document.body,
+        )}
       {floatingQuote && (
         <button
           ref={floatBtnRef}

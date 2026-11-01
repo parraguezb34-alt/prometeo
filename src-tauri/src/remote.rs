@@ -25,7 +25,9 @@ use web_push_native::{
     Auth, WebPushBuilder, jwt_simple::algorithms::ES256KeyPair, p256::PublicKey,
 };
 
-const PORT: u16 = 47820;
+/// Prometeo Dev usa otro puerto para poder probarlo con el instalado abierto y su acceso remoto
+/// encendido (si no, Dev no puede escuchar y el iPad seguiría hablando con el instalado).
+const PORT: u16 = if crate::hub::IS_DEV { 47821 } else { 47820 };
 const MAX_BODY: usize = 1024 * 1024;
 const MAX_UPLOAD_BODY: usize = 40 * 1024 * 1024;
 const MAX_LAYOUT: usize = 256 * 1024;
@@ -1278,6 +1280,13 @@ fn handle(app: AppHandle, req: Request) {
         serve_rpc(&app, &path[5..], req);
         return;
     }
+    if method == Method::Get
+        && path == "/manifest.webmanifest"
+        && query_token(&url).is_some_and(|t| valid_token(&t, &token))
+    {
+        serve_manifest_with_token(&app, &token, req);
+        return;
+    }
     if method == Method::Get {
         serve_static(&app, path, req);
         return;
@@ -1330,6 +1339,34 @@ fn serve_static(app: &AppHandle, path: &str, req: Request) {
                 serde_json::json!({"error":"asset no encontrado"}),
             ));
         }
+    }
+}
+
+/// «Añadir a pantalla de inicio» en el iPad crea una app con almacenamiento propio: sin el token
+/// en `start_url` se abriría pidiendo el enlace otra vez. Solo se da a quien ya trae el token.
+fn serve_manifest_with_token(app: &AppHandle, token: &str, req: Request) {
+    let Some(asset) = app.asset_resolver().get("manifest.webmanifest".into()) else {
+        let _ = req.respond(json(404, serde_json::json!({"error":"asset no encontrado"})));
+        return;
+    };
+    let body = manifest_with_token(&String::from_utf8_lossy(&asset.bytes), token);
+    let response = Response::from_data(body.into_bytes())
+        .with_header(header("Content-Type", "application/manifest+json"))
+        .with_header(header("Cache-Control", "no-store"));
+    let _ = req.respond(response);
+}
+
+fn manifest_with_token(text: &str, token: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(mut v) => {
+            let enc: String = token
+                .bytes()
+                .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+                .collect();
+            v["start_url"] = serde_json::Value::String(format!("/?t={enc}"));
+            v.to_string()
+        }
+        Err(_) => text.to_string(),
     }
 }
 
@@ -1509,6 +1546,7 @@ fn dispatch_rpc_command_allowed(command: &str) -> bool {
             | "remote_push_visibility"
             | "remote_action"
             | "pc_status"
+            | "pc_screenshot"
             | "selftest_run"
     )
 }
@@ -1912,6 +1950,7 @@ fn dispatch_rpc(
         "remote_push_unsubscribe" => sync!(remote_push_unsubscribe(a!(args, "endpoint", String))),
         "remote_push_visibility" => sync!(remote_push_visibility(a!(args, "visible", bool))),
         "pc_status" => sync!(Ok::<_, String>(pc_status(app))),
+        "pc_screenshot" => sync!(crate::pcshot::capture()),
         "remote_action" => sync!(remote_action(app, args)),
         _ => Err(format!("comando no permitido: {command}")),
     }
@@ -2051,6 +2090,14 @@ mod tests {
             cache_policy("/assets/app-a1.js", "assets/app-a1.js"),
             "public, max-age=31536000, immutable"
         );
+    }
+    #[test]
+    fn manifest_start_url_carries_token() {
+        let out = manifest_with_token(r#"{"name":"Prometeo","start_url":"/","scope":"/"}"#, "ab12");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["start_url"], "/?t=ab12");
+        assert_eq!(v["scope"], "/");
+        assert_eq!(v["name"], "Prometeo");
     }
     #[test]
     fn auth_returns_401_or_200_for_bearer_and_eventsource_query() {

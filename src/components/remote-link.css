@@ -144,3 +144,34 @@
   color: var(--text-soft, #a9abb3);
   font-size: 12px;
 }
+
+/* Ver pantalla del PC (#236) */
+.pcs-screen-btn {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+}
+.pcs-screen-msg {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  max-width: 420px;
+  height: fit-content;
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: var(--raised-2);
+  color: var(--text);
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* iPad en Split View / Slide Over (#237–#238): sin la columna de chats el botón PC caía encima
+   de la caja de texto. Ahí solo se ve con el cajón de chats abierto; y nunca con el teclado. */
+@media (max-width: 700px) and (pointer: coarse) {
+  body:has(.cc-main[data-chat-drawer="closed"]) .pcs-chip {
+    display: none;
+  }
+}
+:root[data-kb="open"] .pcs-chip {
+  display: none;
+}

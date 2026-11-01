@@ -13,6 +13,7 @@ import { fmtTokens } from "./AgentCard";
 import type { DetectResult, ModelCatalog, TeamDetails, TeamState } from "../lib/team";
 import { Icon } from "./Icon";
 import { ConfirmButton } from "./ConfirmButton";
+import { RemoteQr } from "./RemoteQr";
 import { SkillsPanel } from "./SkillsPanel";
 import { ErrorsPanel } from "./ErrorsPanel";
 import { useUnseenErrors } from "../lib/errors";
@@ -1721,7 +1722,26 @@ function Remote({ say }: Props) {
               Prometeo. Guía: docs/acceso-remoto.md.
             </div>
           ) : (
-            status.urls.map((u) => {
+            <>
+            {(() => {
+              const best = status.urls.find((u) => u.startsWith("https://")) ?? status.urls[0];
+              return (
+                <div className="st-remote-qr">
+                  <RemoteQr text={`${best}?t=${status.token}`} />
+                  <div>
+                    <b>Entrar desde el iPad</b>
+                    <p>
+                      Abre la Cámara del iPad, apunta a este código y toca el aviso amarillo. Entra ya conectado,
+                      sin copiar nada. Tailscale tiene que estar encendido en el iPad.
+                    </p>
+                    {!best.startsWith("https://") && (
+                      <p>Sin enlace https todavía: en el PC ejecuta <code>tailscale serve --bg 47820</code>.</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+            {status.urls.map((u) => {
               const full = `${u}?t=${status.token}`;
               const https = u.startsWith("https://");
               return (
@@ -1733,7 +1753,8 @@ function Remote({ say }: Props) {
                   <CopyBtn text={full} say={say} />
                 </Row>
               );
-            })
+            })}
+            </>
           )}
           <Row label="Cambiar token" hint="Invalida los enlaces que ya hayas repartido; tendrás que copiarlos otra vez.">
             <ConfirmButton className="cc-btn sec" disabled={busy} onConfirm={() => void rotate()} confirmText="Pulsa otra vez">

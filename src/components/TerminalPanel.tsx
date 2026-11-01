@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { isPrimary, isRemote, listen } from "../lib/bridge";
@@ -17,6 +17,7 @@ import type { PtyExitEvent } from "../lib/pty";
 import { registerScreen } from "../lib/screens";
 import { respawnCmd, setPanelSession } from "../store";
 import type { Panel } from "../store";
+import { KeyBar } from "./KeyBar";
 
 const THEME = {
   background: "#161618",
@@ -42,6 +43,10 @@ const THEME = {
   brightWhite: "#fafafa",
 };
 
+const SHOW_KEY_BAR =
+  isRemote() ||
+  (typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches);
+
 // xterm responde a consultas ANSI al renderizar el scrollback (DA/DSR, posición,
 // tamaño, colores y capacidades). En un espejo remoto son respuestas del navegador,
 // no teclas del usuario; reenviarlas puede escribir basura en la entrada del agente.
@@ -54,6 +59,9 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const sessionRef = useRef<string | null>(panel.sessionId);
+  const [keySessionId, setKeySessionId] = useState<string | null>(panel.sessionId);
+  const [focused, setFocused] = useState(false);
+  const focusoutTimerRef = useRef<number | null>(null);
   const disposedRef = useRef(false);
 
   useEffect(() => {
@@ -151,6 +159,7 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
           return;
         }
         sessionRef.current = sid;
+        setKeySessionId(sid);
         setPanelSession(panel.id, sid);
       }
       if (disposedRef.current) return;
@@ -199,6 +208,10 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
 
     return () => {
       disposedRef.current = true;
+      if (focusoutTimerRef.current !== null) {
+        window.clearTimeout(focusoutTimerRef.current);
+        focusoutTimerRef.current = null;
+      }
       cancelAnimationFrame(raf);
       ro.disconnect();
       dataSub.dispose();
@@ -211,10 +224,28 @@ export const TerminalPanel = memo(function TerminalPanel({ panel }: { panel: Pan
   }, []);
 
   return (
-    <div
-      className="term-host"
-      ref={hostRef}
-      onMouseDown={() => termRef.current?.focus()}
-    />
+    <>
+      <div
+        className="term-host"
+        ref={hostRef}
+        onMouseDown={() => termRef.current?.focus()}
+        onFocusCapture={() => {
+          if (focusoutTimerRef.current !== null) {
+            window.clearTimeout(focusoutTimerRef.current);
+            focusoutTimerRef.current = null;
+          }
+          setFocused(true);
+        }}
+        onBlurCapture={() => {
+          if (focusoutTimerRef.current !== null) window.clearTimeout(focusoutTimerRef.current);
+          focusoutTimerRef.current = window.setTimeout(() => {
+            focusoutTimerRef.current = null;
+            const host = hostRef.current;
+            setFocused(!!host && host.contains(document.activeElement));
+          }, 150);
+        }}
+      />
+      {SHOW_KEY_BAR && focused && <KeyBar sessionId={keySessionId} />}
+    </>
   );
 });

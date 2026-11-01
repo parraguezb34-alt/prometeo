@@ -8,7 +8,29 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#161618" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <script>
+      // En el iPad, «Añadir a pantalla de inicio» crea una app con almacenamiento propio:
+      // el servidor remoto mete el token en start_url para que no vuelva a pedir el enlace.
+      // Se crea ya con el token para que Safari no llegue a pedir el manifest sin él.
+      // Si la URL no lo trae pero ya está guardado, se pone en la barra antes de nada: el icono de
+      // inicio se crea desde esta URL o desde el manifest, y ambos lo necesitan.
+      try {
+        const q = new URLSearchParams(location.search);
+        let t = q.get("t");
+        if (!t && !("__TAURI_INTERNALS__" in window)) {
+          try { t = localStorage.getItem("prometeo.remote.token"); } catch {}
+          if (t) {
+            q.set("t", t);
+            history.replaceState(null, "", location.pathname + "?" + q.toString() + location.hash);
+          }
+        }
+        const link = document.createElement("link");
+        link.id = "pm-manifest";
+        link.rel = "manifest";
+        link.href = "/manifest.webmanifest" + (t ? "?t=" + encodeURIComponent(t) : "");
+        document.head.appendChild(link);
+      } catch {}
+    </script>
     <title>Prometeo</title>
   </head>
 

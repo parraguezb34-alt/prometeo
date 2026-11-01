@@ -1353,10 +1353,45 @@ html {
 }
 
 @media (pointer: coarse) {
-  button:not(.st-switch):not(.wc-btn),
-  input,
+  input:not([type="checkbox"]):not([type="radio"]),
   select,
   textarea {
-    min-height: 40px;
+    min-height: 44px;
+  }
+}
+
+/* Una línea larga (un comando, una ruta) no debe ensanchar la columna del chat:
+   el scroll es vertical y cada pieza recorta o desplaza lo suyo. */
+.cv-col,
+.cv-turn,
+.cv-think {
+  min-width: 0;
+}
+
+/* Acciones que en el escritorio salen al pasar el ratón: con el dedo no hay hover. */
+@media (hover: none) and (pointer: coarse) {
+  .panel-close {
+    position: relative;
+  }
+  .panel-close::after {
+    content: "";
+    position: absolute;
+    inset: -12px;
+  }
+  .md-pre-bar button {
+    min-height: 44px;
+    min-width: 44px;
+    opacity: 1 !important;
+  }
+  .cc-shot button {
+    width: 28px;
+    height: 28px;
+    opacity: 1 !important;
+  }
+  /* La zona de toque real es de 44px aunque el botón se vea pequeño. */
+  .cc-shot button::after {
+    content: "";
+    position: absolute;
+    inset: -8px;
   }
 }

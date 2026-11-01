@@ -509,3 +509,20 @@
   white-space: pre;
   user-select: text;
 }
+
+/* iPad: el aviso se cierra con el dedo, sin depender del hover. */
+@media (hover: none) and (pointer: coarse) {
+  .av-x {
+    min-width: 0;
+    min-height: 0;
+    width: 18px;
+    height: 18px;
+    opacity: 1;
+    transform: none;
+  }
+  .av-x::after {
+    content: "";
+    position: absolute;
+    inset: -13px;
+  }
+}

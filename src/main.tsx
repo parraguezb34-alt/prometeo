@@ -5,8 +5,11 @@ import ReactDOM from "react-dom/client";
 import { installErrorCapture } from "./lib/errors";
 import { isRemote, onRemoteAuth, remoteToken } from "./lib/bridge";
 import "./App.css";
+import { initViewport } from "./lib/viewport";
 
 installErrorCapture();
+// Teclado en pantalla del iPad: publica --kb-inset (0 en PC).
+initViewport();
 
 // La ventanita de avisos de la esquina (aviso.rs) carga esta misma página con «?aviso».
 const isAviso = new URLSearchParams(window.location.search).has("aviso");

@@ -127,6 +127,8 @@ import { NewsCard } from "./command/NewsCard";
 
 /** La ventana del PC (manda); en el iPad (acceso remoto) la interfaz es pasiva. */
 const PRIMARY = isPrimary();
+const IS_COARSE_POINTER =
+  typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
 
 type RemoteActionRequest = { id: string; action: RemoteAction };
 type RemoteActionResult = { id: string; ok: boolean; text: string };
@@ -179,6 +181,34 @@ export function CommandCenter() {
   const [shoot, setShoot] = useState<Shoot>(loadShoot);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [chatsMin, setChatsMin] = useState(() => loadFlag(CHATS_MIN_KEY, false));
+  const [coarsePointer, setCoarsePointer] = useState(IS_COARSE_POINTER);
+  const [compactTouch, setCompactTouch] = useState(
+    () => IS_COARSE_POINTER && window.matchMedia("(max-width: 700px)").matches,
+  );
+  const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
+  const chatSwipeRef = useRef<{
+    pointerId: number; // identificador del toque
+    x: number;
+    y: number;
+    fromEdge: boolean;
+    fromDrawer: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    const coarse = window.matchMedia("(pointer: coarse)");
+    const narrow = window.matchMedia("(max-width: 700px)");
+    const sync = () => {
+      setCoarsePointer(coarse.matches);
+      setCompactTouch(coarse.matches && narrow.matches);
+      if (!coarse.matches || !narrow.matches) setChatDrawerOpen(false);
+    };
+    coarse.addEventListener("change", sync);
+    narrow.addEventListener("change", sync);
+    return () => {
+      coarse.removeEventListener("change", sync);
+      narrow.removeEventListener("change", sync);
+    };
+  }, []);
   const [termPick, setTermPick] = useState<string | null>(null);
   const [changeCount, setChangeCount] = useState<number | null>(null);
   const [diffTask, setDiffTask] = useState<number | null>(null);
@@ -2956,6 +2986,15 @@ export function CommandCenter() {
   return (
     <div className="cc">
       <header className="cc-top" data-tauri-drag-region>
+        <button
+          type="button"
+          className="cc-drawer-toggle"
+          aria-label="Abrir lista de chats"
+          aria-expanded={chatDrawerOpen}
+          onClick={() => setChatDrawerOpen(true)}
+        >
+          <Icon name="panel" />
+        </button>
         <div
           className="cc-projwrap"
           onClick={() => openSettings("general")}
@@ -3020,16 +3059,81 @@ export function CommandCenter() {
         </div>
       </header>
 
-      <div className="cc-main">
+      <div
+        className="cc-main"
+        data-chat-drawer={chatDrawerOpen ? "open" : "closed"}
+        // Con eventos táctiles y no de puntero: si el dedo empieza sobre una imagen o algo que
+        // se desplaza, el navegador cancela el puntero (pointercancel) y el gesto se perdía.
+        onTouchStart={(event) => {
+          chatSwipeRef.current = null;
+          if (!coarsePointer || event.touches.length !== 1) return;
+          const t = event.touches[0];
+          const target = event.target instanceof Element ? event.target : null;
+          if (target?.closest(".xterm")) return;
+          const fromEdge = t.clientX <= 24;
+          const fromDrawer =
+            !!target?.closest(".cc-chats") && (compactTouch ? chatDrawerOpen : !chatsMin);
+          if (!fromEdge && !fromDrawer) return;
+          chatSwipeRef.current = {
+            pointerId: t.identifier,
+            x: t.clientX,
+            y: t.clientY,
+            fromEdge,
+            fromDrawer,
+          };
+        }}
+        onTouchEnd={(event) => {
+          const swipe = chatSwipeRef.current;
+          chatSwipeRef.current = null;
+          const t = swipe && Array.from(event.changedTouches).find((c) => c.identifier === swipe.pointerId);
+          if (!swipe || !t) return;
+          const dx = t.clientX - swipe.x;
+          const dy = t.clientY - swipe.y;
+          if (Math.abs(dx) <= 60 || Math.abs(dx) <= Math.abs(dy)) return;
+          if (swipe.fromEdge && dx > 60) {
+            if (compactTouch) setChatDrawerOpen(true);
+            else setChatsMin((collapsed) => {
+              if (collapsed) saveFlag(CHATS_MIN_KEY, false);
+              return false;
+            });
+          } else if (swipe.fromDrawer && dx < -60) {
+            if (compactTouch) setChatDrawerOpen(false);
+            else setChatsMin((collapsed) => {
+              if (!collapsed) saveFlag(CHATS_MIN_KEY, true);
+              return true;
+            });
+          }
+        }}
+        onTouchCancel={() => {
+          chatSwipeRef.current = null;
+        }}
+      >
+        {chatDrawerOpen && (
+          <button
+            type="button"
+            className="cc-chat-drawer-scrim"
+            aria-label="Cerrar lista de chats"
+            onClick={() => setChatDrawerOpen(false)}
+          />
+        )}
         <ChatsSidebar
           chats={chats.chats}
           activeId={activeChat?.id ?? ""}
           events={state?.events ?? []}
-          collapsed={chatsMin}
+          collapsed={chatsMin && !chatDrawerOpen}
           newChatOpen={overlay === "newchat"}
-          onToggle={toggleChats}
-          onNew={() => setOverlay("newchat")}
-          onSelect={activateChat}
+          onToggle={() => {
+            if (compactTouch) setChatDrawerOpen(false);
+            else toggleChats();
+          }}
+          onNew={() => {
+            setChatDrawerOpen(false);
+            setOverlay("newchat");
+          }}
+          onSelect={(chat) => {
+            activateChat(chat);
+            setChatDrawerOpen(false);
+          }}
           onRemove={(c) => chats.remove(c.id)}
           onRename={(c, t) => chats.rename(c.id, t)}
           onExport={(c) => void exportChat(c)}

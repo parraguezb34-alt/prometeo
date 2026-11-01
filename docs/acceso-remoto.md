@@ -93,6 +93,16 @@ La pantalla sí puede apagarse; lo que no puede es suspenderse ni hibernar. Adem
 - **Probar todo**: en Ajustes → General revisa a un clic Tailscale, el enlace HTTPS, el arranque
   con Windows, la suspensión, disco/RAM/corriente y los avisos de este iPad, en verde, amarillo o
   rojo y con qué hacer. Solo se ejecuta al pulsar.
+- **Ver la pantalla del PC**: botón **PC** → «Ver pantalla del PC» saca una captura del
+  escritorio (por si una ventana de Windows bloquea algo) y la abre en grande; pellizca para
+  ampliar y «Actualizar» para otra (como mucho una cada 2 s). Con el PC bloqueado o la pantalla
+  apagada avisa en vez de enseñar negro.
+- **Teclado en pantalla**: al abrirlo, la caja de texto y Enviar quedan justo encima. En una
+  terminal enfocada sale una **barra de teclas** que el teclado del iPad no tiene: Esc, Tab, ⇧Tab,
+  flechas, Ctrl+C, Ctrl+D, Enter y `/` (para elegir opciones de los agentes o pararlos).
+- **Gestos y pantalla dividida**: desliza desde el borde izquierdo para abrir los chats y hacia
+  la izquierda para cerrarlos. En Split View o Slide Over (media pantalla o menos) los chats van en
+  un cajón (botón ☰ arriba a la izquierda) y la barra superior se queda en iconos.
 - **No** (hazlo en el PC): elegir una carpeta nueva con el explorador de Windows, «Mostrar en la
   carpeta», actualizar Prometeo y encender, apagar o cambiar el acceso remoto.
 - Si se corta la conexión, arriba sale «Reconectando con el PC…» y se recupera sola al volver.

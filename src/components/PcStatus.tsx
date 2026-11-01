@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke, onRemoteLink } from "../lib/bridge";
 import type { RemoteLink } from "../lib/bridge";
 import "./remote-link.css";
@@ -16,6 +17,8 @@ type PcStatus = {
   project: string | null;
   warnings: string[];
 };
+
+type PcShot = { data_url: string; width: number; height: number; taken_at: number };
 
 const gb = (mb: number | null) => (mb == null ? "—" : `${(mb / 1024).toFixed(1)} GB`);
 
@@ -36,6 +39,7 @@ export function PcStatusChip() {
   const [open, setOpen] = useState(false);
   const [link, setLink] = useState<RemoteLink>("ok");
   const [at, setAt] = useState(0);
+  const [screen, setScreen] = useState(false);
 
   useEffect(() => onRemoteLink(setLink), []);
   useEffect(() => {
@@ -114,9 +118,70 @@ export function PcStatusChip() {
           ) : (
             <p className="pcs-muted">Leyendo…</p>
           )}
+          <button className="cv-btn pcs-screen-btn" onClick={() => setScreen(true)} disabled={down}>
+            Ver pantalla del PC
+          </button>
           {at > 0 && <p className="pcs-muted">Actualizado a las {new Date(at).toLocaleTimeString()}</p>}
         </div>
       )}
+      {screen && <PcScreen onClose={() => setScreen(false)} />}
     </>
+  );
+}
+
+/**
+ * Visor a pantalla completa con una captura del escritorio del PC (RPC `pc_screenshot`). Se pide
+ * al abrir y con «Actualizar»; el PC da como mucho una nueva cada 2 s. Se amplía pellizcando.
+ */
+function PcScreen({ onClose }: { onClose: () => void }) {
+  const [shot, setShot] = useState<PcShot | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    setBusy(true);
+    setErr(null);
+    invoke<PcShot>("pc_screenshot")
+      .then((s) => setShot(s))
+      .catch((e) => setErr(typeof e === "string" ? e : e instanceof Error ? e.message : "No se pudo ver la pantalla."))
+      .finally(() => setBusy(false));
+  }, []);
+
+  useEffect(load, [load]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      e.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  return createPortal(
+    <div className="cv-lightbox" onClick={onClose} role="dialog" aria-label="Pantalla del PC">
+      <div className="cv-lightbox-stage" onClick={(e) => e.stopPropagation()}>
+        {shot && !err ? (
+          <img key={shot.taken_at} src={shot.data_url} alt="Pantalla del PC" />
+        ) : err ? (
+          <p className="pcs-screen-msg">{err}</p>
+        ) : (
+          <span className="cv-lightbox-wait" />
+        )}
+      </div>
+      <div className="cv-lightbox-bar" onClick={(e) => e.stopPropagation()}>
+        <span className="cv-lightbox-path">
+          {shot && !err ? `Pantalla del PC · ${new Date(shot.taken_at).toLocaleTimeString()}` : "Pantalla del PC"}
+        </span>
+        <button className="cv-btn" onClick={load} disabled={busy}>
+          {busy ? "Capturando…" : "Actualizar"}
+        </button>
+      </div>
+      <button className="cv-lightbox-x" onClick={onClose} aria-label="Cerrar">
+        ×
+      </button>
+    </div>,
+    document.body,
   );
 }

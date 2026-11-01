@@ -872,6 +872,54 @@ button.cc-lead {
   color: var(--text-strong);
   background: var(--raised-2);
 }
+
+@media (hover: none) and (pointer: coarse) {
+  .cc-icon-btn,
+  .cc-quote-close {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+  }
+  .cc-icon-btn::after,
+  .cc-quote-close::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
+  .cc-icon-btn.sm::after,
+  .cc-icon-btn.st-mini::after {
+    inset: -9px;
+  }
+  .cc-quote-close::after {
+    inset: -11px;
+  }
+  .cc-agav,
+  .cc-rail-plus {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+  }
+  .cc-agav::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
+  .cc-chat-del::after {
+    content: "";
+    position: absolute;
+    inset: -12px;
+  }
+  .cc-rail-plus::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+  }
+  .cc-chat-del {
+    min-width: 0;
+    min-height: 0;
+  }
+}
+
 @keyframes cc-quote-in {
   from {
     opacity: 0;
@@ -2538,4 +2586,198 @@ button.cc-lead {
 .wc-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+/* Split View y Slide Over: los chats ocupan un cajón temporal y el centro usa todo el ancho. */
+.cc-drawer-toggle {
+  all: unset;
+  box-sizing: border-box;
+  display: none;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--raised);
+  cursor: pointer;
+}
+
+@media (max-width: 700px) and (pointer: coarse) {
+  .cc-top {
+    min-width: 0;
+    height: 52px;
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .cc-drawer-toggle {
+    display: grid;
+  }
+
+  .cc-projwrap {
+    min-width: 0;
+    flex: none;
+    gap: 0;
+    margin-left: 0;
+    padding: 4px 0;
+  }
+
+  .cc-projwrap .br-word,
+  .cc-projwrap .cc-slash,
+  .cc-projwrap .cc-branch-name {
+    display: none;
+  }
+
+  .cc-team-btn {
+    min-width: 0;
+    margin-left: 0;
+    gap: 0;
+    padding: 4px 5px;
+  }
+
+  .cc-team-lbl,
+  .cc-team-btn > .ic:last-child {
+    display: none;
+  }
+
+  .cc-rings {
+    max-width: 86px;
+    gap: 2px;
+    overflow: hidden;
+  }
+
+  .cc-ring,
+  .cc-ring[data-big="1"] {
+    --s: 26px;
+  }
+
+  .cc-top-r {
+    min-width: 0;
+    flex: none;
+    gap: 5px;
+  }
+
+  .cc-top-r .cc-hub {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    font-size: 0;
+  }
+
+  .cc-modes button {
+    width: 32px;
+    height: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .cc-main {
+    min-width: 0;
+    overflow: hidden;
+    touch-action: pan-y;
+  }
+
+  .cc-vtabs,
+  .cc-pilltabs {
+    gap: 2px;
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  .cc-vtabs button,
+  .cc-pilltabs button {
+    min-width: 0;
+    flex: 1 1 0;
+    justify-content: center;
+    gap: 0;
+    padding: 8px 2px;
+    font-size: 0;
+  }
+
+  .cc-conv,
+  .cc-view,
+  .cc-chat {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .cc-chats {
+    position: absolute;
+    z-index: 42;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(292px, calc(100vw - 40px));
+    max-width: calc(100vw - 40px);
+    box-shadow: 18px 0 42px rgba(0, 0, 0, 0.46);
+    transform: translateX(-105%);
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 0.2s ease, visibility 0.2s ease;
+  }
+
+  .cc-main[data-chat-drawer="open"] > .cc-chats {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
+  }
+
+  .cc-chat-drawer-scrim {
+    all: unset;
+    box-sizing: border-box;
+    position: absolute;
+    z-index: 41;
+    inset: 0;
+    display: block;
+    background: rgba(0, 0, 0, 0.54);
+  }
+
+  .cc-stage-head {
+    gap: 8px;
+    padding: 12px 14px 0;
+  }
+
+  .cc-stage-head .cc-stage-r {
+    gap: 5px;
+  }
+
+  .cc-tasks-btn {
+    gap: 0;
+    padding: 8px;
+    font-size: 0;
+  }
+
+  .cc-tasks-btn .cc-meter,
+  .cc-tasks-btn .cc-tasks-n,
+  .cc-tasks-btn .cc-warnmark {
+    display: none;
+  }
+
+  .cc-chat {
+    padding: 12px;
+  }
+}
+
+@media (max-width: 400px) and (pointer: coarse) {
+  .cc-top {
+    gap: 4px;
+    padding: 0 6px;
+  }
+
+  .cc-top-r .cc-hub,
+  .cc-top-r .lm {
+    display: none;
+  }
+
+  .cc-rings {
+    max-width: 54px;
+  }
 }

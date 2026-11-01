@@ -2617,11 +2617,12 @@ dependencies = [
 
 [[package]]
 name = "lienzo"
-version = "1.0.152"
+version = "1.0.154"
 dependencies = [
  "base64 0.22.1",
  "flate2",
  "getrandom 0.3.4",
+ "png 0.17.16",
  "portable-pty",
  "rusqlite",
  "serde",
