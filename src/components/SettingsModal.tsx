@@ -1252,6 +1252,14 @@ function Dispatch({ dispatchOn, dispatchState, onDispatch, onDispatchClear }: Pr
         title="Agentes colgados"
         desc="Si un agente con una tarea tomada deja de dar señales, te aviso y su tarjeta del equipo ofrece preguntarle o interrumpirlo. Funciona aunque el despacho automático esté apagado."
       >
+        <Row label="Dormir agentes inactivos" hint="Cierra su terminal si no tiene una tarea ni una pregunta pendiente y no escribe durante este tiempo. Si le llega trabajo, Prometeo lo despierta. (0 = nunca)">
+          <Pick
+            label="Dormir agentes inactivos"
+            value={d.inactivitySleepMin}
+            onChange={(inactivitySleepMin) => set({ inactivitySleepMin })}
+            options={[{ v: 0, l: "Nunca" }, ...nums([5, 10, 15, 20, 30, 60], "min")]}
+          />
+        </Row>
         <Row label="Sin señales durante" hint="Ni acciones en el equipo ni trabajo en su terminal. No cuenta si espera tu permiso o tu respuesta.">
           <Pick
             label="Sin señales durante"

@@ -30,6 +30,8 @@ export type Settings = {
     stallQuietMin: number;
     /** Minutos con la misma herramienta para avisar de que está atascado (0 = nunca). */
     stallToolMin: number;
+    /** Minutos sin salida de terminal antes de dormir un agente (0 = desactivado). */
+    inactivitySleepMin: number;
   };
   notify: {
     ask: boolean;
@@ -67,6 +69,7 @@ export const DEFAULT_SETTINGS: Settings = {
     leader: "last",
     stallQuietMin: STALL_CONFIG.quietMs / 60_000,
     stallToolMin: STALL_CONFIG.sameToolMs / 60_000,
+    inactivitySleepMin: 15,
   },
   notify: { ask: true, done: true, reply: true, lateMin: 3, whenFocused: false, style: "lienzo" },
   team: { relayInbox: true, leaderClean: true },

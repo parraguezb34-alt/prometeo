@@ -58,6 +58,11 @@ export function termBracketed(sid: string): boolean {
 /** Cuándo pintó algo cada terminal por última vez (ms epoch). */
 const lastOut = new Map<string, number>();
 
+/** Cuándo recibió salida por última vez la terminal `sid`; 0 si aún no hay muestra. */
+export function termLastOutputMs(sid: string): number {
+  return lastOut.get(sid) ?? 0;
+}
+
 /**
  * Espera a que la terminal `sid` deje de pintar (`quiet` ms sin salida): el CLI terminó de recibir
  * y mostrar lo tecleado. Codex trata lo que llega muy seguido como un pegado y un Enter dentro de

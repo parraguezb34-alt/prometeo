@@ -7,6 +7,145 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 
+const NO_QUOTA_IDLE_MS: u64 = 10 * 60_000;
+
+#[derive(Serialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SleepDecision {
+    pub reason: String,
+    pub reset_at: Option<u64>,
+}
+
+/// Regla pura para dormir: no interrumpir tareas, preguntas ni tareas ya disponibles.
+/// Una cuota agotada duerme a los 10 min y espera su reset; en otro caso se usa el ajuste
+/// de inactividad (0 lo desactiva).
+pub fn sleep_decision(
+    limits: Option<&serde_json::Value>,
+    idle_since_ms: u64,
+    has_claimed_task: bool,
+    has_pending_question: bool,
+    has_available_task: bool,
+    inactivity_minutes: u64,
+    now_ms: u64,
+) -> Option<SleepDecision> {
+    let idle_ms = now_ms.saturating_sub(idle_since_ms);
+    if has_claimed_task || has_pending_question || has_available_task {
+        return None;
+    }
+    if idle_ms >= NO_QUOTA_IDLE_MS {
+        if let Some(reset_at) = limits
+            .and_then(|l| l["windows"].as_array())
+            .into_iter()
+            .flatten()
+            .filter(|w| w["used_pct"].as_f64().unwrap_or(0.0) >= 100.0)
+            .filter_map(|w| w["resets_at"].as_u64())
+            .filter(|reset| *reset > now_ms)
+            .min()
+        {
+            return Some(SleepDecision {
+                reason: "quota".into(),
+                reset_at: Some(reset_at),
+            });
+        }
+    }
+    if inactivity_minutes > 0 && idle_ms >= inactivity_minutes.saturating_mul(60_000) {
+        return Some(SleepDecision {
+            reason: "inactive".into(),
+            reset_at: None,
+        });
+    }
+    None
+}
+
+#[tauri::command]
+pub fn team_sleep_decision(
+    hub: tauri::State<'_, Hub>,
+    agent: String,
+    idle_since_ms: u64,
+    inactivity_minutes: u64,
+) -> Result<Option<SleepDecision>, String> {
+    let inner = hub.0.lock().map_err(|e| e.to_string())?;
+    let name = agent.trim();
+    let has_claimed = inner
+        .tasks
+        .iter()
+        .any(|t| t.status == "claimed" && t.owner.eq_ignore_ascii_case(name));
+    let has_pending_question = inner.questions.iter().any(|q| {
+        q.agent.eq_ignore_ascii_case(name) && q.answers.is_none() && !q.dismissed
+    });
+    let has_available_task = inner.tasks.iter().any(|t| {
+        t.status == "open"
+            && t.assign.eq_ignore_ascii_case(name)
+            && unmet_parents(&inner.tasks, t).is_empty()
+    });
+    Ok(sleep_decision(
+        inner.limits.get(&name.to_lowercase()),
+        idle_since_ms,
+        has_claimed,
+        has_pending_question,
+        has_available_task,
+        inactivity_minutes,
+        now_ms(),
+    ))
+}
+
+#[cfg(test)]
+mod sleep_tests {
+    use super::{sleep_decision, SleepDecision};
+    use serde_json::json;
+
+    const NOW: u64 = 1_000_000;
+    const RESET: u64 = 2_000_000;
+    const IDLE: u64 = NOW - 10 * 60_000;
+
+    #[test]
+    fn sleeps_for_idle_without_quota_at_fifteen_minutes() {
+        assert_eq!(
+            sleep_decision(None, NOW - 15 * 60_000, false, false, false, 15, NOW),
+            Some(SleepDecision { reason: "inactive".into(), reset_at: None })
+        );
+        assert_eq!(
+            sleep_decision(None, NOW - 14 * 60_000, false, false, false, 15, NOW),
+            None
+        );
+        assert_eq!(sleep_decision(None, 0, false, false, false, 0, NOW), None);
+    }
+
+    #[test]
+    fn claimed_task_question_or_available_task_prevents_sleep() {
+        assert_eq!(sleep_decision(None, IDLE, true, false, false, 15, NOW), None);
+        assert_eq!(sleep_decision(None, IDLE, false, true, false, 15, NOW), None);
+        assert_eq!(sleep_decision(None, IDLE, false, false, true, 15, NOW), None);
+    }
+
+    #[test]
+    fn exhausted_quota_keeps_ten_minute_rule_and_waits_for_reset() {
+        let limits = json!({"windows":[{"used_pct":100.0,"resets_at":RESET}]});
+        assert_eq!(
+            sleep_decision(Some(&limits), IDLE, false, false, false, 15, NOW),
+            Some(SleepDecision { reason: "quota".into(), reset_at: Some(RESET) })
+        );
+        assert_eq!(
+            sleep_decision(Some(&limits), NOW - 9 * 60_000, false, false, false, 15, NOW),
+            None
+        );
+        assert_eq!(
+            sleep_decision(
+                Some(&json!({"windows":[{"used_pct":99.9,"resets_at":RESET}]})),
+                NOW - 15 * 60_000, false, false, false, 15, NOW
+            ),
+            Some(SleepDecision { reason: "inactive".into(), reset_at: None })
+        );
+        assert_eq!(
+            sleep_decision(
+                Some(&json!({"windows":[{"used_pct":100.0,"resets_at":NOW}]})),
+                NOW - 15 * 60_000, false, false, false, 15, NOW
+            ),
+            Some(SleepDecision { reason: "inactive".into(), reset_at: None })
+        );
+    }
+}
+
 /// Suma el gasto de un mensaje del agente (una sola vez por `id`).
 #[allow(clippy::too_many_arguments)]
 pub fn report_usage(
