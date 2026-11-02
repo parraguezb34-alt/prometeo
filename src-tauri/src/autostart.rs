@@ -89,6 +89,7 @@ pub fn hide_for_startup(app: &tauri::AppHandle) {
     }
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
+        crate::tray::set_low_memory(&window, true);
     }
 }
 

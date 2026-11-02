@@ -2636,6 +2636,8 @@ dependencies = [
  "tiny_http",
  "ureq",
  "web-push-native",
+ "webview2-com",
+ "windows-core",
  "winreg 0.56.0",
  "zip",
 ]

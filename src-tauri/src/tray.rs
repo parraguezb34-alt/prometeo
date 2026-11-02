@@ -17,6 +17,7 @@ pub fn show_main(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        set_low_memory(&w, false);
         // La interfaz vuelve a su ritmo normal (WebView2 no lo avisa con visibilitychange).
         let _ = app.emit_to("main", "app://mostrada", ());
     }
@@ -54,15 +55,61 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Con la ventana minimizada u oculta, WebView2 puede soltar cachés y memoria que no ve
+/// (nivel «Low»); al volver se pone en «Normal». La interfaz y sus eventos siguen vivos.
+pub fn set_low_memory(window: &tauri::WebviewWindow, low: bool) {
+    #[cfg(windows)]
+    {
+        let _ = window.with_webview(move |wv| unsafe {
+            use webview2_com::Microsoft::Web::WebView2::Win32::{
+                ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+            };
+            use windows_core::Interface;
+            let Ok(core) = wv.controller().CoreWebView2() else { return };
+            let Ok(core19) = core.cast::<ICoreWebView2_19>() else { return };
+            let level = if low {
+                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+            } else {
+                COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+            };
+            let _ = core19.SetMemoryUsageTargetLevel(level);
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = (window, low);
+}
+
+fn main_webview(window: &Window) -> Option<tauri::WebviewWindow> {
+    window.app_handle().get_webview_window(window.label())
+}
+
 /// Cerrar la ventana principal la esconde (sigue en la bandeja) en vez de salir.
 pub fn on_window_event(window: &Window, event: &WindowEvent) {
     if window.label() != "main" || QUITTING.load(Ordering::SeqCst) {
         return;
     }
-    if let WindowEvent::CloseRequested { api, .. } = event {
-        api.prevent_close();
-        let _ = window.hide();
-        // La interfaz avisa (la primera vez) de que Prometeo sigue en la bandeja.
-        let _ = window.app_handle().emit_to("main", "app://bandeja", ());
+    match event {
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = window.hide();
+            if let Some(w) = main_webview(window) {
+                set_low_memory(&w, true);
+            }
+            // La interfaz avisa (la primera vez) de que Prometeo sigue en la bandeja.
+            let _ = window.app_handle().emit_to("main", "app://bandeja", ());
+        }
+        // Minimizar llega como un cambio de tamaño; restaurar también.
+        WindowEvent::Resized(_) => {
+            if let (Some(w), Ok(min)) = (main_webview(window), window.is_minimized()) {
+                set_low_memory(&w, min);
+            }
+        }
+        WindowEvent::Focused(true) => {
+            if let Some(w) = main_webview(window) {
+                set_low_memory(&w, false);
+            }
+        }
+        _ => {}
     }
 }

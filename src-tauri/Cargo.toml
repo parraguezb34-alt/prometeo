@@ -49,6 +49,9 @@ ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
+# Bajar la memoria del WebView2 al minimizar u ocultar la ventana (ya venían con tauri/wry).
+webview2-com = "0.39"
+windows-core = "0.62"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

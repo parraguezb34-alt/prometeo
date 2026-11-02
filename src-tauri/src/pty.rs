@@ -238,6 +238,214 @@ fn ps_command_line(line: &str) -> String {
     }
 }
 
+/// Parte una línea en palabras respetando comillas simples y dobles (sin escapes).
+fn split_words(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut started = false;
+    for c in line.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => cur.push(c),
+            None if c == '"' || c == '\'' => {
+                quote = Some(c);
+                started = true;
+            }
+            None if c.is_whitespace() => {
+                if started {
+                    out.push(std::mem::take(&mut cur));
+                    started = false;
+                }
+            }
+            None => {
+                cur.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        out.push(cur);
+    }
+    out
+}
+
+/// Una línea de agente sencilla (programa + argumentos, sin tuberías, variables ni varias
+/// órdenes) se puede lanzar sin shell. Si trae algo de eso, sigue yendo por PowerShell.
+fn is_plain_command(line: &str) -> bool {
+    !line.contains([';', '|', '&', '>', '<', '$', '`', '(', ')', '%', '\n', '\r'])
+}
+
+/// Lo que se lanza en el PTY: programa y argumentos.
+#[derive(Debug, PartialEq)]
+struct Launch {
+    program: String,
+    args: Vec<String>,
+}
+
+/// Lee un lanzador `.cmd` de npm y devuelve lo que ejecuta de verdad: el `.exe` del paquete
+/// (claude) o `node` + el `.js` (codex). `dp0` es la carpeta del `.cmd`.
+fn npm_shim_target(text: &str, dp0: &str) -> Option<(Option<String>, String)> {
+    let dp0 = dp0.trim_end_matches(['\\', '/']);
+    for raw in text.lines().rev() {
+        let mut rest = raw;
+        while let Some(i) = rest.find("\"%dp0%\\") {
+            let tail = &rest[i + 1..];
+            let Some(end) = tail.find('"') else { break };
+            let target = tail[..end].replacen("%dp0%", dp0, 1);
+            let lower = target.to_ascii_lowercase();
+            if lower.ends_with(".exe") {
+                return Some((None, target));
+            }
+            if lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".cjs") {
+                let local_node = format!("{dp0}\\node.exe");
+                let node = if std::path::Path::new(&local_node).is_file() { local_node } else { "node.exe".to_string() };
+                return Some((Some(node), target));
+            }
+            rest = &tail[end + 1..];
+        }
+    }
+    None
+}
+
+/// Busca `name` en el PATH como `.exe`, `.cmd` o `.bat` (en ese orden por carpeta).
+fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        for ext in [".exe", ".cmd", ".bat"] {
+            let p = dir.join(format!("{name}{ext}"));
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+/// Resuelve una orden de agente a un programa que el PTY puede lanzar sin PowerShell
+/// (unos 70 MB menos por agente). `None` = no se pudo: se usa PowerShell como antes.
+fn direct_launch(line: &str) -> Option<Launch> {
+    if !is_plain_command(line) {
+        return None;
+    }
+    let mut words = split_words(line);
+    if words.is_empty() {
+        return None;
+    }
+    let head = words.remove(0);
+    let path = if head.contains(['\\', '/']) {
+        let p = std::path::PathBuf::from(&head);
+        p.is_file().then_some(p)?
+    } else {
+        find_in_path(&head)?
+    };
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let full = path.to_string_lossy().to_string();
+    match ext.as_str() {
+        "exe" => Some(Launch { program: full, args: words }),
+        "cmd" | "bat" => {
+            let dp0 = path.parent()?.to_string_lossy().to_string();
+            let shim = std::fs::read_to_string(&path).ok().and_then(|t| npm_shim_target(&t, &dp0));
+            match shim {
+                Some((None, exe)) if std::path::Path::new(&exe).is_file() => Some(Launch { program: exe, args: words }),
+                Some((Some(node), js)) if std::path::Path::new(&js).is_file() => {
+                    let node = if node.contains('\\') { node } else { find_in_path("node")?.to_string_lossy().to_string() };
+                    let mut args = vec![js];
+                    args.extend(words);
+                    Some(Launch { program: node, args })
+                }
+                // Un .cmd que no es de npm: cmd.exe /d /c pesa ~5 MB frente a ~70 de PowerShell.
+                _ => {
+                    let mut args = vec!["/d".to_string(), "/c".to_string(), full];
+                    args.extend(words);
+                    Some(Launch { program: "cmd.exe".to_string(), args })
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod direct_tests {
+    use super::{is_plain_command, npm_shim_target, split_words};
+
+    #[test]
+    fn splits_words_with_quotes() {
+        assert_eq!(split_words("codex --x resume 01a"), vec!["codex", "--x", "resume", "01a"]);
+        assert_eq!(
+            split_words("\"C:\\Program Files\\a b\\agy.exe\" --skip"),
+            vec!["C:\\Program Files\\a b\\agy.exe", "--skip"]
+        );
+        assert_eq!(split_words("'C:\\x y\\o.exe'"), vec!["C:\\x y\\o.exe"]);
+        assert!(split_words("   ").is_empty());
+    }
+
+    #[test]
+    fn shell_syntax_keeps_powershell() {
+        assert!(is_plain_command("claude --resume abc"));
+        assert!(!is_plain_command("npm run dev; echo hi"));
+        assert!(!is_plain_command("$env:X=1"));
+        assert!(!is_plain_command("a | b"));
+    }
+
+    #[test]
+    fn reads_npm_shims() {
+        let claude = ":start\r\nSETLOCAL\r\n\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n";
+        assert_eq!(
+            npm_shim_target(claude, "C:\\npm\\"),
+            Some((None, "C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe".to_string()))
+        );
+        let codex = "IF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n";
+        let (node, js) = npm_shim_target(codex, "C:\\npm").unwrap();
+        assert_eq!(js, "C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js");
+        assert!(node.unwrap().to_ascii_lowercase().ends_with("node.exe"));
+        assert_eq!(npm_shim_target("@echo off\r\nrem nada\r\n", "C:\\x"), None);
+    }
+
+    /// Manual: `cargo test real_agents -- --ignored --nocapture` muestra cómo se lanzaría cada agente instalado.
+    #[test]
+    #[ignore]
+    fn real_agents() {
+        for line in ["claude --resume x", "codex resume y", "opencode", "agy --dangerously-skip-permissions", "npm run dev"] {
+            println!("{line} => {:?}", super::direct_launch(line));
+        }
+        // Lanza de verdad cada agente en un PTY con `--version` y muestra lo que escribe.
+        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use std::io::Read;
+        for line in ["claude --version", "codex --version", "C:\\Users\\parra\\AppData\\Local\\agy\\bin\\agy.exe --version"] {
+            let Some(l) = super::direct_launch(line) else { println!("{line}: sin lanzamiento directo"); continue };
+            let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 100, pixel_width: 0, pixel_height: 0 }).unwrap();
+            let mut c = CommandBuilder::new(&l.program);
+            c.args(&l.args);
+            let mut child = pair.slave.spawn_command(c).unwrap();
+            drop(pair.slave);
+            let mut reader = pair.master.try_clone_reader().unwrap();
+            // ConPTY pregunta la posición del cursor (ESC[6n) al arrancar; xterm contesta en la app.
+            let mut writer = pair.master.take_writer().unwrap();
+            let _ = std::io::Write::write_all(&mut writer, b"\x1b[1;1R");
+            let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+            let sink = out.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                while let Ok(n) = reader.read(&mut buf) {
+                    if n == 0 { break }
+                    sink.lock().unwrap().extend_from_slice(&buf[..n]);
+                }
+            });
+            let mut status = None;
+            for _ in 0..200 {
+                if let Ok(Some(s)) = child.try_wait() { status = Some(s); break }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            if status.is_none() { let _ = child.kill(); }
+            let bytes = out.lock().unwrap().clone();
+            let clean: String = String::from_utf8_lossy(&bytes).chars().filter(|c| c.is_ascii_graphic() || *c == ' ').collect();
+            println!("PTY {line}: exit={status:?} out={}", &clean[..clean.len().min(160)]);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ps_command_line;
@@ -351,9 +559,20 @@ pub async fn term_spawn(
         .or_else(home_dir);
     let command = command.map(|line| drop_missing_claude_resume(&line, dir.as_deref(), home_dir().as_deref()));
 
+    let line = command.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    // Los agentes se lanzan sin PowerShell delante cuando se puede (unos 70 MB menos cada
+    // uno). Al salir el agente la terminal termina (`pty://exit`), en vez de quedarse en el prompt.
+    let direct = if cfg!(windows) { line.and_then(direct_launch) } else { None };
     let shell = default_shell();
-    let mut cmd = CommandBuilder::new(shell.clone());
-    if let Some(line) = command.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let mut cmd = match &direct {
+        Some(l) => {
+            let mut c = CommandBuilder::new(&l.program);
+            c.args(&l.args);
+            c
+        }
+        None => CommandBuilder::new(shell.clone()),
+    };
+    if let Some(line) = line.filter(|_| direct.is_none()) {
         let sh = shell.to_ascii_lowercase();
         let is_ps = sh.contains("pwsh") || sh.contains("powershell");
         let needs_quote = line.contains([' ', '\\', '/']);
