@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "lienzo"
-version = "1.0.156"
+version = "1.0.158"
 dependencies = [
  "base64 0.22.1",
  "flate2",
