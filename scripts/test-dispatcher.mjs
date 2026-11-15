@@ -9,7 +9,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "node_modules", ".cache", "dispatcher-test");
 mkdirSync(out, { recursive: true });
 
-const suites = ["dispatcher", "stall", "attach", "notices", "prompts", "markdown", "limits", "research", "submit", "schedule", "viewer", "chatsdisk", "update", "leaderbatch", "askdock", "quote", "visibleinterval"];
+const suites = ["dispatcher", "stall", "attach", "notices", "prompts", "markdown", "limits", "research", "submit", "schedule", "viewer", "chatsdisk", "update", "leaderbatch", "askdock", "quote", "visibleinterval", "permmemory"];
 
 execFileSync(
   process.execPath,
@@ -32,6 +32,7 @@ execFileSync(
     "src/lib/askDock.ts",
     "src/lib/quote.ts",
     "src/lib/useVisibleInterval.ts",
+    "src/lib/permMemory.ts",
     "src/components/Markdown.tsx",
     "src/lib/bridge.ts",
     "--jsx",

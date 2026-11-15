@@ -1,3 +1,4 @@
+import { forgetRule, loadRules, onRulesChange } from "../lib/permMemory";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { invoke, isRemote, revealItemInDir } from "../lib/bridge";
@@ -722,7 +723,36 @@ function Agents({ state, detect, catalogs, prefs, opening, onPref, onConnect, on
           );
         })}
       </div>
+      <PermRules />
     </>
+  );
+}
+
+/** Permisos que diste «para siempre»: Prometeo contesta solo cuando el agente vuelve a preguntar. */
+function PermRules() {
+  const [rules, setRules] = useState(loadRules);
+  useEffect(() => onRulesChange(() => setRules(loadRules())), []);
+  return (
+    <Group
+      title="Permisos recordados"
+      desc="Cuando eliges «siempre» en una pregunta de permiso, Prometeo la recuerda para ese agente y proyecto y la contesta solo las veces siguientes, aunque reinicies el agente. Nunca rechaza por ti."
+    >
+      {rules.length === 0 ? (
+        <div className="st-empty-row">Aún no hay permisos recordados.</div>
+      ) : (
+        rules.map((r) => (
+          <Row
+            key={`${r.agent}|${r.project}|${r.key}`}
+            label={`${agentLabel(r.agent)} · ${r.title}`}
+            hint={`${r.detail.join(" · ")}${r.detail.length ? " — " : ""}${r.project}`}
+          >
+            <button className="cc-btn sec" onClick={() => forgetRule(r)}>
+              Olvidar
+            </button>
+          </Row>
+        ))
+      )}
+    </Group>
   );
 }
 

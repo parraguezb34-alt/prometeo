@@ -58,6 +58,7 @@ import { parentDir, projectCreateDir, projectKey, projectName } from "../lib/pro
 import { projectAttachPath, projectInfo, projectRecent, projectSaveAttachment, projectSaveImage } from "../lib/project";
 import { dropOwner } from "../lib/dropzone";
 import { detectPrompt, detectTrust } from "../lib/prompts";
+import { acceptOption, findRule, rememberRule } from "../lib/permMemory";
 import type { TermPrompt } from "../lib/prompts";
 import { readScreen } from "../lib/screens";
 import { attachMeta, attachmentLine, countLines, heicToJpeg, isLongPaste, PASTED_NAME, textToBase64 } from "../lib/attach";
@@ -1968,6 +1969,9 @@ export function CommandCenter() {
   const projectRef = useRef(project);
   projectRef.current = project;
   const trustedRef = useRef(new Map<string, number>());
+  // Permisos que ya diste «para siempre» (permMemory): la misma pregunta se contesta sola.
+  const autoAllowRef = useRef(new Map<string, number>());
+  const promptsRef = useRef<Record<string, TermPrompt>>({});
   const scan = () => {
     const next: Record<string, TermPrompt> = {};
     for (const p of getLayout().panels) {
@@ -1983,7 +1987,22 @@ export function CommandCenter() {
         continue;
       }
       const found = detectPrompt(screen);
-      if (found) next[agentKeyFromCmd(p.cmd)] = found;
+      if (!found) continue;
+      const agent = agentKeyFromCmd(p.cmd);
+      const rule = findRule(agent, projectRef.current, found);
+      const yes = rule ? acceptOption(found) : null;
+      if (rule && yes) {
+        // Una vez por pregunta y terminal: mientras la pantalla tarda en cambiar no se repite.
+        const tag = `${p.sessionId}|${found.key}`;
+        const at = autoAllowRef.current.get(tag) ?? 0;
+        if (Date.now() - at > 4000) {
+          autoAllowRef.current.set(tag, Date.now());
+          void termWrite(p.sessionId, yes.keys).catch(() => {});
+          say(`✅ Permitido solo a ${agentLabel(agent)}: ${[found.title, ...found.detail].join(" · ").slice(0, 140)} (lo olvidas en Ajustes → Agentes).`);
+        }
+        continue;
+      }
+      next[agent] = found;
     }
     const key = Object.entries(next)
       .map(([a, q]) => `${a}:${q.key}`)
@@ -1993,6 +2012,7 @@ export function CommandCenter() {
     // Avisa de las nuevas (no de las que ya estaban).
     const before = promptKeyRef.current;
     promptKeyRef.current = key;
+    promptsRef.current = next;
     setTermPrompts(next);
     if (loadFlag(NOTIFY_KEY, true) && getSettings().notify.ask) {
       for (const [a, q] of Object.entries(next)) {
@@ -2010,6 +2030,10 @@ export function CommandCenter() {
   const answerPrompt = async (agent: string, keys: string) => {
     const p = panelForAgent(getLayout().panels, agent);
     if (!p?.sessionId) return;
+    // «Siempre»: Prometeo lo recuerda para este agente y proyecto, aunque reinicies el agente.
+    const asked = promptsRef.current[agent];
+    const picked = asked?.options.find((o) => o.keys === keys);
+    if (asked && picked?.tone === "always" && projectRef.current) rememberRule(agent, projectRef.current, asked);
     setTermPrompts((cur) => {
       const next = { ...cur };
       delete next[agent];
