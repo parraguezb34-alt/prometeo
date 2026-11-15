@@ -90,12 +90,10 @@ fn respond_json(request: tiny_http::Request, status: u16, value: Value) {
         &b"application/json; charset=utf-8"[..],
     )
     .unwrap();
-    let named = tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..])
-        .unwrap();
+    // Sin cabeceras CORS: solo hablan con el hub lienzo-mcp y los hooks, nunca una página web.
     let response = tiny_http::Response::from_string(body)
         .with_status_code(status)
-        .with_header(header)
-        .with_header(named);
+        .with_header(header);
     let _ = request.respond(response);
 }
 
@@ -107,7 +105,17 @@ fn authorized(request: &tiny_http::Request, app: &AppHandle) -> bool {
     request
         .headers()
         .iter()
-        .any(|h| h.field.equiv("X-Lienzo-Token") && h.value.as_str() == expected)
+        .any(|h| h.field.equiv("X-Lienzo-Token") && same_token(h.value.as_str(), &expected))
+}
+
+/// Compara el token sin cortar en el primer byte distinto (no deja adivinarlo midiendo tiempos).
+fn same_token(got: &str, want: &str) -> bool {
+    let (a, b) = (got.as_bytes(), want.as_bytes());
+    let mut diff = a.len() ^ b.len();
+    for i in 0..b.len() {
+        diff |= usize::from(a.get(i).copied().unwrap_or(0) ^ b[i]);
+    }
+    diff == 0
 }
 
 fn read_payload(request: &mut tiny_http::Request) -> Result<Value, (u16, &'static str)> {
@@ -1410,6 +1418,15 @@ fn short_name(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn same_token_compares_whole_token() {
+        assert!(super::same_token("abc123", "abc123"));
+        assert!(!super::same_token("abc124", "abc123"));
+        assert!(!super::same_token("abc12", "abc123"));
+        assert!(!super::same_token("abc1234", "abc123"));
+        assert!(!super::same_token("", "abc123"));
+    }
+
     use super::{is_absolute_path, WsPaths};
 
     #[test]
