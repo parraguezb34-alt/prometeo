@@ -1,3 +1,5 @@
+import { agentPermsGet, agentPermsSet, canSkipPerms } from "../lib/agentPerms";
+import type { AgentPerms, PermMode } from "../lib/agentPerms";
 import { forgetRule, loadRules, onRulesChange } from "../lib/permMemory";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -640,6 +642,7 @@ function Agents({ state, detect, catalogs, prefs, opening, onPref, onConnect, on
 
               {found && (
                 <div className="st-agent-opts">
+                  <AgentPermField agent={d.id} />
                   <label className="cc-field">
                     <span className="cc-field-l">Modelo</span>
                     <span className="cc-select">
@@ -728,6 +731,38 @@ function Agents({ state, detect, catalogs, prefs, opening, onPref, onConnect, on
       </div>
       <PermRules />
     </>
+  );
+}
+
+/** Pedir permiso o no preguntar nunca: se usa la próxima vez que se abra el agente. */
+function AgentPermField({ agent }: { agent: string }) {
+  const [perms, setPerms] = useState<AgentPerms | null>(null);
+  useEffect(() => {
+    void agentPermsGet().then(setPerms).catch(() => setPerms(null));
+  }, []);
+  const mode: PermMode = perms?.[agent] ?? "ask";
+  const can = canSkipPerms(agent);
+  const set = (m: PermMode) => {
+    const next = { ...(perms ?? {}), [agent]: m };
+    setPerms(next);
+    void agentPermsSet(next).catch(() => {});
+  };
+  return (
+    <label className="cc-field" title={can ? undefined : "OpenCode no tiene una opción para arrancar sin preguntar"}>
+      <span className="cc-field-l">Permisos</span>
+      <span className="cc-select">
+        <select value={can ? mode : "ask"} disabled={!can} onChange={(e) => set(e.target.value as PermMode)}>
+          <option value="ask">Pedir permiso</option>
+          <option value="never">No preguntar nunca</option>
+        </select>
+        <Icon name="chev" size={13} />
+      </span>
+      {can && mode === "never" && (
+        <span className="st-note" data-tone="warn">
+          Puede ejecutar cualquier comando y editar cualquier archivo sin preguntarte. Se aplica al volver a abrirlo.
+        </span>
+      )}
+    </label>
   );
 }
 

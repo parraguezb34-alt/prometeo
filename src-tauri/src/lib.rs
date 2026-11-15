@@ -119,6 +119,8 @@ pub fn run() {
             hub::connectors::team_detect,
             hub::connectors::team_connect,
             hub::connectors::team_open,
+            hub::connectors::agent_perms_get,
+            hub::connectors::agent_perms_set,
             hub::connectors::team_models,
             hub::connectors::opencode_compact,
             hub::connectors::team_agent_session,

@@ -52,5 +52,7 @@ if (isAviso) {
     }
   })();
 } else {
+  // Antes de abrir agentes: los permisos de cada uno (Ajustes → Agentes) quedan guardados.
+  void import("./lib/agentPerms").then(({ initAgentPerms }) => initAgentPerms());
   void import("./App").then(({ default: App }) => root.render(<App />));
 }

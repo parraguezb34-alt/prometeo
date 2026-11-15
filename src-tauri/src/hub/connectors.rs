@@ -918,6 +918,55 @@ pub struct LaunchOpts {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub resume: bool,
+    /// «No preguntar nunca» (Ajustes → Agentes): arranca sin pedir permiso para nada.
+    pub skip_permissions: bool,
+}
+
+/// Permisos de cada agente que eligió el usuario: «ask» (pedir permiso) o «never» (no preguntar
+/// nunca). Vive en el disco para que el PC y el iPad abran a los agentes igual.
+fn agent_perms_path() -> PathBuf {
+    hub::data_dir().join("agent-perms.json")
+}
+
+fn load_agent_perms() -> Option<std::collections::HashMap<String, String>> {
+    let raw = std::fs::read_to_string(agent_perms_path()).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// ¿Arranca este agente sin pedir permiso? Sin ajuste guardado (antes de que la ventana lo
+/// cree la primera vez), lo de siempre: Codex y Antigravity sin preguntar.
+fn skips_permissions(agent: &str, perms: Option<&std::collections::HashMap<String, String>>) -> bool {
+    match perms {
+        Some(map) => map.get(agent).is_some_and(|v| v == "never"),
+        None => matches!(agent, "codex" | "antigravity"),
+    }
+}
+
+/// La flag de cada CLI para no pedir permiso. Claude en modo plan no la lleva (plan ya limita).
+fn skip_flag(agent: &str, plan: bool) -> Option<&'static str> {
+    match agent {
+        "claude" if !plan => Some("--dangerously-skip-permissions"),
+        "codex" => Some("--dangerously-bypass-approvals-and-sandbox"),
+        "antigravity" => Some("--dangerously-skip-permissions"),
+        _ => None,
+    }
+}
+
+/// Lo guardado; `null` si aún no se eligió (la ventana decide en su primer arranque).
+#[tauri::command]
+pub fn agent_perms_get() -> Option<std::collections::HashMap<String, String>> {
+    load_agent_perms()
+}
+
+#[tauri::command]
+pub fn agent_perms_set(perms: std::collections::HashMap<String, String>) -> Result<(), String> {
+    let known = ["claude", "codex", "opencode", "antigravity"];
+    let clean: std::collections::HashMap<String, String> = perms
+        .into_iter()
+        .filter(|(k, v)| known.contains(&k.as_str()) && (v == "ask" || v == "never"))
+        .collect();
+    let body = serde_json::to_string_pretty(&clean).map_err(|e| e.to_string())?;
+    std::fs::write(agent_perms_path(), body).map_err(|e| e.to_string())
 }
 
 /// Valores que acaban en una línea de comandos: solo caracteres inocuos.
@@ -981,6 +1030,9 @@ pub fn launch_target(agent: &str, opts: &LaunchOpts) -> Option<Value> {
             if opts.plan {
                 cmd.push_str(" --permission-mode plan");
             }
+            if opts.skip_permissions && let Some(f) = skip_flag("claude", opts.plan) {
+                cmd.push_str(&format!(" {f}"));
+            }
             if let Some(m) = &model {
                 cmd.push_str(&format!(" --model {m}"));
             }
@@ -994,9 +1046,11 @@ pub fn launch_target(agent: &str, opts: &LaunchOpts) -> Option<Value> {
         }
         "codex" => {
             let exe = codex_cli()?;
-            // El usuario eligió que Codex no pida nunca permiso (ni aprobaciones ni sandbox):
-            // quita la flag para volver a las confirmaciones.
-            let mut cmd = format!("{} --dangerously-bypass-approvals-and-sandbox", quoted(&exe));
+            // «No preguntar nunca» (Ajustes → Agentes): ni aprobaciones ni sandbox.
+            let mut cmd = quoted(&exe);
+            if opts.skip_permissions && let Some(f) = skip_flag("codex", opts.plan) {
+                cmd.push_str(&format!(" {f}"));
+            }
             if let Some(m) = &model {
                 cmd.push_str(&format!(" -m {m}"));
             }
@@ -1025,9 +1079,11 @@ pub fn launch_target(agent: &str, opts: &LaunchOpts) -> Option<Value> {
         "antigravity" => {
             // Prefer the Antigravity CLI (`agy`) so it runs inside a lienzo
             // terminal; fall back to opening its desktop app.
-            // `--dangerously-skip-permissions` stops the constant tool
-            // permission prompts — remove the flag here to get them back.
-            let mut flags = String::from("--dangerously-skip-permissions");
+            // «No preguntar nunca» (Ajustes → Agentes) quita las preguntas de permiso.
+            let mut flags = String::new();
+            if opts.skip_permissions && let Some(f) = skip_flag("antigravity", opts.plan) {
+                flags.push_str(f);
+            }
             if opts.plan {
                 flags.push_str(" --mode plan");
             }
@@ -1090,6 +1146,7 @@ pub async fn team_open(
         model,
         effort,
         resume: resume.unwrap_or(false),
+        skip_permissions: skips_permissions(&agent, load_agent_perms().as_ref()),
     };
     // OpenCode: el modelo va en la config del proyecto, no en la línea de comandos.
     if agent == "opencode"
@@ -1537,6 +1594,34 @@ pub async fn team_agent_session(agent: String, project: String) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permisos_sin_ajuste_guardado_siguen_como_antes() {
+        assert!(skips_permissions("codex", None));
+        assert!(skips_permissions("antigravity", None));
+        assert!(!skips_permissions("claude", None));
+        assert!(!skips_permissions("opencode", None));
+    }
+
+    #[test]
+    fn permisos_con_ajuste_guardado_mandan() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("codex".to_string(), "ask".to_string());
+        map.insert("claude".to_string(), "never".to_string());
+        assert!(!skips_permissions("codex", Some(&map)));
+        assert!(skips_permissions("claude", Some(&map)));
+        // Lo que no aparece pide permiso.
+        assert!(!skips_permissions("antigravity", Some(&map)));
+    }
+
+    #[test]
+    fn flags_para_no_preguntar() {
+        assert_eq!(skip_flag("claude", false), Some("--dangerously-skip-permissions"));
+        assert_eq!(skip_flag("claude", true), None);
+        assert_eq!(skip_flag("codex", false), Some("--dangerously-bypass-approvals-and-sandbox"));
+        assert_eq!(skip_flag("antigravity", true), Some("--dangerously-skip-permissions"));
+        assert_eq!(skip_flag("opencode", false), None);
+    }
 
     #[test]
     fn protocolo_regenerado_reemplaza_bloque_sin_duplicarlo() {
