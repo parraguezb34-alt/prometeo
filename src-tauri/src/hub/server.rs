@@ -112,8 +112,8 @@ fn authorized(request: &tiny_http::Request, app: &AppHandle) -> bool {
 fn same_token(got: &str, want: &str) -> bool {
     let (a, b) = (got.as_bytes(), want.as_bytes());
     let mut diff = a.len() ^ b.len();
-    for i in 0..b.len() {
-        diff |= usize::from(a.get(i).copied().unwrap_or(0) ^ b[i]);
+    for (i, &w) in b.iter().enumerate() {
+        diff |= usize::from(a.get(i).copied().unwrap_or(0) ^ w);
     }
     diff == 0
 }
