@@ -53,7 +53,7 @@ import { loadApplied, loadAutoStart, loadPrefs, saveApplied, saveAutoStart, save
 import type { AgentPref } from "../lib/agentPrefs";
 import { needsLogin, tailText, termKill, termList, termScrollback, termWrite } from "../lib/pty";
 import { openDialog } from "../lib/bridge";
-import { cleanFolderName, copyProjectStorage, dropProjectStorage, projectRename } from "../lib/project";
+import { cleanFolderName, copyProjectStorage, projectRename } from "../lib/project";
 import { parentDir, projectCreateDir, projectKey, projectName } from "../lib/project";
 import { projectAttachPath, projectInfo, projectRecent, projectSaveAttachment, projectSaveImage } from "../lib/project";
 import { dropOwner } from "../lib/dropzone";
@@ -71,7 +71,7 @@ import { AUTO_NUDGES, STALL_CHECK_MS, detectStall, escalatePrompt, nudgePrompt, 
 import type { Stall } from "../lib/stall";
 import { askPhrase, eventImages, isDispatch, isImagePath, isNotice, parseTask, samePath } from "../lib/timeline";
 import { notify } from "../lib/notify";
-import { getSettings, stallConfig, rememberProject, renameRecentProject, useSettings } from "../lib/settings";
+import { getSettings, stallConfig, rememberProject, renameRecentProject, updateSettings, useSettings } from "../lib/settings";
 import type { Chat } from "../lib/chats";
 import { AgentQuickCmds, fmtTokens } from "./AgentCard";
 import { ChatView } from "./ChatView";
@@ -1715,6 +1715,12 @@ export function CommandCenter() {
     const name = projectName(target);
     say(`📁 Cambiando a «${name}»…`);
     try {
+      try {
+        await projectInfo(target);
+      } catch (e) {
+        updateSettings({ recentProjects: getSettings().recentProjects.filter((p) => projectKey(p) !== projectKey(target)) });
+        throw new Error(`No encuentro la carpeta de «${name}». Se quitó de recientes. ${errMsg(e)}`);
+      }
       const chat = prepareChat(target, { chatId: opts.chatId, newTeam: opts.newChat });
       const sessions = chat?.sessions ?? {};
       const running = getLayout()
@@ -1806,6 +1812,15 @@ export function CommandCenter() {
     const old = project;
     const clean = cleanFolderName(name);
     if (!old || !clean || switching || clean === projectName(old)) return "No se puede renombrar ahora.";
+    const guess = `${parentDir(old)}\\${clean}`;
+    if (projectKey(guess) !== projectKey(old)) {
+      try {
+        await projectInfo(guess);
+        return `Ya hay una carpeta llamada «${clean}» junto a esta.`;
+      } catch (e) {
+        if (!errMsg(e).includes("la carpeta del proyecto no existe")) return errMsg(e);
+      }
+    }
     setSwitching(true);
     setOverlay(null);
     say(`📁 Renombrando «${projectName(old)}» a «${clean}»…`);
@@ -1814,11 +1829,13 @@ export function CommandCenter() {
       .panels.filter((p) => p.kind === "terminal" && !!p.cmd)
       .map((p) => ({ panel: p, name: agentKeyFromCmd(p.cmd ?? "") }));
     // Los chats ya en la ruta nueva antes de que el hub avise del cambio (si no, se verían vacíos).
-    const guess = `${parentDir(old)}\\${clean}`;
     let target = old;
     let renameError: string | null = null;
+    let undoGuess: (() => void) | null = null;
+    let renamed = false;
     try {
-      copyProjectStorage(old, guess, false);
+      undoGuess = copyProjectStorage(old, guess, false);
+      if (!undoGuess) throw new Error("No se pudieron preparar los datos locales para el nuevo nombre.");
       for (const { panel } of running) {
         if (panel.sessionId) await termKill(panel.sessionId).catch(() => {});
         removePanel(panel.id);
@@ -1828,16 +1845,17 @@ export function CommandCenter() {
       // Las terminales tardan un momento en soltar la carpeta.
       await new Promise((r) => window.setTimeout(r, 600));
       target = await projectRename(old, clean);
+      renamed = true;
       if (projectKey(target) !== projectKey(guess)) {
-        copyProjectStorage(old, target, false);
-        dropProjectStorage(guess);
+        if (!copyProjectStorage(old, target, false)) throw new Error("No se pudieron copiar los datos locales al nombre nuevo.");
+        undoGuess();
       }
-      copyProjectStorage(old, target, true);
+      if (!copyProjectStorage(old, target, true)) throw new Error("No se pudieron mover los datos locales al nombre nuevo.");
       renameRecentProject(old, target);
       rememberProject(target);
       say(`📁 La carpeta ahora se llama «${projectName(target)}».`);
     } catch (e) {
-      if (projectKey(guess) !== projectKey(old)) dropProjectStorage(guess);
+      if (!renamed) undoGuess?.();
       say(errMsg(e), true);
       renameError = errMsg(e);
     }

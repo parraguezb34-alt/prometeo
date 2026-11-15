@@ -78,21 +78,26 @@ fn rename_with_retries(from: &Path, to: &Path) -> std::io::Result<()> {
     Err(last.unwrap())
 }
 
-/// Hace el cambio en el disco y en Prometeo. Devuelve la ruta nueva.
-pub fn rename(hub: &Hub, path: &str, name: &str) -> Result<String, String> {
-    let name = valid_name(name)?;
-    let old = PathBuf::from(path.trim().trim_end_matches(['\\', '/']));
+fn rename_target(old: &Path, name: &str) -> Result<PathBuf, String> {
     if !old.is_dir() {
         return Err(format!("No encuentro la carpeta {}", old.display()));
     }
     let parent = old.parent().ok_or("No se puede renombrar la raíz de un disco.")?;
-    let new = parent.join(&name);
+    let new = parent.join(name);
     let same_ignoring_case = new.to_string_lossy().to_lowercase() == old.to_string_lossy().to_lowercase();
-    if new == old {
-        return Ok(old.display().to_string());
-    }
     if new.exists() && !same_ignoring_case {
         return Err(format!("Ya hay una carpeta llamada «{name}» junto a esta."));
+    }
+    Ok(new)
+}
+
+/// Hace el cambio en el disco y en Prometeo. Devuelve la ruta nueva.
+pub fn rename(hub: &Hub, path: &str, name: &str) -> Result<String, String> {
+    let name = valid_name(name)?;
+    let old = PathBuf::from(path.trim().trim_end_matches(['\\', '/']));
+    let new = rename_target(&old, &name)?;
+    if new == old {
+        return Ok(old.display().to_string());
     }
     // La app en vivo corre dentro de la carpeta.
     crate::devapp::stop();
@@ -174,6 +179,20 @@ mod tests {
         rename_with_retries(&root.join("Viejo"), &root.join("Nuevo")).unwrap();
         assert_eq!(std::fs::read_to_string(root.join("Nuevo").join("a.txt")).unwrap(), "hola");
         assert!(root.join("Nuevo").join(".lienzo").is_dir());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rechaza_destino_ocupado_sin_tocar_ninguna_carpeta() {
+        let root = std::env::temp_dir().join(format!("lienzo-rn-ocupado-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Origen")).unwrap();
+        std::fs::create_dir_all(root.join("Destino")).unwrap();
+        std::fs::write(root.join("Origen").join("origen.txt"), "origen").unwrap();
+        std::fs::write(root.join("Destino").join("destino.txt"), "destino").unwrap();
+        assert!(rename_target(&root.join("Origen"), "Destino").is_err());
+        assert_eq!(std::fs::read_to_string(root.join("Origen").join("origen.txt")).unwrap(), "origen");
+        assert_eq!(std::fs::read_to_string(root.join("Destino").join("destino.txt")).unwrap(), "destino");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

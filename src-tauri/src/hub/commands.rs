@@ -30,6 +30,7 @@ pub fn team_details(hub: tauri::State<'_, Hub>) -> Result<serde_json::Value, Str
 
 #[tauri::command]
 pub fn team_project_set(hub: tauri::State<'_, Hub>, path: Option<String>) -> Result<(), String> {
+    let path = validate_project_path(path)?;
     let mut inner = hub.0.lock().map_err(|e| e.to_string())?;
     // Historial desde el estado de ahora, antes de que nadie toque nada (si aún no lo había).
     if let Some(p) = path.clone().filter(|p| !p.trim().is_empty()) {
@@ -44,6 +45,30 @@ pub fn team_project_set(hub: tauri::State<'_, Hub>, path: Option<String>) -> Res
     drop(inner);
     notify_ui();
     Ok(())
+}
+
+fn validate_project_path(path: Option<String>) -> Result<Option<String>, String> {
+    if let Some(folder) = path.as_deref().map(str::trim).filter(|folder| !folder.is_empty())
+        && !std::path::Path::new(folder).is_dir() {
+            return Err(format!("La carpeta del proyecto ya no existe: {folder}"));
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+mod project_set_tests {
+    use super::validate_project_path;
+
+    #[test]
+    fn no_acepta_un_proyecto_borrado_antes_de_cambiar_el_hub() {
+        let folder = std::env::temp_dir().join(format!("lienzo-project-set-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        assert!(validate_project_path(Some(folder.display().to_string())).is_err());
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(validate_project_path(Some(folder.display().to_string())).is_ok());
+        assert!(validate_project_path(None).is_ok());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 }
 
 /// Send a prompt to the whole team: feed event + pending deliveries for hooks.

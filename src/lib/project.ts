@@ -38,8 +38,19 @@ export function cleanFolderName(name: string): string {
 /**
  * Lo que Prometeo guarda en este equipo por carpeta (chats, preferencias…: claves
  * «lienzo.algo:<ruta>») se copia a la ruta nueva. Con `move`, además se borra lo de la vieja.
+ * Devuelve cómo deshacer solo las claves tocadas; si falla la copia, se revierte y devuelve null.
  */
-export function copyProjectStorage(from: string, to: string, move: boolean) {
+export function copyProjectStorage(from: string, to: string, move: boolean): (() => void) | null {
+  const before = new Map<string, string | null>();
+  const remember = (key: string) => {
+    if (!before.has(key)) before.set(key, localStorage.getItem(key));
+  };
+  const undo = () => {
+    for (const [key, value] of before) {
+      if (value === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, value);
+    }
+  };
   try {
     const want = projectKey(from);
     const keys: string[] = [];
@@ -51,12 +62,21 @@ export function copyProjectStorage(from: string, to: string, move: boolean) {
       const at = k.indexOf(":");
       if (at < 0 || projectKey(k.slice(at + 1)) !== want) continue;
       const v = localStorage.getItem(k);
-      if (v != null) localStorage.setItem(`${k.slice(0, at)}:${to}`, v);
-      if (move && projectKey(to) !== want) localStorage.removeItem(k);
+      if (v != null) {
+        const dest = `${k.slice(0, at)}:${to}`;
+        remember(dest);
+        localStorage.setItem(dest, v);
+      }
+      if (move && projectKey(to) !== want) {
+        remember(k);
+        localStorage.removeItem(k);
+      }
     }
   } catch {
-    /* sin almacenamiento: no hay nada que mover */
+    try { undo(); } catch { /* el almacenamiento dejó de estar disponible */ }
+    return null;
   }
+  return undo;
 }
 
 /** Clave de una carpeta (sin mayúsculas, con «/», sin barra final), como en el hub. */

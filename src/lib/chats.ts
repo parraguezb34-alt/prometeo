@@ -88,6 +88,11 @@ const projectSeqs = new Map<string, { lastSuccessfulSeq: number; lastLocalSeq: n
 const pendingSaves = new Map<string, { seq: number; project: string | null; chats: Chat[] }>();
 const lastSavedByProject = new Map<string, number>();
 let retryTimer: number | undefined;
+let retryRound = 0;
+
+function retryDelayMs(round: number): number {
+  return Math.min(20_000 * 2 ** round, 5 * 60_000);
+}
 
 /**
  * Reintenta el guardado para todos los proyectos que tienen escrituras pendientes.
@@ -117,23 +122,24 @@ function handleSaveFailure(seq: number, project: string | null, chats: Chat[], d
   st.failedSeq = seq;
   projectSeqs.set(key, st);
 
+  const alreadyPending = pendingSaves.has(key);
   pendingSaves.set(key, { seq, project, chats });
-  reportError("interfaz", `Fallo al guardar chats en disco y almacenamiento local (${project ?? "sin proyecto"})`, detail);
+  reportError("historial", `Fallo al guardar chats (${project ?? "sin proyecto"})`, detail);
 
   const lastTimeMs = lastSavedByProject.get(key);
   const lastTime = lastTimeMs
     ? new Date(lastTimeMs).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
     : "nunca";
-  notify(
+  if (!alreadyPending) notify(
     "⚠️ Error al guardar chats",
-    `No se pudieron guardar los chats ni en disco ni en el navegador (último guardado con éxito: ${lastTime}). Reintentando automáticamente en segundo plano.`,
+    `No se confirmó el guardado en disco (último guardado con éxito: ${lastTime}). Reintentando automáticamente en segundo plano.`,
     { kind: "late" },
   );
   if (retryTimer === undefined && typeof window !== "undefined") {
     retryTimer = window.setTimeout(() => {
       retryTimer = undefined;
       retrySaveChats();
-    }, 20_000);
+    }, retryDelayMs(retryRound++));
   }
 }
 
@@ -155,6 +161,7 @@ function onSaveSuccess(seq: number, project: string | null) {
 
     // Si este proyecto tenía fallos pendientes y ahora todos los proyectos están limpios:
     if (hadPending && pendingSaves.size === 0) {
+      retryRound = 0;
       if (retryTimer !== undefined && typeof window !== "undefined") {
         window.clearTimeout(retryTimer);
         retryTimer = undefined;
@@ -210,20 +217,16 @@ function save(project: string | null, chats: Chat[]) {
       .catch((e) => {
         const diskErr = errMsg(e);
         reportError("historial", `Fallo al escribir chats en disco para ${project} (seq ${seq}): ${diskErr}`);
-        if (!localOk || pendingSaves.has(key)) {
-          handleSaveFailure(
-            seq,
-            project,
-            list,
-            `Disco: ${diskErr}${localOk ? " (localStorage OK)" : ` · LocalStorage: ${localErr}`}`,
-          );
-        } else {
-          lastSavedByProject.set(key, Date.now());
-        }
+        handleSaveFailure(
+          seq,
+          project,
+          list,
+          `Disco: ${diskErr}${localOk ? " (localStorage OK)" : ` · LocalStorage: ${localErr}`}`,
+        );
       });
   } else if (!localOk) {
     handleSaveFailure(seq, project, list, `LocalStorage: ${localErr}`);
-  } else {
+  } else if (!project) {
     onSaveSuccess(seq, project);
   }
 }
