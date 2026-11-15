@@ -3539,9 +3539,9 @@ mod tests {
         let st = json!({"windows":[{"key":"session","label":"Sesión (5 h)","used_pct":100.0,"resets_at":1000u64}]});
         assert_eq!(usage_step(&st, 2000).as_deref(), Some("Sesión (5 h) holgado"));
         assert!(usage_step(&st, 500).unwrap().contains("SIN CUOTA"));
-        assert!(codex_same_dir(r"C:\Users\parra\.codex\worktrees\935f\bucle-site", r"C:\Users\parra\OneDrive\Escritorio\PROYECTOS\bucle-site"));
-        assert!(!codex_same_dir(r"C:\Users\parra\.codex\worktrees\935f\otro", r"C:\x\bucle-site"));
-        assert!(!codex_same_dir(r"C:\otra\bucle-site", r"C:\x\bucle-site"));
+        assert!(codex_same_dir(r"C:\Users\ana\.codex\worktrees\935f\demo", r"C:\Users\ana\proyectos\demo"));
+        assert!(!codex_same_dir(r"C:\Users\ana\.codex\worktrees\935f\otro", r"C:\x\demo"));
+        assert!(!codex_same_dir(r"C:\otra\demo", r"C:\x\demo"));
     }
 
     #[test]

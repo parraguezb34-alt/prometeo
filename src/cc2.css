@@ -417,6 +417,20 @@
 .cc-chats-search input::placeholder {
   color: var(--faint);
 }
+.cc-chats-search-x {
+  all: unset;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--faint);
+  cursor: pointer;
+}
+.cc-chats-search-x:hover {
+  color: var(--text);
+  background: var(--line);
+}
 .cc-chats-list {
   flex: 1;
   min-height: 0;

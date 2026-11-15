@@ -15,21 +15,21 @@ const DOWN = "\x1b[B";
 test("OpenCode: permiso con Allow once / Always allow / Reject (pantalla real)", () => {
   const p = detectPrompt([
     "  + Thought · 693ms",
-    "  → Read ~/OneDrive/Escritorio/pagian3daa/src/scene/Particles.jsx",
+    "  → Read ~/proyectos/demo/src/scene/Particles.jsx",
     "",
     "  △ Permission required",
-    "    ← Access external directory ~/OneDrive/Escritorio/pagian3daa/src/scene",
+    "    ← Access external directory ~/proyectos/demo/src/scene",
     "",
     "  Patterns",
     "",
-    "  - C:/Users/parra/OneDrive/Escritorio/pagian3daa/src/scene/*",
+    "  - C:/Users/ana/proyectos/demo/src/scene/*",
     "",
     "   Allow once   Always allow   Reject          ctrl+f fullscreen  ⇆ select  enter confirm",
   ]);
   assert.equal(p.title, "Pide permiso");
   assert.deepEqual(p.detail, [
-    "Access external directory ~/OneDrive/Escritorio/pagian3daa/src/scene",
-    "C:/Users/parra/OneDrive/Escritorio/pagian3daa/src/scene/*",
+    "Access external directory ~/proyectos/demo/src/scene",
+    "C:/Users/ana/proyectos/demo/src/scene/*",
   ]);
   assert.deepEqual(
     p.options.map((o) => [o.label, o.keys, o.tone]),
@@ -48,14 +48,14 @@ test("OpenCode: el segundo paso de «Always allow» (Confirm / Cancel)", () => {
     "  △ Always allow",
     "",
     "  This will always allow the following patterns for this project.",
-    "  - C:/Users/parra/Projects/lienzo/*",
+    "  - C:/Users/ana/proyectos/demo/*",
     "",
     "   Confirm   Cancel          ⇆ select  enter confirm  esc cancel",
   ]);
   assert.equal(p.title, "¿Permitir siempre?");
   assert.deepEqual(p.detail, [
     "This will always allow the following patterns for this project.",
-    "C:/Users/parra/Projects/lienzo/*",
+    "C:/Users/ana/proyectos/demo/*",
   ]);
   assert.deepEqual(
     p.options.map((o) => [o.label, o.keys]),
@@ -75,7 +75,7 @@ test("Codex: «Would you like to run the following command?» con un comando lar
     "",
     "  Reason: Necesito leer el repositorio de Prometeo fuera de la carpeta de trabajo",
     "",
-    "  $ Get-Content -LiteralPath 'C:\\Users\\parra\\Projects\\lienzo\\src-tauri\\src\\hub\\",
+    "  $ Get-Content -LiteralPath 'C:\\Users\\ana\\proyectos\\demo\\src\\hub\\",
     "  server.rs' | Select-Object -Skip 700 -First 80",
     "",
     "› 1. Yes, proceed (y)",
@@ -150,13 +150,13 @@ test("(y/n)", () => {
 });
 
 const UP = "\x1b[A";
-const P3D = "C:\\Users\\parra\\OneDrive\\Escritorio\\pagian3daa";
+const P3D = "C:\\Users\\ana\\proyectos\\demo";
 
 test("Confianza de carpeta: Claude Code (No marcado arriba → bajar y Enter)", () => {
   const screen = [
     "Accessing workspace:",
     "",
-    "C:\\Users\\parra\\OneDrive\\Escritorio\\pagian3daa",
+    "C:\\Users\\ana\\proyectos\\demo",
     "",
     "Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known",
     "open source project, or work from your team). If not, take a moment to review what's in this folder first.",
@@ -173,7 +173,7 @@ test("Confianza de carpeta: Claude Code (No marcado arriba → bajar y Enter)", 
   assert.equal(detectTrust(screen, P3D), DOWN + "\r");
   assert.equal(detectTrust(screen, P3D + "\\"), DOWN + "\r");
   // Otra carpeta: no se acepta sola.
-  assert.equal(detectTrust(screen, "C:\\Users\\parra\\OneDrive\\Escritorio"+"\\otra"), null);
+  assert.equal(detectTrust(screen, "C:\\Users\\ana\\proyectos"+"\\otra"), null);
   assert.equal(detectTrust(screen, null), null);
 });
 
@@ -181,7 +181,7 @@ test("Confianza de carpeta: Antigravity (Sí ya marcado → Enter)", () => {
   const screen = [
     "Accessing workspace:",
     "",
-    "C:\\Users\\parra\\OneDrive\\Escritorio\\pagian3daa",
+    "C:\\Users\\ana\\proyectos\\demo",
     "",
     "Do you trust the contents of this project?",
     "",
@@ -199,8 +199,8 @@ test("Confianza de carpeta: Antigravity (Sí ya marcado → Enter)", () => {
 test("Confianza de carpeta: menú numerado y ruta partida en dos líneas", () => {
   const screen = [
     "Do you trust the files in this folder?",
-    "C:\\Users\\parra\\OneDrive\\Escritorio\\pagi",
-    "an3daa",
+    "C:\\Users\\ana\\proyectos\\de",
+    "mo",
     "  1. No, exit",
     "❯ 2. Yes, proceed",
   ];

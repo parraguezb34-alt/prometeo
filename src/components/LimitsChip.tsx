@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { agentColor, agentLabel, ago } from "../lib/team";
 import { fmtReset, level, windowLabel, worst } from "../lib/limits";
 import type { AgentLimits } from "../lib/limits";
@@ -35,6 +35,17 @@ export function LimitsChip({
   const [, tick] = useState(0);
   // Los «se reinicia en…» avanzan solos mientras el panel está abierto (pausado con la ventana oculta).
   useVisibleInterval(() => tick((n) => n + 1), open ? 30_000 : null, null);
+  // Escape cierra el desplegable (sin cerrar los Ajustes que pueda haber detrás).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open]);
 
   const entries = Object.entries(limits ?? {})
     .filter(([, l]) => l.windows.length > 0)

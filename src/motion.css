@@ -206,7 +206,7 @@
   }
 }
 
-/* Punto rojo de errores nuevos en el engranaje: aparece con un rebote y late despacio. */
+/* Punto rojo de errores nuevos en el engranaje: aparece con un rebote y late 4 veces. */
 .cc-gear {
   position: relative;
 }
@@ -221,7 +221,7 @@
   box-shadow: 0 0 0 2px var(--surface);
   animation:
     mo-pop var(--d-slow) var(--ease-spring),
-    mo-beat 2.4s 0.5s var(--ease-io) infinite;
+    mo-beat 2.4s 0.5s var(--ease-io) 4;
 }
 /* Solo escala y opacidad (sin repintar): está siempre a la vista en la barra de arriba. */
 @keyframes mo-beat {

@@ -165,7 +165,23 @@ export function ChatsSidebar({
           value={query}
           placeholder="Buscar en chats"
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Escape") return;
+            e.stopPropagation();
+            setQuery("");
+          }}
         />
+        {query && (
+          <button
+            className="cc-chats-search-x"
+            type="button"
+            aria-label="Limpiar la búsqueda"
+            title="Limpiar la búsqueda"
+            onClick={() => setQuery("")}
+          >
+            <Icon name="x" size={12} />
+          </button>
+        )}
       </label>
       <div className="cc-chats-list">
         {grouped.length === 0 && (
@@ -244,7 +260,7 @@ export function ChatsSidebar({
                         setOpenActionsChatId((id) => (id === c.id ? null : c.id));
                       }}
                     >
-                      {"\u22ef"}
+                      <Icon name="more" size={15} />
                     </button>
                     {openActionsChatId === c.id && (
                       <div className="cc-chat-actions-menu" role="menu" aria-label={`Acciones de ${c.title}`}>
@@ -277,7 +293,7 @@ export function ChatsSidebar({
                             setOpenActionsChatId(null);
                             onRemove(c);
                           }}
-                          confirmText="Seguro? Pulsa otra vez"
+                          confirmText="¿Seguro? Pulsa otra vez"
                           title="Quitar de la lista"
                           aria-label="Quitar chat"
                         >

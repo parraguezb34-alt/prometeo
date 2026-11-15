@@ -21,6 +21,7 @@ const PATHS: Record<string, ReactNode> = {
   ),
   send: <path d="m5 12 7-7 7 7M12 19V5" />,
   plus: <path d="M5 12h14M12 5v14" />,
+  more: <path d="M5 12h.01M12 12h.01M19 12h.01" />,
   warn: (
     <path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3zM12 9v4M12 17h.01" />
   ),

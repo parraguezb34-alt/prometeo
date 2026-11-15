@@ -24,7 +24,7 @@ const CAT_ICON: Record<string, IconName> = {
 };
 
 function origin(s: Skill): string {
-  if (s.builtin) return "de lienzo";
+  if (s.builtin) return "de Prometeo";
   const gh = /github\.com\/([^/]+\/[^/]+)/.exec(s.source);
   if (gh) return gh[1];
   if (/^https?:/.test(s.source)) return new URL(s.source).host;
@@ -46,6 +46,18 @@ export function SkillsPanel({ say }: { say: (text: string, err?: boolean) => voi
       .then(setLib)
       .catch((e) => say(errMsg(e), true));
   }, [say]);
+
+  // Escape en la vista de una skill vuelve a la lista, sin cerrar Ajustes.
+  useEffect(() => {
+    if (!view) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setView(null);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [view]);
 
   const install = async (src: string) => {
     const s = src.trim();
