@@ -1,0 +1,122 @@
+name: Release
+
+# Publica un instalador NSIS firmado (y su latest.json) al subir una etiqueta v*.
+# También se puede lanzar a mano con la etiqueta ya creada (workflow_dispatch).
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Etiqueta existente a publicar (v1.0.N). Debe coincidir con la versión 1.0.<commits> de ese commit."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Compilar y publicar (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Descargar el código (historia y etiquetas)
+        uses: actions/checkout@v4
+        with:
+          # En workflow_dispatch se compila la etiqueta indicada; en push, la que se acaba de subir.
+          ref: ${{ inputs.tag || github.ref }}
+          # version.mjs cuenta commits (1.0.<commits>): hace falta la historia completa.
+          fetch-depth: 0
+
+      - name: Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Comprobar etiqueta y versión
+        id: version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="${INPUT_TAG:-}"
+          else
+            TAG="$REF_NAME"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Falta la etiqueta: en workflow_dispatch hay que indicar el input «tag»."
+            exit 1
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Etiqueta no válida: «$TAG». Se espera v1.0.<commits>."
+            exit 1
+          fi
+          node scripts/version.mjs
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::La etiqueta «$TAG» no coincide con la versión calculada «v$VERSION» (1.0.<commits>). Crea la etiqueta en el commit correcto."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Notas del release (commits desde la etiqueta anterior)
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREV="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
+          {
+            echo "body<<EOF_NOTAS"
+            if [ -n "$PREV" ]; then
+              echo "Cambios desde $PREV:"
+              echo
+              git log --no-merges --pretty=format:'- %s (%h)' "$PREV..HEAD"
+            else
+              echo "Primera versión publicada:"
+              echo
+              git log --no-merges --pretty=format:'- %s (%h)' HEAD
+            fi
+            echo
+            echo "EOF_NOTAS"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Rust estable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Caché de Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+
+      - name: Dependencias del frontend
+        run: npm ci
+
+      - name: Compilar, firmar y publicar en GitHub Releases
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ steps.version.outputs.tag }}
+          releaseName: Prometeo ${{ steps.version.outputs.version }}
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          uploadUpdaterSignatures: true
+          args: --bundles nsis

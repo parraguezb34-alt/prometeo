@@ -1,0 +1,51 @@
+name: CI
+
+# Pruebas en cada PR y en cada push a main: TypeScript, pruebas de Node y de Rust.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Pruebas (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Rust estable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Caché de Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-ci-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ci-
+
+      - name: Dependencias
+        run: npm ci
+
+      - name: TypeScript
+        run: npx tsc --noEmit -p .
+
+      - name: Pruebas de Node
+        run: npm test
+
+      - name: Pruebas de Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
