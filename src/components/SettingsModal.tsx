@@ -1,7 +1,7 @@
 import { forgetRule, loadRules, onRulesChange } from "../lib/permMemory";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { invoke, isRemote, revealItemInDir } from "../lib/bridge";
+import { invoke, isRemote, listen, revealItemInDir } from "../lib/bridge";
 import type { AgentPref } from "../lib/agentPrefs";
 import type { DispatchState } from "../lib/dispatcher";
 import { testNotify } from "../lib/notify";
@@ -21,7 +21,7 @@ import { useUnseenErrors } from "../lib/errors";
 import type { IconName } from "./Icon";
 import { EFFORT_LABEL } from "./TeamModal";
 import { appAbout, updateCheck } from "../lib/update";
-import type { About, UpdateInfo } from "../lib/update";
+import type { About, UpdateInfo, UpdateProgress } from "../lib/update";
 import { useModalFocus } from "./useModalFocus";
 
 export type SettingsSection = "general" | "agents" | "team" | "skills" | "usage" | "dispatch" | "notify" | "hub" | "remote" | "errors" | "about";
@@ -443,8 +443,11 @@ function General({ state, info, autoStart, windowsStartup, shoot, chatsMin, say,
           <span className="cc-kbd">Esc</span>
         </Row>
         <Row label="Enviar el mensaje">
+          <span className="cc-kbd">Enter</span>
+        </Row>
+        <Row label="Salto de línea">
           <span className="st-keys">
-            <span className="cc-kbd">⌘ / Ctrl</span>
+            <span className="cc-kbd">Shift</span>
             <span className="cc-kbd">Enter</span>
           </span>
         </Row>
@@ -1497,6 +1500,7 @@ function AboutPanel() {
   const [about, setAbout] = useState<About | null>(null);
   const [upd, setUpd] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
+  const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const check = () => {
     setChecking(true);
     updateCheck()
@@ -1508,9 +1512,20 @@ function AboutPanel() {
     appAbout().then(setAbout).catch(() => setAbout(null));
     if (!REMOTE) check();
   }, []);
+  useEffect(() => {
+    if (REMOTE) return;
+    let active = true;
+    const unlisten = listen<UpdateProgress>("update://progress", (event) => {
+      if (active) setProgress(event.payload);
+    });
+    return () => {
+      active = false;
+      void unlisten.then((stop) => stop()).catch(() => {});
+    };
+  }, []);
   return (
     <>
-      <Group title="Prometeo" desc="La versión sube sola cada vez que se compila (una por commit).">
+      <Group title="Prometeo" desc="La versión instalada y las actualizaciones disponibles.">
         <Row label="Versión">
           <b>{about?.version ?? "…"}</b>
         </Row>
@@ -1524,11 +1539,25 @@ function AboutPanel() {
             hint={upd?.available ? "Usa el botón «Actualizar» de arriba a la derecha." : upd?.reason || undefined}
           >
             <span className="st-pill" data-tone={upd?.available ? "ok" : undefined}>
-              {upd?.available ? `Lista: ${upd.version || "versión nueva"}` : "Al día"}
+              {upd?.available ? `Lista: ${upd.version || "versión nueva"}` : upd?.reason?.startsWith("No pude") ? "Sin comprobar" : "Al día"}
             </span>
             <button className="hs-btn" onClick={check} disabled={checking}>
               {checking ? "Buscando…" : "Buscar ahora"}
             </button>
+          </Row>
+        )}
+        {upd?.available && upd.source === "github" && upd.notes && (
+          <Row label={`Novedades de ${upd.version}`}>
+            <span style={{ whiteSpace: "pre-wrap", maxHeight: 180, overflowY: "auto" }}>{upd.notes}</span>
+          </Row>
+        )}
+        {progress && (
+          <Row label="Instalación">
+            <span role="status">
+              {progress.stage === "installing" ? "Descarga verificada; instalando…"
+                : progress.total ? `Descargando… ${Math.min(100, Math.round(100 * progress.downloaded / progress.total))} %`
+                  : "Descargando…"}
+            </span>
           </Row>
         )}
       </Group>

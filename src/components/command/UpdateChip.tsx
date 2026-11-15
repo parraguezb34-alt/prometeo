@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { ago, errMsg } from "../../lib/team";
 import { appAbout, updateApply, updateCheck } from "../../lib/update";
-import type { UpdateInfo } from "../../lib/update";
+import type { UpdateInfo, UpdateProgress } from "../../lib/update";
 import { Icon } from "../Icon";
-import { isRemote } from "../../lib/bridge";
+import { isRemote, listen } from "../../lib/bridge";
 
 /**
- * «Actualizar» arriba a la derecha: aparece cuando hay una versión compilada nueva. Al aceptar, Prometeo se cierra, se instala solo y se vuelve a abrir.
+ * «Actualizar» arriba a la derecha: versión local o versión firmada publicada en GitHub.
  */
 export function UpdateChip({ working, onError }: { working: number; onError: (text: string) => void }) {
   const [upd, setUpd] = useState<UpdateInfo | null>(null);
@@ -15,6 +15,8 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
   const [dev, setDev] = useState(false);
   const [checkErr, setCheckErr] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  const [progress, setProgress] = useState<UpdateProgress | null>(null);
+  const [applyErr, setApplyErr] = useState("");
   const popRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -43,6 +45,17 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
       .then((a) => setDev(!!a.dev))
       .catch(() => {});
   }, []);
+  useEffect(() => {
+    if (isRemote()) return;
+    let active = true;
+    const unlisten = listen<UpdateProgress>("update://progress", (event) => {
+      if (active) setProgress(event.payload);
+    });
+    return () => {
+      active = false;
+      void unlisten.then((stop) => stop()).catch(() => {});
+    };
+  }, []);
 
   const check = () => {
     if (isRemote()) return;
@@ -60,7 +73,7 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
       });
   };
 
-  // Se mira al abrir, cada 45 s y al volver a la ventana (es solo comparar fechas de archivos).
+  // Se mira al abrir, cada 45 s y al volver a la ventana. Sin red, la comprobación no molesta.
   useEffect(() => {
     if (isRemote()) return;
     check();
@@ -74,13 +87,21 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
   if (isRemote()) return null;
   const applyUpdate = async () => {
     setUpdBusy(true);
+    setApplyErr("");
+    setProgress(null);
     try {
       await updateApply();
     } catch (e) {
       setUpdBusy(false);
-      onError(errMsg(e));
+      if (upd?.source === "github") setApplyErr(`No pude actualizar ahora: ${errMsg(e)}. Comprueba la conexión y vuelve a intentarlo.`);
+      else onError(errMsg(e));
     }
   };
+  const progressText = progress?.stage === "installing"
+    ? "Descarga verificada; instalando…"
+    : progress?.total
+      ? `Descargando… ${Math.min(100, Math.round(100 * progress.downloaded / progress.total))} %`
+      : progress ? "Descargando…" : "Comprobando la versión…";
 
   // Prometeo Dev no se actualiza (se recompila con npm run dev:app): en su lugar, su etiqueta.
   if (dev)
@@ -120,9 +141,19 @@ export function UpdateChip({ working, onError }: { working: number; onError: (te
         <div ref={popRef} className="cc-upd-pop" role="dialog" aria-label="Actualizar Prometeo">
           <b>Prometeo {upd.version || "nuevo"} está listo</b>
           <p>
-            Compilada hace {ago(upd.built_ms)}. Prometeo se cierra, se instala solo y se vuelve a abrir en unos
-            segundos. Las terminales de los agentes se reabren retomando su conversación.
+            {upd.source === "github"
+              ? "Publicada en GitHub Releases. Se descargará, comprobará su firma y se instalará."
+              : `Compilada hace ${ago(upd.built_ms)}. Se instalará desde la carpeta del código.`}{" "}
+            Prometeo se cierra y vuelve a abrir; las terminales de los agentes retoman su conversación.
           </p>
+          {upd.notes && (
+            <div style={{ marginTop: 8 }}>
+              <b>Novedades</b>
+              <p style={{ maxHeight: 140, overflowY: "auto", whiteSpace: "pre-wrap" }}>{upd.notes}</p>
+            </div>
+          )}
+          {updBusy && <p role="status">{upd.source === "github" ? progressText : "Preparando instalación…"}</p>}
+          {applyErr && <p role="status">{applyErr}</p>}
           {working > 0 && (
             <p className="cc-upd-warn">
               {working === 1 ? "Hay 1 agente trabajando" : `Hay ${working} agentes trabajando`}: se cortará lo que

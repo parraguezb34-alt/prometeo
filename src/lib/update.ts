@@ -1,10 +1,20 @@
 import { invoke } from "./bridge";
 
-/** ¿Hay una versión de Prometeo recién compilada distinta de la que corre? (ver updater.rs) */
-export type UpdateInfo = { available: boolean; setup: string; built_ms: number; version: string; reason: string };
+/** Versión disponible en la compilación local o en GitHub Releases (ver updater.rs). */
+export type UpdateInfo = {
+  available: boolean;
+  setup: string;
+  built_ms: number;
+  version: string;
+  reason: string;
+  source: "dev" | "local" | "github";
+  notes: string;
+};
+
+export type UpdateProgress = { downloaded: number; total: number | null; stage: "downloading" | "installing" };
 
 export const updateCheck = () => invoke<UpdateInfo>("update_check");
-/** Cierra Prometeo, instala la versión nueva en silencio y lo vuelve a abrir. */
+/** Descarga, verifica la firma e instala GitHub; conserva el instalador local cuando existe. */
 export const updateApply = () => invoke<void>("update_apply");
 
 export type Change = { hash: string; ts_ms: number; subject: string };

@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
+use tauri::Emitter;
+use tauri_plugin_updater::UpdaterExt;
 
 /// Dónde se compila Prometeo: la carpeta del código con la que se hizo esta versión.
 fn source_dir() -> PathBuf {
@@ -25,6 +27,27 @@ pub struct UpdateInfo {
     version: String,
     /// Por qué no hay (en desarrollo, sin compilar…), para Ajustes.
     reason: String,
+    /// Origen de la actualización: compilación local o GitHub Releases.
+    source: String,
+    /// Novedades publicadas con la versión de GitHub.
+    notes: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum UpdateSource {
+    Local,
+    Github,
+}
+
+fn update_source(source: &Path) -> UpdateSource {
+    if source.is_dir() { UpdateSource::Local } else { UpdateSource::Github }
+}
+
+#[derive(Serialize, Clone)]
+struct UpdateProgress {
+    downloaded: u64,
+    total: Option<u64>,
+    stage: &'static str,
 }
 
 fn mtime_ms(p: &Path) -> u64 {
@@ -84,10 +107,10 @@ static LAST: Mutex<Option<(String, u64, UpdateInfo)>> = Mutex::new(None);
 pub fn check_in(source: &Path, current: &Path) -> UpdateInfo {
     let release = source.join("target").join("release");
     if current.starts_with(source.join("target")) {
-        return UpdateInfo { reason: "Es la versión de desarrollo: se actualiza sola al compilar.".into(), ..Default::default() };
+        return UpdateInfo { source: "local".into(), reason: "Es la versión de desarrollo: se actualiza sola al compilar.".into(), ..Default::default() };
     }
     let Some(setup) = newest_setup(&release.join("bundle").join("nsis")) else {
-        return UpdateInfo { reason: format!("Aún no hay ningún instalador compilado en {}.", release.display()), ..Default::default() };
+        return UpdateInfo { source: "local".into(), reason: format!("Aún no hay ningún instalador compilado en {}.", release.display()), ..Default::default() };
     };
     let built = release.join("lienzo.exe");
     let built_ms = mtime_ms(&setup);
@@ -105,6 +128,8 @@ pub fn check_in(source: &Path, current: &Path) -> UpdateInfo {
         setup: key.clone(),
         built_ms,
         reason: if available { String::new() } else { "Ya tienes la última versión compilada.".into() },
+        source: "local".into(),
+        notes: String::new(),
     };
     if let Ok(mut last) = LAST.lock() {
         *last = Some((key, built_ms, info.clone()));
@@ -112,15 +137,47 @@ pub fn check_in(source: &Path, current: &Path) -> UpdateInfo {
     info
 }
 
+async fn check_github(app: &tauri::AppHandle) -> UpdateInfo {
+    let result = async {
+        app.updater_builder()
+            .timeout(std::time::Duration::from_secs(12))
+            .build()?
+            .check()
+            .await
+    }.await;
+    match result {
+        Ok(Some(update)) => UpdateInfo {
+            available: true,
+            version: update.version,
+            notes: update.body.unwrap_or_default(),
+            source: "github".into(),
+            ..Default::default()
+        },
+        Ok(None) => UpdateInfo {
+            source: "github".into(),
+            reason: "Ya tienes la última versión publicada.".into(),
+            ..Default::default()
+        },
+        Err(_) => UpdateInfo {
+            source: "github".into(),
+            reason: "No pude consultar GitHub. Comprueba la conexión y vuelve a intentarlo.".into(),
+            ..Default::default()
+        },
+    }
+}
+
 #[tauri::command]
-pub async fn update_check() -> UpdateInfo {
+pub async fn update_check(app: tauri::AppHandle) -> UpdateInfo {
     // Prometeo Dev se recompila con `npm run dev:app`; el instalador es del Prometeo normal.
     if crate::hub::IS_DEV {
-        return UpdateInfo { reason: "Prometeo Dev no se actualiza: se recompila con npm run dev:app".into(), ..Default::default() };
+        return UpdateInfo { source: "dev".into(), reason: "Prometeo Dev no se actualiza: se recompila con npm run dev:app".into(), ..Default::default() };
     }
-    match std::env::current_exe() {
-        Ok(cur) => check_in(&source_dir(), &cur),
-        Err(e) => UpdateInfo { reason: e.to_string(), ..Default::default() },
+    match update_source(&source_dir()) {
+        UpdateSource::Local => match std::env::current_exe() {
+            Ok(cur) => check_in(&source_dir(), &cur),
+            Err(e) => UpdateInfo { source: "local".into(), reason: e.to_string(), ..Default::default() },
+        },
+        UpdateSource::Github => check_github(&app).await,
     }
 }
 
@@ -218,8 +275,46 @@ pub fn script(pid: u32, setup: &str, exe: &str, want: &str) -> String {
 }
 
 /// Instala la versión nueva: lanza el script aparte y cierra Prometeo.
+async fn apply_github(app: tauri::AppHandle) -> Result<(), String> {
+    let update = app
+        .updater_builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("No hay ninguna versión nueva publicada.")?;
+    let _ = app.emit("update://progress", UpdateProgress { downloaded: 0, total: None, stage: "downloading" });
+    let progress_app = app.clone();
+    let finish_app = app.clone();
+    let mut downloaded = 0u64;
+    update
+        .download_and_install(
+            move |chunk, total| {
+                downloaded = downloaded.saturating_add(chunk as u64);
+                let _ = progress_app.emit("update://progress", UpdateProgress { downloaded, total, stage: "downloading" });
+            },
+            move || {
+                let _ = finish_app.emit("update://progress", UpdateProgress { downloaded: 0, total: None, stage: "installing" });
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    // En Windows el instalador cierra y reabre la app; en otros sistemas se hace aquí.
+    #[cfg(not(windows))]
+    app.restart();
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn update_apply(app: tauri::AppHandle) -> Result<(), String> {
+    if crate::hub::IS_DEV {
+        return Err("Prometeo Dev se recompila; no instala actualizaciones.".into());
+    }
+    if update_source(&source_dir()) == UpdateSource::Github {
+        return apply_github(app).await;
+    }
     use std::os::windows::process::CommandExt;
     let cur = std::env::current_exe().map_err(|e| e.to_string())?;
     let info = check_in(&source_dir(), &cur);
@@ -251,6 +346,17 @@ pub async fn update_apply(app: tauri::AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elige_local_solo_si_existe_la_carpeta_del_codigo() {
+        let source = std::env::temp_dir().join(format!("lienzo-update-source-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&source);
+        assert_eq!(update_source(&source), UpdateSource::Github);
+        std::fs::create_dir_all(&source).unwrap();
+        assert_eq!(update_source(&source), UpdateSource::Local);
+        std::fs::remove_dir_all(&source).unwrap();
+        assert_eq!(update_source(&source), UpdateSource::Github);
+    }
 
     #[test]
     fn detecta_un_instalador_nuevo_y_distinto() {

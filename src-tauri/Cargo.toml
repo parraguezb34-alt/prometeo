@@ -1,6 +1,6 @@
 [package]
 name = "lienzo"
-version = "1.0.158"
+version = "1.0.160"
 description = "Prometeo: centro de mando para dirigir un equipo de agentes de IA"
 authors = ["Prometeo"]
 edition = "2024"
@@ -46,6 +46,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 web-push-native = { version = "0.5", default-features = false, features = ["serialization", "vapid"] }
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+tauri-plugin-updater = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
