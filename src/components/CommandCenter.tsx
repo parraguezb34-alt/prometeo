@@ -14,10 +14,8 @@ import {
   compactOpencode,
   errMsg,
   onTeamUpdate,
-  buildBroadcastPrompt,
   pushBroadcast,
   pushPlan,
-  teamBroadcastAck,
   shortPath,
   teamAddTask,
   teamAgentSession,
@@ -67,7 +65,7 @@ import type { Attachment } from "../lib/attach";
 import type { ProjectInfo } from "../lib/project";
 import { chatLineage, currentTeamChat, inChat, prepareChat, useChats } from "../lib/chats";
 import { LATEST, resetCommand, withResume } from "../lib/resume";
-import { termLastBusyMs, termLastOutputMs, useTermActivity, waitQuiet } from "../lib/activity";
+import { termLastBusyMs, useTermActivity } from "../lib/activity";
 import { AUTO_NUDGES, STALL_CHECK_MS, detectStall, escalatePrompt, nudgePrompt, stallAction, stallPrompt, stallText } from "../lib/stall";
 import type { Stall } from "../lib/stall";
 import { askPhrase, eventImages, isDispatch, isImagePath, isNotice, parseTask, samePath } from "../lib/timeline";
@@ -86,7 +84,7 @@ import { WindowControls } from "./WindowControls";
 import { SlidingPill } from "./SlidingPill";
 import { BrandIcon, BrandWordmark } from "./Brand";
 import { LimitsChip } from "./LimitsChip";
-import { burnAlerts, fmtReset, level as limitLevel, opencodeGoUsage, parseUsagePanel, quotaAlerts, teamLimitsSet, teamSleepDecision, windowLabel } from "../lib/limits";
+import { burnAlerts, fmtReset, level as limitLevel, opencodeGoUsage, parseUsagePanel, quotaAlerts, teamLimitsSet, windowLabel } from "../lib/limits";
 import type { BurnSample } from "../lib/limits";
 import { InAppAvisos, Toast } from "./Avisos";
 import { listen } from "../lib/bridge";
@@ -99,7 +97,7 @@ import { NewChatMenu } from "./NewChatMenu";
 import type { NewChatChoice } from "./NewChatMenu";
 import { TasksDrawer } from "./TasksDrawer";
 import { TeamModal, TeamStrip, agentState } from "./TeamModal";
-import type { AgentState, SleepInfo } from "./TeamModal";
+import type { AgentState } from "./TeamModal";
 import type { SettingsSection } from "./SettingsModal";
 import { TerminalPanel } from "./TerminalPanel";
 import {
@@ -228,16 +226,6 @@ export function CommandCenter() {
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const [opening, setOpening] = useState<string | null>(null);
-  const [sleeping, setSleeping] = useState<Record<string, SleepInfo>>({});
-  const [wakeQueue, setWakeQueue] = useState<Record<string, { id: string; text: string }[]>>({});
-  const idleSinceRef = useRef(new Map<string, number>());
-  const sleepCheckRef = useRef(new Set<string>());
-  const wakeHandledRef = useRef(new Set<string>());
-  const wakeLaunchRef = useRef(new Set<string>());
-  const wakeDeliveryRef = useRef(new Set<string>());
-  const wakeInboxRef = useRef(new Set<string>());
-  const sleepProjectRef = useRef("");
-  const wakeQueueProjectRef = useRef("");
   const [prefs, setPrefs] = useState<Record<string, AgentPref>>(loadPrefs);
   const [catalogs, setCatalogs] = useState<Record<string, ModelCatalog | null | undefined>>({});
   const [autoStart, setAutoStart] = useState(loadAutoStart);
@@ -813,32 +801,11 @@ export function CommandCenter() {
   const launchAgent = async (
     id: string,
     label: string,
-    opts: { selectTerm?: boolean; force?: boolean; wake?: boolean; remoteRequestId?: string } = { selectTerm: true },
+    opts: { selectTerm?: boolean; force?: boolean; remoteRequestId?: string } = { selectTerm: true },
   ): Promise<boolean> => {
-    const sleepInfo = sleeping[id.toLowerCase()];
     const existingPanel = panelForAgent(getLayout().panels, id);
-    if (sleepInfo && !opts.wake) {
-      if (!existingPanel) {
-        say(sleepInfo.reason === "quota" && sleepInfo.until
-          ? `💤 ${label} sigue dormido hasta ${new Date(sleepInfo.until).toLocaleString()}.`
-          : `💤 ${label} sigue dormido por inactividad.`);
-        return false;
-      }
-      setSleeping((old) => {
-        const next = { ...old };
-        delete next[id.toLowerCase()];
-        return next;
-      });
-    }
-    const markAwake = () => setSleeping((old) => {
-      if (!(id.toLowerCase() in old)) return old;
-      const next = { ...old };
-      delete next[id.toLowerCase()];
-      return next;
-    });
     // Una terminal por agente: si ya tiene una, se muestra en lugar de abrir otra.
     if (!opts.force && existingPanel) {
-      markAwake();
       if (opts.selectTerm) showTerminal(id);
       const text = `${label} ya tiene una terminal abierta.`;
       say(text);
@@ -848,7 +815,6 @@ export function CommandCenter() {
     if (!isPrimary()) {
       try {
         await requestPrimaryAction({ kind: "open-agent", agent: id });
-        markAwake();
         return true;
       } catch (e) {
         say(errMsg(e), true);
@@ -866,14 +832,12 @@ export function CommandCenter() {
       const r = await teamOpen(id, shoot, { model: p.model, effort: p.effort });
       markApplied(id, p);
       if (r.kind === "app") {
-        markAwake();
         const text = `✓ ${label} se está abriendo en su app de escritorio…`;
         say(text);
         emitRemoteActionResult(opts.remoteRequestId, true, text);
       } else {
         // Si ya trabajó en este chat, retoma esa conversación; si no, empieza una nueva.
         addAgentTerminal(label, withResume(r.cmd, sessionRef(id)));
-        markAwake();
         if (opts.selectTerm) {
           showTerminal(agentKeyFromCmd(r.cmd));
           setOverlay(null);
@@ -893,233 +857,6 @@ export function CommandCenter() {
       setOpening(null);
     }
   };
-
-  const wakeAgent = async (name: string) => {
-    const key = name.toLowerCase();
-    if (panelForAgent(getLayout().panels, name)) {
-      setSleeping((old) => { const next = { ...old }; delete next[key]; return next; });
-      return true;
-    }
-    if (wakeLaunchRef.current.has(key)) return true;
-    wakeLaunchRef.current.add(key);
-    try {
-      return await launchAgent(name, agentLabel(name), { selectTerm: false, force: true, wake: true });
-    } finally {
-      wakeLaunchRef.current.delete(key);
-    }
-  };
-
-  const enqueueWakePrompt = (name: string, id: string, text: string) => {
-    const key = name.toLowerCase();
-    setWakeQueue((old) => {
-      const queue = old[key] ?? [];
-      return queue.some((item) => item.id === id) ? old : { ...old, [key]: [...queue, { id, text }] };
-    });
-  };
-
-  // Cierra terminales libres tras diez minutos si la cuota está agotada, o tras el ajuste de
-  // inactividad. Rust comprueba también tareas disponibles/reclamadas y preguntas pendientes.
-  useEffect(() => {
-    if (!PRIMARY) return;
-    const check = async () => {
-      const now = Date.now();
-      for (const p of getLayout().panels) {
-        if (p.kind !== "terminal" || !p.cmd || !p.sessionId) continue;
-        const name = agentKeyFromCmd(p.cmd);
-        const key = name.toLowerCase();
-        if (sleepCheckRef.current.has(key) || claimedBy.has(name) || activity.get(p.sessionId)?.busy) continue;
-        const lastOutput = termLastOutputMs(p.sessionId);
-        const idleSince = lastOutput || idleSinceRef.current.get(p.sessionId) || now;
-        idleSinceRef.current.set(p.sessionId, idleSince);
-        if (now - idleSince < 10 * 60_000) continue;
-        sleepCheckRef.current.add(key);
-        try {
-          const decision = await teamSleepDecision(name, idleSince, getSettings().dispatch.inactivitySleepMin);
-          const current = panelForAgent(getLayout().panels, name);
-          if (!decision || claimedBy.has(name) || current?.sessionId !== p.sessionId) continue;
-          await termKill(p.sessionId).catch(() => {});
-          removePanel(p.id);
-          idleSinceRef.current.delete(p.sessionId);
-          const info: SleepInfo = { reason: decision.reason, until: decision.resetAt, since: now, sinceSeq: state?.seq ?? 0 };
-          setSleeping((old) => ({ ...old, [key]: info }));
-          say(decision.reason === "quota"
-            ? `💤 ${agentLabel(name)} dormido: sin cuota hasta ${new Date(decision.resetAt!).toLocaleString()}.`
-            : `💤 ${agentLabel(name)} dormido por inactividad.`);
-          refresh();
-        } catch {
-          // Un estado de cuota incompleto no debe afectar la terminal.
-        } finally {
-          sleepCheckRef.current.delete(key);
-        }
-      }
-    };
-    const timer = window.setInterval(() => void check(), 30_000);
-    void check();
-    return () => window.clearInterval(timer);
-  }, [activity, claimedBy, say, refresh, state?.seq]);
-
-  // La terminal se vuelve a abrir al reinicio de cuota o cuando el usuario la despierta.
-  useEffect(() => {
-    if (!project || sleepProjectRef.current !== projectKey(project)) return;
-    const due = Object.entries(sleeping).filter(([, info]) => info.reason === "quota" && info.until !== null && info.until <= Date.now());
-    const wake = (names: string[]) => {
-      setSleeping((old) => {
-        const next = { ...old };
-        for (const name of names) delete next[name];
-        return next;
-      });
-      for (const name of names) {
-        void wakeAgent(name);
-      }
-    };
-    if (due.length > 0) {
-      wake(due.map(([name]) => name));
-      return;
-    }
-    const resets = Object.values(sleeping).filter((info) => info.reason === "quota" && info.until !== null).map((info) => info.until!);
-    const next = Math.min(...resets);
-    if (Number.isFinite(next)) {
-      const timer = window.setTimeout(() => wake(Object.entries(sleeping)
-        .filter(([, info]) => info.reason === "quota" && info.until !== null && info.until <= Date.now()).map(([name]) => name)), Math.max(1, next - Date.now()));
-      return () => window.clearTimeout(timer);
-    }
-  }, [sleeping, project]);
-
-  // Mantiene el estado de sueño al reiniciar Prometeo, separado por carpeta de proyecto.
-  useEffect(() => {
-    if (!project) return;
-    const projectId = projectKey(project);
-    const storageKey = "lienzo.sleeping-agents.v1";
-    if (sleepProjectRef.current !== projectId) {
-      sleepProjectRef.current = projectId;
-      try {
-        const all = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<string, Record<string, SleepInfo | number>>;
-        const saved = all[projectId] ?? {};
-        setSleeping(Object.fromEntries(Object.entries(saved).map(([name, value]) => [name, typeof value === "number"
-          ? { reason: "quota" as const, until: value, since: Date.now(), sinceSeq: state?.seq ?? 0 }
-          : { ...value, sinceSeq: value.sinceSeq ?? state?.seq ?? 0 }])));
-      } catch {
-        setSleeping({});
-      }
-      return;
-    }
-    try {
-      const all = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<string, Record<string, SleepInfo>>;
-      all[projectId] = sleeping;
-      localStorage.setItem(storageKey, JSON.stringify(all));
-    } catch {
-      // Si el almacenamiento no está disponible, el sueño solo dura mientras viva esta ventana.
-    }
-  }, [project, sleeping]);
-
-  useEffect(() => {
-    if (!project) return;
-    const projectId = projectKey(project);
-    const storageKey = "lienzo.wake-queue.v1";
-    if (wakeQueueProjectRef.current !== projectId) {
-      wakeQueueProjectRef.current = projectId;
-      wakeHandledRef.current.clear();
-      wakeLaunchRef.current.clear();
-      wakeDeliveryRef.current.clear();
-      wakeInboxRef.current.clear();
-      try {
-        const all = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<string, typeof wakeQueue>;
-        setWakeQueue(all[projectId] ?? {});
-      } catch {
-        setWakeQueue({});
-      }
-      return;
-    }
-    try {
-      const all = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<string, typeof wakeQueue>;
-      all[projectId] = wakeQueue;
-      localStorage.setItem(storageKey, JSON.stringify(all));
-    } catch {
-      // La cola vive mientras esté abierta la ventana si localStorage no está disponible.
-    }
-  }, [project, wakeQueue]);
-
-  // Un encargo asignado y disponible o un mensaje directo despierta al destinatario.
-  // Los mensajes de otros agentes ya están en el inbox del hub; los del usuario se encolan aquí.
-  useEffect(() => {
-    if (!PRIMARY || !project) return;
-    const wakeFor = async (name: string, trigger: string) => {
-      const key = name.toLowerCase() + "|" + trigger;
-      if (wakeHandledRef.current.has(key)) return;
-      wakeHandledRef.current.add(key);
-      const ok = await wakeAgent(name);
-      if (!ok) wakeHandledRef.current.delete(key);
-    };
-    for (const [name, info] of Object.entries(sleeping)) {
-      const available = tasks.find((t) =>
-        t.assign?.toLowerCase() === name.toLowerCase()
-        && (t.status === "open" || (t.status === "claimed" && t.owner.toLowerCase() === name.toLowerCase()))
-        && (t.parents ?? []).every((parent) => !tasks.some((p) => p.id === parent && p.status !== "done")),
-      );
-      if (available) void wakeFor(name, "task:" + available.id);
-      const messages = (state?.events ?? []).filter((e) =>
-        e.kind === "message"
-        && e.seq > info.sinceSeq
-        && (e.to?.trim().toLowerCase() === name.toLowerCase()
-          || (["leader", "lider", "líder"].includes(e.to?.trim().toLowerCase() ?? "")
-            && state?.leader?.toLowerCase() === name.toLowerCase()))
-        && e.agent.toLowerCase() !== name.toLowerCase(),
-      );
-      for (const e of messages) {
-        const trigger = "message:" + e.seq;
-        if (wakeHandledRef.current.has(name.toLowerCase() + "|" + trigger)) continue;
-        if (e.agent.toLowerCase() === "tú") {
-          enqueueWakePrompt(name, trigger, e.text);
-        } else {
-          wakeInboxRef.current.add(name.toLowerCase());
-        }
-        void wakeFor(name, trigger);
-      }
-      // Un mensaje del usuario a todo el equipo también despierta a los dormidos, y se les
-      // entrega con el mismo protocolo de equipo que reciben las terminales abiertas.
-      const broadcasts = (state?.events ?? []).filter((e) =>
-        e.kind === "broadcast" && e.seq > info.sinceSeq && e.agent.toLowerCase() === "tú");
-      for (const e of broadcasts) {
-        const trigger = "broadcast:" + e.seq;
-        if (wakeHandledRef.current.has(name.toLowerCase() + "|" + trigger)) continue;
-        enqueueWakePrompt(name, trigger, buildBroadcastPrompt(e.text, state?.leader ?? ""));
-        void wakeFor(name, trigger);
-      }
-    }
-  }, [sleeping, state?.events, tasks, project]);
-
-  // Cuando la PTY termina de iniciar, entrega en orden los mensajes que llegaron dormido.
-  useEffect(() => {
-    if (!PRIMARY) return;
-    for (const [name, queue] of Object.entries(wakeQueue)) {
-      const panel = panelForAgent(getLayout().panels, name);
-      if (!panel?.sessionId) continue;
-      for (const item of queue) {
-        const key = panel.sessionId + "|" + item.id;
-        if (wakeDeliveryRef.current.has(key)) continue;
-        wakeDeliveryRef.current.add(key);
-        void (async () => {
-          try {
-            await waitQuiet(panel.sessionId!, { quiet: 600, min: 1200, max: 12_000, fallback: 5_000 });
-            await termWrite(panel.sessionId!, item.text + "\r");
-            // Ya lo recibió en su terminal: que el hook no le repita el mismo aviso.
-            if (item.id.startsWith("broadcast:")) await teamBroadcastAck([name]).catch(() => {});
-            setWakeQueue((old) => {
-              const remaining = (old[name] ?? []).filter((x) => x.id !== item.id);
-              if (remaining.length) return { ...old, [name]: remaining };
-              const next = { ...old };
-              delete next[name];
-              return next;
-            });
-          } catch {
-            window.setTimeout(() => setWakeQueue((old) => ({ ...old })), 3000);
-          } finally {
-            wakeDeliveryRef.current.delete(key);
-          }
-        })();
-      }
-    }
-  }, [wakeQueue, layout.panels]);
 
   /** Guarda el modelo o esfuerzo elegido para un agente (se usa al abrirlo o reiniciarlo). */
   const setPref = (name: string, patch: AgentPref) => {
@@ -1715,16 +1452,13 @@ export function CommandCenter() {
         else if (state?.plan_hold && name === leader) await teamPlan("free");
         const p = panelForAgent(layout.panels, name);
         if (p?.sessionId) await termWrite(p.sessionId, `${prompt}\r`);
-        const asleep = !!sleeping[name.toLowerCase()];
-        await teamDm(name, asleep ? prompt : shoot === "plan" ? `📋 (modo plan) ${body}` : body);
+        await teamDm(name, shoot === "plan" ? `📋 (modo plan) ${body}` : body);
         clear();
         refresh();
         say(
           p?.sessionId
             ? `✉ Enviado a ${name}${shoot === "plan" ? " (modo plan: propone sin editar)" : ""}.`
-            : asleep
-              ? `✉ Mensaje guardado; despierto a ${name} y se lo entregaré al iniciar su terminal.`
-              : `✉ Guardado en el feed; abre su terminal para que ${name} lo reciba.`,
+            : `✉ Guardado en el feed; abre su terminal para que ${name} lo reciba.`,
         );
       } catch (e) {
         say(errMsg(e), true);
@@ -2191,14 +1925,14 @@ export function CommandCenter() {
     const m = new Map<string, AgentState>();
     for (const a of roster) {
       const hasTerminal = !!panelForAgent(layout.panels, a.name)?.sessionId;
-      let s = sleeping[a.name.toLowerCase()] ? "sleep" : agentState(a, blockedNames.includes(a.name), claimedBy.has(a.name), hasTerminal);
+      let s = agentState(a, blockedNames.includes(a.name), claimedBy.has(a.name), hasTerminal);
       if ((s === "idle" || s === "work") && authIssues.includes(a.name)) s = "login";
       if (s === "starting") startedAtRef.current[a.name] ??= Date.now();
       else delete startedAtRef.current[a.name];
       m.set(a.name, s);
     }
     return m;
-  }, [roster, blockedNames, claimedBy, layout.panels, authIssues, sleeping]);
+  }, [roster, blockedNames, claimedBy, layout.panels, authIssues]);
 
   // El despacho automático solo reparte las tareas del chat del equipo que está abierto: las
   // abiertas de otros chats se le pasan como «fuera», para que sigan contando como padres
@@ -2672,18 +2406,14 @@ export function CommandCenter() {
     if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
     const id = window.setInterval(() => {
       const cur = latestRef.current;
-      if (!cur || (!getSettings().team.relayInbox && wakeInboxRef.current.size === 0)) return;
+      if (!cur || !getSettings().team.relayInbox) return;
       const now = Date.now();
-      for (const agent of wakeInboxRef.current) {
-        if (!cur.inbox[agent]?.direct) wakeInboxRef.current.delete(agent);
-      }
       // Lo que ya leyó por su cuenta deja de contar como espera.
       for (const a of Object.keys(waitSince.current)) {
         const i = cur.inbox[a];
         if (!i?.direct || (relayed.current[a] ?? 0) >= i.last_seq) delete waitSince.current[a];
       }
       for (const [agent, info] of Object.entries(cur.inbox)) {
-        if (!getSettings().team.relayInbox && !wakeInboxRef.current.has(agent.toLowerCase())) continue;
         // Los mensajes a todo el equipo no despiertan a nadie: cada aviso le cuesta un turno entero.
         if (!info.direct) continue;
         if ((relayed.current[agent] ?? 0) >= info.last_seq) continue;
@@ -2706,7 +2436,6 @@ export function CommandCenter() {
         delete waitSince.current[agent];
         relayed.current[agent] = info.last_seq;
         relayAt.current[agent] = now;
-        wakeInboxRef.current.delete(agent.toLowerCase());
         const from = info.from.map(agentLabel).join(", ");
         const n = info.unread === 1 ? "1 mensaje" : `${info.unread} mensajes`;
         // Claude Code recibe el contenido con este mismo aviso (su hook lo adjunta): pedirle que
@@ -3690,12 +3419,7 @@ export function CommandCenter() {
             void applyAgent(name);
           }}
           onStart={(name) => {
-            setSleeping((old) => {
-              const next = { ...old };
-              delete next[name.toLowerCase()];
-              return next;
-            });
-            void launchAgent(name, agentLabel(name), { selectTerm: true, wake: true });
+            void launchAgent(name, agentLabel(name), { selectTerm: true });
           }}
           onRestart={(name) => {
             void restartAgent(name);
@@ -3712,7 +3436,6 @@ export function CommandCenter() {
           inbox={state?.inbox}
           onUsage={() => openSettings("usage")}
           limits={state?.limits}
-          sleeping={sleeping}
           onReadUsage={(n) => void readUsage(n)}
           stalls={stalls}
           onAskStalled={(n) => void askStalled(n)}

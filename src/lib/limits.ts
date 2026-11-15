@@ -14,11 +14,6 @@ export const opencodeGoUsage = () => invoke<GoUsage>("opencode_go_usage");
 export const teamLimitsSet = (agent: string, windows: LimitWindow[], exact: boolean, note = "") =>
   invoke<void>("team_limits_set", { agent, windows, exact, note });
 
-export type SleepDecision = { reason: "quota" | "inactive"; resetAt: number | null };
-
-export const teamSleepDecision = (agent: string, idleSinceMs: number, inactivityMinutes: number) =>
-  invoke<SleepDecision | null>("team_sleep_decision", { agent, idleSinceMs, inactivityMinutes });
-
 /** ok < 70 % · warn < 90 % · crit. */
 export function level(pct: number): "ok" | "warn" | "crit" {
   return pct >= 90 ? "crit" : pct >= 70 ? "warn" : "ok";

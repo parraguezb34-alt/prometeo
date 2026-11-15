@@ -16,8 +16,7 @@ import { useModalFocus } from "./useModalFocus";
 import { isRemote } from "../lib/bridge";
 
 /** work = con tarea · idle = libre · blocked = espera tu respuesta · login = su terminal pide iniciar sesión · starting = terminal abierta, aún sin conectar · off = sin sesión */
-export type AgentState = "work" | "idle" | "blocked" | "login" | "starting" | "off" | "sleep";
-export type SleepInfo = { reason: "quota" | "inactive"; until: number | null; since: number; sinceSeq: number };
+export type AgentState = "work" | "idle" | "blocked" | "login" | "starting" | "off";
 
 export function agentState(
   agent: TeamAgent,
@@ -37,7 +36,6 @@ export const STATE_LABEL: Record<AgentState, string> = {
   login: "Falta iniciar sesión",
   starting: "Conectando…",
   off: "Sin sesión",
-  sleep: "💤 Dormido por falta de cuota",
 };
 
 export const EFFORT_LABEL: Record<string, string> = {
@@ -177,7 +175,6 @@ export function TeamModal({
   inbox,
   onUsage,
   limits,
-  sleeping,
   onReadUsage,
   stalls,
   onAskStalled,
@@ -218,7 +215,6 @@ export function TeamModal({
   onUsage: () => void;
   /** Límites de uso de cada agente (sesión de 5 h, semana…). */
   limits?: Record<string, AgentLimits>;
-  sleeping?: Record<string, SleepInfo>;
   /** Lee el límite de un agente que solo lo dice con /usage (Antigravity). */
   onReadUsage: (name: string) => void;
   /** Agentes con una tarea tomada que no dan señales. */
@@ -278,7 +274,6 @@ export function TeamModal({
               const hasPref = !!pref.model || !!pref.effort;
               const showApply = a.online && dirty && (was !== undefined || hasPref);
               const spent = usageOf(usage, name);
-              const sleepInfo = sleeping?.[name.toLowerCase()];
               const spentPct = spent ? cachePct(spent) : null;
               const mail = inbox?.[name];
               const stall = stalls?.[name];
@@ -316,16 +311,10 @@ export function TeamModal({
                           ))}
                       </div>
                       <div className="cc-acard-state" data-state={state}>
-                        {sleepInfo?.reason === "quota" && sleepInfo.until
-                          ? `💤 dormido: sin cuota hasta ${new Date(sleepInfo.until).toLocaleString()}`
-                          : sleepInfo ? "💤 dormido (inactivo)" : state === "work" && task ? `Trabajando en #${task.id}` : STATE_LABEL[state]}
+                        {state === "work" && task ? `Trabajando en #${task.id}` : STATE_LABEL[state]}
                       </div>
                     </div>
-                    {sleepInfo ? (
-                      <button className="cc-btn cc-acard-start" disabled={busy === name} onClick={() => onStart(name)} title="Despertar agente">
-                        Despertar
-                      </button>
-                    ) : state === "off" && (
+                    {state === "off" && (
                       <button
                         className="cc-btn cc-acard-start"
                         disabled={busy === name}

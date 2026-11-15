@@ -101,7 +101,6 @@ pub fn run() {
             hub::team_dm,
             hub::team_answer,
             hub::team_limits_set,
-            hub::team_sleep_decision,
             limits::opencode_go_usage,
             hub::team_leader,
             hub::team_usage_reset,
