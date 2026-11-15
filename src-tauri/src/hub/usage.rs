@@ -16,7 +16,7 @@ pub struct SleepDecision {
     pub reset_at: Option<u64>,
 }
 
-/// Regla pura para dormir: no interrumpir tareas, preguntas ni tareas ya disponibles.
+/// Regla pura para dormir: no interrumpir tareas, preguntas, mensajes sin leer ni tareas disponibles.
 /// Una cuota agotada duerme a los 10 min y espera su reset; en otro caso se usa el ajuste
 /// de inactividad (0 lo desactiva).
 pub fn sleep_decision(
@@ -25,11 +25,12 @@ pub fn sleep_decision(
     has_claimed_task: bool,
     has_pending_question: bool,
     has_available_task: bool,
+    has_unread_message: bool,
     inactivity_minutes: u64,
     now_ms: u64,
 ) -> Option<SleepDecision> {
     let idle_ms = now_ms.saturating_sub(idle_since_ms);
-    if has_claimed_task || has_pending_question || has_available_task {
+    if has_claimed_task || has_pending_question || has_available_task || has_unread_message {
         return None;
     }
     if idle_ms >= NO_QUOTA_IDLE_MS {
@@ -78,12 +79,17 @@ pub fn team_sleep_decision(
             && t.assign.eq_ignore_ascii_case(name)
             && unmet_parents(&inner.tasks, t).is_empty()
     });
+    // Los broadcasts del usuario se marcan al entregarse al terminal o al hook;
+    // los mensajes directos siguen el cursor normal del buzón.
+    let has_unread_message =
+        !inbox_unread(&inner, name).is_empty() || !pending_broadcasts(&inner, "", name).is_empty();
     Ok(sleep_decision(
         inner.limits.get(&name.to_lowercase()),
         idle_since_ms,
         has_claimed,
         has_pending_question,
         has_available_task,
+        has_unread_message,
         inactivity_minutes,
         now_ms(),
     ))
@@ -101,45 +107,50 @@ mod sleep_tests {
     #[test]
     fn sleeps_for_idle_without_quota_at_fifteen_minutes() {
         assert_eq!(
-            sleep_decision(None, NOW - 15 * 60_000, false, false, false, 15, NOW),
+            sleep_decision(None, NOW - 15 * 60_000, false, false, false, false, 15, NOW),
             Some(SleepDecision { reason: "inactive".into(), reset_at: None })
         );
         assert_eq!(
-            sleep_decision(None, NOW - 14 * 60_000, false, false, false, 15, NOW),
+            sleep_decision(None, NOW - 14 * 60_000, false, false, false, false, 15, NOW),
             None
         );
-        assert_eq!(sleep_decision(None, 0, false, false, false, 0, NOW), None);
+        assert_eq!(sleep_decision(None, 0, false, false, false, false, 0, NOW), None);
     }
 
     #[test]
     fn claimed_task_question_or_available_task_prevents_sleep() {
-        assert_eq!(sleep_decision(None, IDLE, true, false, false, 15, NOW), None);
-        assert_eq!(sleep_decision(None, IDLE, false, true, false, 15, NOW), None);
-        assert_eq!(sleep_decision(None, IDLE, false, false, true, 15, NOW), None);
+        assert_eq!(sleep_decision(None, IDLE, true, false, false, false, 15, NOW), None);
+        assert_eq!(sleep_decision(None, IDLE, false, true, false, false, 15, NOW), None);
+        assert_eq!(sleep_decision(None, IDLE, false, false, true, false, 15, NOW), None);
+    }
+
+    #[test]
+    fn con_mensajes_sin_leer_no_duerme() {
+        assert_eq!(sleep_decision(None, IDLE, false, false, false, true, 15, NOW), None);
     }
 
     #[test]
     fn exhausted_quota_keeps_ten_minute_rule_and_waits_for_reset() {
         let limits = json!({"windows":[{"used_pct":100.0,"resets_at":RESET}]});
         assert_eq!(
-            sleep_decision(Some(&limits), IDLE, false, false, false, 15, NOW),
+            sleep_decision(Some(&limits), IDLE, false, false, false, false, 15, NOW),
             Some(SleepDecision { reason: "quota".into(), reset_at: Some(RESET) })
         );
         assert_eq!(
-            sleep_decision(Some(&limits), NOW - 9 * 60_000, false, false, false, 15, NOW),
+            sleep_decision(Some(&limits), NOW - 9 * 60_000, false, false, false, false, 15, NOW),
             None
         );
         assert_eq!(
             sleep_decision(
                 Some(&json!({"windows":[{"used_pct":99.9,"resets_at":RESET}]})),
-                NOW - 15 * 60_000, false, false, false, 15, NOW
+                NOW - 15 * 60_000, false, false, false, false, 15, NOW
             ),
             Some(SleepDecision { reason: "inactive".into(), reset_at: None })
         );
         assert_eq!(
             sleep_decision(
                 Some(&json!({"windows":[{"used_pct":100.0,"resets_at":NOW}]})),
-                NOW - 15 * 60_000, false, false, false, 15, NOW
+                NOW - 15 * 60_000, false, false, false, false, 15, NOW
             ),
             Some(SleepDecision { reason: "inactive".into(), reset_at: None })
         );

@@ -14,8 +14,10 @@ import {
   compactOpencode,
   errMsg,
   onTeamUpdate,
+  buildBroadcastPrompt,
   pushBroadcast,
   pushPlan,
+  teamBroadcastAck,
   shortPath,
   teamAddTask,
   teamAgentSession,
@@ -223,6 +225,8 @@ export function CommandCenter() {
   const [atts, setAtts] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const [opening, setOpening] = useState<string | null>(null);
   const [sleeping, setSleeping] = useState<Record<string, SleepInfo>>({});
   const [wakeQueue, setWakeQueue] = useState<Record<string, { id: string; text: string }[]>>({});
@@ -1071,6 +1075,16 @@ export function CommandCenter() {
         }
         void wakeFor(name, trigger);
       }
+      // Un mensaje del usuario a todo el equipo también despierta a los dormidos, y se les
+      // entrega con el mismo protocolo de equipo que reciben las terminales abiertas.
+      const broadcasts = (state?.events ?? []).filter((e) =>
+        e.kind === "broadcast" && e.seq > info.sinceSeq && e.agent.toLowerCase() === "tú");
+      for (const e of broadcasts) {
+        const trigger = "broadcast:" + e.seq;
+        if (wakeHandledRef.current.has(name.toLowerCase() + "|" + trigger)) continue;
+        enqueueWakePrompt(name, trigger, buildBroadcastPrompt(e.text, state?.leader ?? ""));
+        void wakeFor(name, trigger);
+      }
     }
   }, [sleeping, state?.events, tasks, project]);
 
@@ -1088,6 +1102,8 @@ export function CommandCenter() {
           try {
             await waitQuiet(panel.sessionId!, { quiet: 600, min: 1200, max: 12_000, fallback: 5_000 });
             await termWrite(panel.sessionId!, item.text + "\r");
+            // Ya lo recibió en su terminal: que el hook no le repita el mismo aviso.
+            if (item.id.startsWith("broadcast:")) await teamBroadcastAck([name]).catch(() => {});
             setWakeQueue((old) => {
               const remaining = (old[name] ?? []).filter((x) => x.id !== item.id);
               if (remaining.length) return { ...old, [name]: remaining };
@@ -1595,119 +1611,127 @@ export function CommandCenter() {
   /** Send the composer. Supports mentions (@todos, @lider, @agente) and the
    * Planificar / Ejecutar trigger. */
   const send = async () => {
-    // Los adjuntos viajan como rutas: el agente los abre con su herramienta de leer archivos.
-    if (attaching) return;
-    const att = attachmentLine(atts);
-    const raw = [draft.trim(), att].filter(Boolean).join("\n");
-    if (!raw) return;
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
+    try {
+      // Los adjuntos viajan como rutas: el agente los abre con su herramienta de leer archivos.
+      if (attaching) return;
+      const att = attachmentLine(atts);
+      const raw = [draft.trim(), att].filter(Boolean).join("\n");
+      if (!raw) return;
 
-    let target: Sel = dest;
-    let body = raw;
-    const m = /^@([\w\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1.-]+)\s+([\s\S]+)$/.exec(raw);
-    if (m) {
-      const key = m[1].toLowerCase();
-      if (["todos", "equipo", "all"].includes(key)) {
-        target = { kind: "team" };
-      } else if (["lider", "líder", "leader"].includes(key)) {
-        if (leader) target = { kind: "agent", name: leader };
-        else say("No hay líder elegido; lo mando al equipo entero.", true);
-      } else {
-        const found = agents.find((a) => a.name.toLowerCase() === key);
-        if (!found) {
-          say(`No conozco a «${m[1]}» — usa @todos, @lider o el nombre de un agente.`, true);
+      let target: Sel = dest;
+      let body = raw;
+      const m = /^@([\w\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1.-]+)\s+([\s\S]+)$/.exec(raw);
+      if (m) {
+        const key = m[1].toLowerCase();
+        if (["todos", "equipo", "all"].includes(key)) {
+          target = { kind: "team" };
+        } else if (["lider", "líder", "leader"].includes(key)) {
+          if (leader) target = { kind: "agent", name: leader };
+          else say("No hay líder elegido; lo mando al equipo entero.", true);
+        } else {
+          const found = agents.find((a) => a.name.toLowerCase() === key);
+          if (!found) {
+            say(`No conozco a «${m[1]}» — usa @todos, @lider o el nombre de un agente.`, true);
+            return;
+          }
+          target = { kind: "agent", name: found.name };
+        }
+        body = m[2];
+      }
+
+      // El título del chat sale de lo que escribiste, no de la cita.
+      const title = body.replace(/\s*\n+\s*/g, " ");
+      if (quote && quote.text.trim()) body = formatQuote(quote.text, body);
+      const flat = body.replace(/\s*\n+\s*/g, " ");
+
+      // Si estás viendo un chat cerrado, lo que escribas abre uno nuevo del mismo
+      // ámbito; el primer mensaje le da título.
+      let chat = chats.active;
+      if (chat && chat.endMs != null) {
+        chat = chats.create(chat.kind, chat.agent);
+        // Un chat del equipo nuevo: los agentes limpian su conversación antes de recibir el mensaje.
+        if (chat.kind === "team" && (await freshConversations()) > 0) {
+          await new Promise((r) => window.setTimeout(r, 1200));
+        }
+      }
+      if (chat) chats.autoTitle(chat.id, title);
+
+      const clear = () => {
+        setDraft("");
+        setAtts([]);
+        setQuote(null);
+      };
+
+      try {
+        if (target.kind === "team") {
+          if (shoot === "plan" && leader) {
+            // Modo plan con líder: solo el líder recibe la misión (y no toca nada). Lo que cree
+            // queda en espera hasta que apruebes el plan.
+            await teamPlan("hold");
+            const p = panelForAgent(layout.panels, leader);
+            if (p?.sessionId) {
+              await termWrite(p.sessionId, `${buildPlanPrompt(flat, leader)}\r`);
+            }
+            await teamDm(leader, `📋 (modo plan) ${body}`);
+            clear();
+            refresh();
+            say(
+              p?.sessionId
+                ? `📋 Plan pedido a ${leader} (líder). Propondrá el reparto sin editar nada.`
+                : `📋 Guardado para ${leader}; abre su terminal para que lo reciba.`,
+            );
+          } else if (shoot === "plan") {
+            await teamPlan("hold");
+            const typed = await pushPlan(flat, "");
+            clear();
+            refresh();
+            say(
+              typed > 0
+                ? `📋 Plan pedido a ${typed} terminal(es): nadie edita hasta tu OK.`
+                : "📋 Publicado en el feed (sin terminales de agentes abiertas).",
+            );
+          } else {
+            if (state?.plan_hold) await teamPlan("free");
+            const typed = await pushBroadcast(flat, leader);
+            clear();
+            refresh();
+            say(
+              typed > 0
+                ? `📣 Misión escrita en ${typed} terminal(es), con instrucciones de coordinación.`
+                : "📣 Publicada en el feed (sin terminales de agentes abiertas ahora).",
+            );
+          }
           return;
         }
-        target = { kind: "agent", name: found.name };
+
+        // Mensaje directo a un agente.
+        const name = target.name;
+        const prompt = shoot === "plan" ? buildPlanPrompt(flat, leader) : flat;
+        if (shoot === "plan") await teamPlan("hold");
+        // Hablarle a otro agente no cierra el plan del líder; hablarle al líder sin modo plan, sí.
+        else if (state?.plan_hold && name === leader) await teamPlan("free");
+        const p = panelForAgent(layout.panels, name);
+        if (p?.sessionId) await termWrite(p.sessionId, `${prompt}\r`);
+        const asleep = !!sleeping[name.toLowerCase()];
+        await teamDm(name, asleep ? prompt : shoot === "plan" ? `📋 (modo plan) ${body}` : body);
+        clear();
+        refresh();
+        say(
+          p?.sessionId
+            ? `✉ Enviado a ${name}${shoot === "plan" ? " (modo plan: propone sin editar)" : ""}.`
+            : asleep
+              ? `✉ Mensaje guardado; despierto a ${name} y se lo entregaré al iniciar su terminal.`
+              : `✉ Guardado en el feed; abre su terminal para que ${name} lo reciba.`,
+        );
+      } catch (e) {
+        say(errMsg(e), true);
       }
-      body = m[2];
-    }
-
-    // El título del chat sale de lo que escribiste, no de la cita.
-    const title = body.replace(/\s*\n+\s*/g, " ");
-    if (quote && quote.text.trim()) body = formatQuote(quote.text, body);
-    const flat = body.replace(/\s*\n+\s*/g, " ");
-
-    // Si estás viendo un chat cerrado, lo que escribas abre uno nuevo del mismo
-    // ámbito; el primer mensaje le da título.
-    let chat = chats.active;
-    if (chat && chat.endMs != null) {
-      chat = chats.create(chat.kind, chat.agent);
-      // Un chat del equipo nuevo: los agentes limpian su conversación antes de recibir el mensaje.
-      if (chat.kind === "team" && (await freshConversations()) > 0) {
-        await new Promise((r) => window.setTimeout(r, 1200));
-      }
-    }
-    if (chat) chats.autoTitle(chat.id, title);
-
-    const clear = () => {
-      setDraft("");
-      setAtts([]);
-      setQuote(null);
-    };
-
-    try {
-      if (target.kind === "team") {
-        if (shoot === "plan" && leader) {
-          // Modo plan con líder: solo el líder recibe la misión (y no toca nada). Lo que cree
-          // queda en espera hasta que apruebes el plan.
-          await teamPlan("hold");
-          const p = panelForAgent(layout.panels, leader);
-          if (p?.sessionId) {
-            await termWrite(p.sessionId, `${buildPlanPrompt(flat, leader)}\r`);
-          }
-          await teamDm(leader, `📋 (modo plan) ${body}`);
-          clear();
-          refresh();
-          say(
-            p?.sessionId
-              ? `📋 Plan pedido a ${leader} (líder). Propondrá el reparto sin editar nada.`
-              : `📋 Guardado para ${leader}; abre su terminal para que lo reciba.`,
-          );
-        } else if (shoot === "plan") {
-          await teamPlan("hold");
-          const typed = await pushPlan(flat, "");
-          clear();
-          refresh();
-          say(
-            typed > 0
-              ? `📋 Plan pedido a ${typed} terminal(es): nadie edita hasta tu OK.`
-              : "📋 Publicado en el feed (sin terminales de agentes abiertas).",
-          );
-        } else {
-          if (state?.plan_hold) await teamPlan("free");
-          const typed = await pushBroadcast(flat, leader);
-          clear();
-          refresh();
-          say(
-            typed > 0
-              ? `📣 Misión escrita en ${typed} terminal(es), con instrucciones de coordinación.`
-              : "📣 Publicada en el feed (sin terminales de agentes abiertas ahora).",
-          );
-        }
-        return;
-      }
-
-      // Mensaje directo a un agente.
-      const name = target.name;
-      const prompt = shoot === "plan" ? buildPlanPrompt(flat, leader) : flat;
-      if (shoot === "plan") await teamPlan("hold");
-      // Hablarle a otro agente no cierra el plan del líder; hablarle al líder sin modo plan, sí.
-      else if (state?.plan_hold && name === leader) await teamPlan("free");
-      const p = panelForAgent(layout.panels, name);
-      if (p?.sessionId) await termWrite(p.sessionId, `${prompt}\r`);
-      const asleep = !!sleeping[name.toLowerCase()];
-      await teamDm(name, asleep ? prompt : shoot === "plan" ? `📋 (modo plan) ${body}` : body);
-      clear();
-      refresh();
-      say(
-        p?.sessionId
-          ? `✉ Enviado a ${name}${shoot === "plan" ? " (modo plan: propone sin editar)" : ""}.`
-          : asleep
-            ? `✉ Mensaje guardado; despierto a ${name} y se lo entregaré al iniciar su terminal.`
-            : `✉ Guardado en el feed; abre su terminal para que ${name} lo reciba.`,
-      );
-    } catch (e) {
-      say(errMsg(e), true);
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
   };
 
@@ -3169,7 +3193,7 @@ export function CommandCenter() {
             </button>
           </div>
           <span className="cc-c-grow" />
-          <button className="cc-send" disabled={(!draft.trim() && atts.length === 0) || attaching > 0} onClick={send} aria-label="Enviar" title="Enviar">
+          <button className="cc-send" disabled={(!draft.trim() && atts.length === 0) || attaching > 0 || sending} onClick={send} aria-label="Enviar" title="Enviar">
             <Icon name="send" />
           </button>
         </div>
