@@ -11,8 +11,8 @@ use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 /// Maximum bytes kept per session for re-attach repaints.
@@ -66,8 +66,65 @@ impl Outbox {
     }
 }
 
+/// Lo que se escribe en una terminal va a un hilo propio: si el programa deja de leer y la
+/// tubería se llena, `write_all` se queda esperando y, sin esto, también el envío del chat (y la
+/// ventana entera, que llama desde su hilo).
+type WriteJob = (Vec<u8>, mpsc::Sender<Result<(), String>>);
+pub struct WriteQueue(Mutex<mpsc::Sender<WriteJob>>);
+
+/// Cuánto espera `term_write` a que la terminal acepte lo escrito.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Cuánto espera `term_kill` a `taskkill` y, después, a que el proceso termine.
+const KILL_TIMEOUT: Duration = Duration::from_secs(3);
+
+impl WriteQueue {
+    pub fn spawn(mut writer: Box<dyn Write + Send>) -> Self {
+        let (tx, rx) = mpsc::channel::<WriteJob>();
+        // Termina cuando se suelta la sesión (se cierra el canal).
+        std::thread::spawn(move || {
+            for (data, done) in rx {
+                let r = writer.write_all(&data).and_then(|_| writer.flush()).map_err(|e| e.to_string());
+                let _ = done.send(r);
+            }
+        });
+        WriteQueue(Mutex::new(tx))
+    }
+
+    /// Escribe en orden; si la terminal no lo acepta en `timeout`, devuelve error (lo escrito
+    /// sigue en la cola y entra cuando el programa vuelva a leer).
+    pub fn write(&self, data: &[u8], timeout: Duration) -> Result<(), String> {
+        let (done, wait) = mpsc::channel();
+        self.0
+            .lock()
+            .map_err(|e| e.to_string())?
+            .send((data.to_vec(), done))
+            .map_err(|_| "la terminal ya está cerrada".to_string())?;
+        match wait.recv_timeout(timeout) {
+            Ok(r) => r,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err("la terminal no acepta lo que escribes: el programa no está leyendo (¿colgado?)".into())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err("la terminal ya está cerrada".into()),
+        }
+    }
+}
+
+/// Espera a que `done()` diga que sí, como mucho `timeout`.
+fn wait_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
+    let end = Instant::now() + timeout;
+    loop {
+        if done() {
+            return true;
+        }
+        if Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 pub struct PtySession {
-    pub writer: Mutex<Box<dyn Write + Send>>,
+    pub writer: WriteQueue,
     pub master: Mutex<Box<dyn MasterPty + Send>>,
     pub child: Mutex<Box<dyn Child + Send + Sync>>,
     pub buffer: Arc<Mutex<VecDeque<u8>>>,
@@ -448,6 +505,67 @@ mod direct_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::{wait_until, WriteQueue};
+    use std::io::Write;
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// Un escritor que no acepta nada hasta que se le suelta (como un programa que no lee).
+    struct Stuck(mpsc::Receiver<()>, Arc<Mutex<Vec<u8>>>);
+    impl Write for Stuck {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let _ = self.0.recv();
+            self.1.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn term_write_no_espera_para_siempre_a_un_programa_que_no_lee() {
+        let (release, gate) = mpsc::channel();
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let q = WriteQueue::spawn(Box::new(Stuck(gate, got.clone())));
+        let t = Instant::now();
+        let r = q.write(b"hola", Duration::from_millis(150));
+        assert!(r.is_err(), "debe fallar por plazo");
+        assert!(t.elapsed() < Duration::from_secs(2));
+        // Cuando el programa vuelve a leer, lo escrito entra y en orden.
+        release.send(()).unwrap();
+        release.send(()).unwrap();
+        assert!(q.write(b" mundo", Duration::from_secs(2)).is_ok());
+        assert_eq!(&*got.lock().unwrap(), b"hola mundo");
+    }
+
+    #[test]
+    fn term_write_va_directo_si_la_terminal_lee() {
+        let got = Arc::new(Mutex::new(Vec::new()));
+        struct Ok_(Arc<Mutex<Vec<u8>>>);
+        impl Write for Ok_ {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let q = WriteQueue::spawn(Box::new(Ok_(got.clone())));
+        q.write(b"a", Duration::from_secs(1)).unwrap();
+        q.write(b"b", Duration::from_secs(1)).unwrap();
+        assert_eq!(&*got.lock().unwrap(), b"ab");
+    }
+
+    #[test]
+    fn wait_until_respeta_el_plazo() {
+        let t = Instant::now();
+        assert!(!wait_until(Duration::from_millis(120), || false));
+        assert!(t.elapsed() >= Duration::from_millis(120) && t.elapsed() < Duration::from_secs(2));
+        assert!(wait_until(Duration::from_secs(1), || true));
+    }
+
     use super::ps_command_line;
 
     #[test]
@@ -629,7 +747,7 @@ pub async fn term_spawn(
     let buffer: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::new()));
     let running = Arc::new(AtomicBool::new(true));
     let session = Arc::new(PtySession {
-        writer: Mutex::new(writer),
+        writer: WriteQueue::spawn(writer),
         master: Mutex::new(pair.master),
         child: Mutex::new(child),
         buffer: buffer.clone(),
@@ -711,16 +829,12 @@ pub async fn term_spawn(
     Ok(info)
 }
 
-/// Send keyboard input from the terminal view to the session.
+/// Send keyboard input from the terminal view to the session. Asíncrono: la espera (como mucho
+/// `WRITE_TIMEOUT`) no frena la ventana.
 #[tauri::command]
-pub fn term_write(state: State<'_, PtyManager>, id: String, data: String) -> Result<(), String> {
+pub async fn term_write(state: State<'_, PtyManager>, id: String, data: String) -> Result<(), String> {
     let session = session_for(&state.0, &id)?;
-    let mut writer = session.writer.lock().map_err(|e| e.to_string())?;
-    writer
-        .write_all(data.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let _ = writer.flush();
-    Ok(())
+    session.writer.write(data.as_bytes(), WRITE_TIMEOUT)
 }
 
 #[tauri::command]
@@ -756,15 +870,21 @@ pub async fn term_kill(state: State<'_, PtyManager>, id: String) -> Result<(), S
         #[cfg(windows)]
         if let Some(pid) = child.process_id() {
             use std::os::windows::process::CommandExt;
-            let _ = std::process::Command::new("taskkill")
+            if let Ok(mut tk) = std::process::Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/T", "/F"])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .creation_flags(0x0800_0000)
-                .status();
+                .spawn()
+                && !wait_until(KILL_TIMEOUT, || matches!(tk.try_wait(), Ok(Some(_))))
+            {
+                let _ = tk.kill();
+            }
         }
         let _ = child.kill();
-        let _ = child.wait();
+        if !wait_until(KILL_TIMEOUT, || matches!(child.try_wait(), Ok(Some(_)))) {
+            return Err("no pude cerrar la terminal: el proceso sigue vivo (ciérralo desde el Administrador de tareas)".into());
+        }
     }
     Ok(())
 }

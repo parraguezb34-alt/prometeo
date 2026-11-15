@@ -1664,7 +1664,7 @@ fn dispatch_rpc(
             a!(args, "rows", u16),
             a!(args, "command", Option<String>)
         )),
-        "term_write" => sync!(pty::term_write(
+        "term_write" => async_call!(pty::term_write(
             app.state::<pty::PtyManager>(),
             a!(args, "id", String),
             a!(args, "data", String)
