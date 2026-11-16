@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { stampLabel } from "../lib/chats";
 import { agentColor, agentInitial, agentLabel, shortPath, waitingFor } from "../lib/team";
@@ -113,6 +113,9 @@ export function TasksDrawer({
   const [draft, setDraft] = useState("");
   const [deps, setDeps] = useState<number[]>([]);
   const [depsOpen, setDepsOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const addingRef = useRef(false);
+  const [earlierVisible, setEarlierVisible] = useState(20);
 
   const list = scope === "chat" ? tasks : allTasks;
   const done = list.filter((t) => t.status === "done").length;
@@ -133,11 +136,20 @@ export function TasksDrawer({
 
   const add = async () => {
     const t = draft.trim();
-    if (!t) return;
-    await onAddTask(t, deps);
-    setDraft("");
-    setDeps([]);
-    setDepsOpen(false);
+    if (!t || addingRef.current) return;
+    addingRef.current = true;
+    setAdding(true);
+    try {
+      await onAddTask(t, deps);
+      setDraft("");
+      setDeps([]);
+      setDepsOpen(false);
+    } catch {
+      // El padre muestra el error; el título y las dependencias siguen para reintentar.
+    } finally {
+      addingRef.current = false;
+      setAdding(false);
+    }
   };
 
   const row = (t: TeamTask) => (
@@ -311,7 +323,12 @@ export function TasksDrawer({
                   status="earlier"
                   startOpen={false}
                 >
-                  {earlier.slice().sort((a, b) => b.id - a.id).map(row)}
+                  {earlier.slice().sort((a, b) => b.id - a.id).slice(0, earlierVisible).map(row)}
+                  {earlier.length > earlierVisible && (
+                    <button className="td-btn" onClick={() => setEarlierVisible((n) => n + 20)}>
+                      Ver más
+                    </button>
+                  )}
                 </Group>
               )}
             </>
@@ -338,7 +355,13 @@ export function TasksDrawer({
         </div>
 
         {tab === "tasks" && (
-          <div className="cc-tdrawer-addwrap">
+          <div className="cc-tdrawer-addwrap" onKeyDown={(e) => {
+            if (e.key === "Escape" && depsOpen) {
+              e.preventDefault();
+              e.stopPropagation();
+              setDepsOpen(false);
+            }
+          }}>
             {depsOpen && (
               <div className="cc-deps-pick">
                 <span className="cc-deps-l">Depende de</span>
@@ -353,6 +376,7 @@ export function TasksDrawer({
                       className="cc-deps-chip"
                       data-on={deps.includes(t.id) ? "1" : "0"}
                       title={t.title}
+                      disabled={adding}
                       onClick={() =>
                         setDeps((cur) => (cur.includes(t.id) ? cur.filter((x) => x !== t.id) : [...cur, t.id]))
                       }
@@ -366,6 +390,7 @@ export function TasksDrawer({
               <input
                 type="text"
                 value={draft}
+                disabled={adding}
                 placeholder={deps.length > 0 ? `Nueva tarea (tras ${deps.map((x) => `#${x}`).join(", ")})…` : "Nueva tarea…"}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -376,13 +401,14 @@ export function TasksDrawer({
                 className="cc-deps-btn"
                 data-on={deps.length > 0 ? "1" : "0"}
                 onClick={() => setDepsOpen((o) => !o)}
+                disabled={adding}
                 title="Que esta tarea espere a otras"
                 aria-label="Dependencias"
               >
                 <Icon name="lock" size={14} />
                 {deps.length > 0 ? deps.length : null}
               </button>
-              <button className="cc-send-mini" onClick={() => void add()} disabled={!draft.trim()} aria-label="Crear tarea">
+              <button className="cc-send-mini" onClick={() => void add()} disabled={!draft.trim() || adding} aria-label="Crear tarea">
                 <Icon name="plus" size={15} />
               </button>
             </div>
@@ -602,6 +628,7 @@ function TaskRow({
                   setNoteBusy(true);
                   void onComment(t.id, text)
                     .then(() => setNote(""))
+                    .catch(() => { /* el padre muestra el error; la nota se conserva */ })
                     .finally(() => setNoteBusy(false));
                 }}
               />

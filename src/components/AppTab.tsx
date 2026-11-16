@@ -62,14 +62,19 @@ export function AppTab({
   const [statusError, setStatusError] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [reload, setReload] = useState(0);
   const logRef = useRef<HTMLPreElement>(null);
+  const detectSeq = useRef(0);
+  const visibleProject = useRef(project);
+  visibleProject.current = project;
 
   useEffect(() => {
     if (openRel) setMode("file");
   }, [openRel]);
 
   const detect = useCallback(() => {
+    const seq = ++detectSeq.current;
     if (!project) {
       setDet(null);
       setDetectError(null);
@@ -77,23 +82,27 @@ export function AppTab({
       return;
     }
     setDetecting(true);
+    setDet(null);
     setDetectError(null);
     appDetect(project)
       .then((d) => {
+        if (seq !== detectSeq.current || visibleProject.current !== project) return;
         setDet(d);
         setDetectError(null);
       })
       .catch((e) => {
+        if (seq !== detectSeq.current || visibleProject.current !== project) return;
         setDetectError(errMsg(e) || "Error al detectar configuración de arranque");
         setDet(null);
       })
       .finally(() => {
-        setDetecting(false);
+        if (seq === detectSeq.current && visibleProject.current === project) setDetecting(false);
       });
   }, [project]);
 
   useEffect(() => {
     detect();
+    return () => { detectSeq.current += 1; };
   }, [detect]);
 
   // Sin nada que arrancar, lo útil son los archivos.
@@ -156,10 +165,14 @@ export function AppTab({
 
   const stop = async () => {
     setBusy(true);
+    setStopping(true);
     try {
       await appStop();
       poll();
+    } catch (e) {
+      onSay(errMsg(e), true);
     } finally {
+      setStopping(false);
       setBusy(false);
     }
   };
@@ -356,7 +369,7 @@ export function AppTab({
             onClick={() => setMode("file")}
             title="Ver archivos: web, Markdown, PDF, Word, Excel, PowerPoint, imágenes, vídeo…"
           >
-            {openRel ? openRel.split("/").pop() : "Archivos"}
+            {openRel ? openRel.split(/[\\/]/).pop() : "Archivos"}
           </button>
         </div>
         {mode === "app" && (
@@ -441,7 +454,7 @@ export function AppTab({
             {running && (
               <button className="hs-btn" onClick={() => void stop()} disabled={busy}>
                 <Icon name="stop" size={12} />
-                Parar
+                {stopping ? "Parando…" : "Parar"}
               </button>
             )}
           </>

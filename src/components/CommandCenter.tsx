@@ -238,6 +238,11 @@ export function CommandCenter() {
     saveApplied(appliedRef.current);
   };
   const autoRan = useRef<string | null>(null);
+  const autoRunning = useRef<string | null>(null);
+  const autoRetryTimer = useRef<{ project: string; id: number } | null>(null);
+  const autoRetryRound = useRef(0);
+  const autoMounted = useRef(true);
+  const [autoRetryTick, setAutoRetryTick] = useState(0);
   /** Desde cuándo se ve la terminal de un agente sin que se haya conectado al equipo. */
   const startedAtRef = useRef<Record<string, number>>({});
   /** Lo último que muestra la terminal de un agente que aún no se conecta (qué está pidiendo). */
@@ -422,6 +427,8 @@ export function CommandCenter() {
   }, [openAviso]);
 
   const project = state?.project ?? null;
+  const autoContext = useRef({ project, autoStart });
+  autoContext.current = { project, autoStart };
   const chats = useChats(project);
   // La carpeta en uso entra en «Recientes» de Ajustes.
   useEffect(() => {
@@ -1056,39 +1063,80 @@ export function CommandCenter() {
   // Al abrir la app (y al elegir un proyecto): conecta los agentes instalados y
   // abre los que no estén en marcha, para que aparezcan en «Equipo activo».
   useEffect(() => {
+    autoMounted.current = true;
+    return () => {
+      autoMounted.current = false;
+      if (autoRetryTimer.current) window.clearTimeout(autoRetryTimer.current.id);
+      autoRetryTimer.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    if (autoRetryTimer.current && (!autoStart || autoRetryTimer.current.project !== project)) {
+      window.clearTimeout(autoRetryTimer.current.id);
+      autoRetryTimer.current = null;
+      autoRetryRound.current = 0;
+    }
     if (!PRIMARY) return; // el iPad solo mira: esto lo hace la ventana del PC
-    if (!autoStart || !state || !detect || !project || autoRan.current === project) return;
-    autoRan.current = project;
+    if (!autoStart || !state || !detect || !project || autoRan.current === project
+      || autoRunning.current === project || autoRetryTimer.current) return;
+    autoRunning.current = project;
     void (async () => {
       const skip = getSettings().skipAgents;
       const installed = detect.agents.filter((a) => a.cli_found && !skip.includes(a.id));
       let connected = 0;
       let opened = 0;
-      for (const a of installed) {
-        if (a.connected) continue;
-        try {
-          await teamConnect(a.id, project);
-          connected += 1;
-          // Codex lee sus hooks al empezar cada conversación: si su terminal (restaurada al abrir)
-          // arrancó antes de esta reconexión, sigue con los de antes. Se reinicia retomándola.
-          if (a.id === "codex" && panelForAgent(getLayout().panels, a.id)) await reloadAgent(a.id);
-        } catch (e) {
-          say(`No pude conectar ${a.label}: ${errMsg(e)}`, true);
+      const failed = new Set<string>();
+      try {
+        for (const a of installed) {
+          if (autoContext.current.project !== project) return;
+          if (a.connected) continue;
+          try {
+            await teamConnect(a.id, project);
+            if (autoContext.current.project !== project) return;
+            connected += 1;
+            // Codex lee sus hooks al empezar cada conversación: si su terminal (restaurada al abrir)
+            // arrancó antes de esta reconexión, sigue con los de antes. Se reinicia retomándola.
+            if (a.id === "codex" && panelForAgent(getLayout().panels, a.id)) await reloadAgent(a.id);
+          } catch (e) {
+            failed.add(a.id);
+            say(`No pude conectar ${a.label}: ${errMsg(e)}`, true);
+          }
         }
-      }
-      if (connected > 0) refreshDetect();
-      for (const a of installed) {
-        const running = state.agents.some((x) => x.name === a.id && x.online);
-        if (running || panelForAgent(layout.panels, a.id)) continue;
-        if (await launchAgent(a.id, a.label, { selectTerm: false })) opened += 1;
-        await new Promise((r) => window.setTimeout(r, 600));
-      }
-      if (connected + opened > 0) {
-        say(`Equipo listo: ${connected} conectado(s), ${opened} abierto(s).`);
+        if (connected > 0) refreshDetect();
+        for (const a of installed) {
+          if (autoContext.current.project !== project) return;
+          const running = state.agents.some((x) => x.name === a.id && x.online);
+          if (running || panelForAgent(getLayout().panels, a.id)) continue;
+          if (await launchAgent(a.id, a.label, { selectTerm: false })) {
+            opened += 1;
+            failed.delete(a.id);
+          } else failed.add(a.id);
+          await new Promise((r) => window.setTimeout(r, 600));
+        }
+        if (connected + opened > 0) {
+          say(`Equipo listo: ${connected} conectado(s), ${opened} abierto(s).`);
+        }
+      } catch (e) {
+        failed.add("equipo");
+        say(`No pude completar el arranque automático: ${errMsg(e)}`, true);
+      } finally {
+        if (autoRunning.current === project) autoRunning.current = null;
+        if (!autoMounted.current || autoContext.current.project !== project || !autoContext.current.autoStart) return;
+        if (failed.size === 0) {
+          if (installed.length > 0) autoRan.current = project;
+          autoRetryRound.current = 0;
+        } else {
+          const delay = Math.min(10_000 * 2 ** autoRetryRound.current++, 60_000);
+          const id = window.setTimeout(() => {
+            if (autoRetryTimer.current?.id === id) autoRetryTimer.current = null;
+            setAutoRetryTick((n) => n + 1);
+          }, delay);
+          autoRetryTimer.current = { project, id };
+        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStart, state, detect, project]);
+  }, [autoStart, state, detect, project, autoRetryTick]);
 
   // Cada pocos segundos se mira si la terminal de algún agente pide iniciar sesión: está «en
   // línea» (su puente MCP ya se unió) pero no puede contestar, y sin esto el equipo le manda tareas
@@ -1618,6 +1666,7 @@ export function CommandCenter() {
       refresh();
     } catch (e) {
       say(errMsg(e), true);
+      throw e;
     }
   };
 
@@ -3516,6 +3565,7 @@ export function CommandCenter() {
               refresh();
             } catch (e) {
               say(errMsg(e), true);
+              throw e;
             }
           }}
           onMemoryAdd={async (text, kind) => {
@@ -3524,6 +3574,7 @@ export function CommandCenter() {
               refresh();
             } catch (e) {
               say(errMsg(e), true);
+              throw e;
             }
           }}
           onMemoryResolve={async (id, accept, text) => {
@@ -3532,6 +3583,7 @@ export function CommandCenter() {
               refresh();
             } catch (e) {
               say(errMsg(e), true);
+              throw e;
             }
           }}
           onMemoryForget={async (id) => {

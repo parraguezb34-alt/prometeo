@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { agentColor, agentLabel, ago } from "../lib/team";
 import type { MemoryEntry } from "../lib/team";
@@ -35,15 +35,43 @@ export function ProjectMemory({
   const [draft, setDraft] = useState("");
   const [kind, setKind] = useState("hecho");
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null);
+  const [adding, setAdding] = useState(false);
+  const addingRef = useRef(false);
+  const [resolving, setResolving] = useState<number | null>(null);
+  const resolvingRef = useRef(false);
 
   const active = memory.filter((m) => m.status === "active").slice().reverse();
   const proposed = memory.filter((m) => m.status === "proposed");
 
   const add = async () => {
     const t = draft.trim();
-    if (!t) return;
-    await onAdd(t, kind);
-    setDraft("");
+    if (!t || addingRef.current) return;
+    addingRef.current = true;
+    setAdding(true);
+    try {
+      await onAdd(t, kind);
+      setDraft("");
+    } catch {
+      // El padre avisa del error; se conserva el borrador.
+    } finally {
+      addingRef.current = false;
+      setAdding(false);
+    }
+  };
+
+  const resolve = async (id: number, accept: boolean, text?: string) => {
+    if (resolvingRef.current) return;
+    resolvingRef.current = true;
+    setResolving(id);
+    try {
+      await onResolve(id, accept, text);
+      if (accept) setEditing(null);
+    } catch {
+      // El padre avisa del error; la propuesta y su edición siguen visibles.
+    } finally {
+      resolvingRef.current = false;
+      setResolving(null);
+    }
   };
 
   return (
@@ -72,6 +100,7 @@ export function ProjectMemory({
                   value={editing.text}
                   rows={3}
                   onChange={(e) => setEditing({ id: m.id, text: e.target.value })}
+                  disabled={resolving !== null}
                 />
               ) : (
                 <div className="cc-pm-text">{m.text}</div>
@@ -79,25 +108,29 @@ export function ProjectMemory({
               <div className="cc-btn-row">
                 <button
                   className="cc-btn"
-                  onClick={() => {
-                    void onResolve(m.id, true, editing?.id === m.id ? editing.text : undefined);
-                    setEditing(null);
-                  }}
+                  disabled={resolving !== null}
+                  onClick={() => void resolve(m.id, true, editing?.id === m.id ? editing.text : undefined)}
                 >
                   <Icon name="check" size={14} />
-                  Aceptar
+                  {resolving === m.id ? "Guardando…" : "Aceptar"}
                 </button>
                 <button
                   className="cc-btn sec"
+                  disabled={resolving !== null}
                   onClick={() => setEditing(editing?.id === m.id ? null : { id: m.id, text: m.text })}
                 >
                   <Icon name="pencil" size={14} />
                   {editing?.id === m.id ? "Cancelar edición" : "Editar"}
                 </button>
-                <button className="cc-btn sec" onClick={() => void onResolve(m.id, false)}>
+                <ConfirmButton
+                  className="cc-btn sec"
+                  disabled={resolving !== null}
+                  onConfirm={() => void resolve(m.id, false)}
+                  confirmText="¿Descartar propuesta? Pulsa otra vez"
+                >
                   <Icon name="x" size={14} />
                   Descartar
-                </button>
+                </ConfirmButton>
               </div>
             </div>
           ))}
@@ -149,11 +182,12 @@ export function ProjectMemory({
           value={draft}
           placeholder="Añadir a la memoria…"
           onChange={(e) => setDraft(e.target.value)}
+          disabled={adding}
           onKeyDown={(e) => {
             if (e.key === "Enter") void add();
           }}
         />
-        <button className="cc-send-mini" onClick={() => void add()} disabled={!draft.trim()} aria-label="Guardar">
+        <button className="cc-send-mini" onClick={() => void add()} disabled={!draft.trim() || adding} aria-label="Guardar">
           <Icon name="plus" size={15} />
         </button>
       </div>
