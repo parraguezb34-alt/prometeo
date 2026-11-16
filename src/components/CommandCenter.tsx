@@ -3355,7 +3355,7 @@ export function CommandCenter() {
                     return null;
                   }
                 }}
-                onOp={(id, op) => void scheduleAction(id, op)}
+                onOp={(id, op) => scheduleAction(id, op)}
                 onOpenChat={(id) => {
                   const c = chats.chats.find((x) => x.id === id);
                   if (c) activateChat(c);
@@ -3364,6 +3364,7 @@ export function CommandCenter() {
                   setDiffTask(id);
                   setView("history");
                 }}
+                onOpenPath={openPath}
                 onAsk={(text) => {
                   setDraft(text);
                   setView("feed");

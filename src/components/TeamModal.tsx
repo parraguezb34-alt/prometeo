@@ -301,13 +301,14 @@ export function TeamModal({
                               Líder
                             </ConfirmButton>
                           ) : (
-                            <button
+                            <ConfirmButton
                               className="cc-makelead"
-                              onClick={() => onCrown(name)}
-                              title="Hacer líder del equipo"
+                              onConfirm={() => onCrown(name)}
+                              confirmText="¿Seguro? Pulsa otra vez"
+                              title="Hacer líder del equipo (pulsa dos veces para confirmar)"
                             >
                               Hacer líder
-                            </button>
+                            </ConfirmButton>
                           ))}
                       </div>
                       <div className="cc-acard-state" data-state={state}>
@@ -556,15 +557,16 @@ export function TeamModal({
 
                   {a.online && (
                     <div className="cc-acard-act">
-                      {state === "blocked" && (
+                      {state === "blocked" ? (
                         <button className="cc-btn warn" onClick={() => onTalk(name)}>
                           Responder
                         </button>
+                      ) : (
+                        <button className="cc-btn sec" onClick={() => onTalk(name)}>
+                          <Icon name="msg" size={14} />
+                          Hablar
+                        </button>
                       )}
-                      <button className="cc-btn sec" onClick={() => onTalk(name)}>
-                        <Icon name="msg" size={14} />
-                        Hablar
-                      </button>
                       <button className="cc-btn sec" onClick={() => onTerminal(name)}>
                         <Icon name="term" size={14} />
                         Terminal
@@ -608,7 +610,7 @@ export function TeamModal({
                         onClick={() => onCmd(name, `${HANDOVER_SAVE_PROMPT}\r`, "relevo con memoria")}
                         title="Guarda su resumen pegado a la tarea y Prometeo compacta su contexto (sin amnesia)"
                       >
-                        <Icon name="refresh" size={14} />
+                        <Icon name="book" size={14} />
                         {ctx && ctx.pct >= 75 ? "Relevo recomendado" : "Relevo"}
                       </button>
                       {cmds.compact && (

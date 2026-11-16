@@ -122,6 +122,7 @@ export function ResearchTab({
   };
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [tooShort, setTooShort] = useState(false);
 
   const reqIdRef = useRef(0);
   const readIdRef = useRef(0);
@@ -175,6 +176,12 @@ export function ResearchTab({
     setFile(cur ? bestFile(cur) : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sel]);
+  // La confirmación de borrado caduca a los 4 s; cambiar de investigación también la reinicia.
+  useEffect(() => {
+    if (!confirmDel) return;
+    const t = window.setTimeout(() => setConfirmDel(false), 4000);
+    return () => window.clearTimeout(t);
+  }, [confirmDel]);
   const shown = file ?? (cur ? bestFile(cur) : null);
   const mtime = cur?.files.find((f) => f.name === shown)?.mtime_ms ?? 0;
   useEffect(() => {
@@ -216,7 +223,11 @@ export function ResearchTab({
   const start = async () => {
     if (!project || busy) return;
     const q = question.trim();
-    if (q.length < 4) return;
+    if (q.length < 4) {
+      setTooShort(true);
+      return;
+    }
+    setTooShort(false);
     setBusy(true);
     try {
       const r =
@@ -269,7 +280,10 @@ export function ResearchTab({
         >
           <textarea
             value={question}
-            onChange={(e) => setQuestion(e.target.value)}
+            onChange={(e) => {
+              setQuestion(e.target.value);
+              if (tooShort) setTooShort(false);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void start();
             }}
@@ -277,6 +291,8 @@ export function ResearchTab({
             rows={4}
             aria-label="Pregunta a investigar"
           />
+          <small className="rs-hint">Ctrl+Enter para investigar.</small>
+          {tooShort && <small className="rs-warn">Escribe al menos 4 caracteres para investigar.</small>}
           <div className="rs-seg" role="radiogroup" aria-label="Tipo de investigación">
             {MODES.map((m) => (
               <button
@@ -318,7 +334,7 @@ export function ResearchTab({
               </button>
             </small>
           )}
-          <button className="cc-btn rs-go" type="submit" disabled={busy || question.trim().length < 4 || online.length === 0}>
+          <button className="cc-btn rs-go" type="submit" disabled={busy || online.length === 0}>
             <Icon name="search" size={14} />
             {busy ? "Preparando…" : "Investigar"}
           </button>

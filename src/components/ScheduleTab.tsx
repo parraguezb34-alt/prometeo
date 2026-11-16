@@ -72,6 +72,7 @@ export function ScheduleTab({
   onOp,
   onOpenChat,
   onOpenTask,
+  onOpenPath,
   onAsk,
 }: {
   schedules: TeamSchedule[];
@@ -83,9 +84,10 @@ export function ScheduleTab({
   project: string | null;
   agents: string[];
   onSave: (id: number | null, draft: ScheduleDraft) => Promise<TeamSchedule | null>;
-  onOp: (id: number, op: Op) => void;
+  onOp: (id: number, op: Op) => void | Promise<void>;
   onOpenChat: (id: string) => void;
   onOpenTask: (id: number) => void;
+  onOpenPath?: (path: string) => void;
   onAsk: (text: string) => void;
 }) {
   const key = project ? projectKey(project) : "";
@@ -203,6 +205,7 @@ export function ScheduleTab({
             onEdit={() => setEditing(true)}
             onOpenChat={onOpenChat}
             onOpenTask={onOpenTask}
+            onOpenPath={onOpenPath}
           />
         ) : (
           <div className="rs-intro">
@@ -256,18 +259,30 @@ function ScheduleDetail({
   onEdit,
   onOpenChat,
   onOpenTask,
+  onOpenPath,
 }: {
   s: TeamSchedule;
   runs: TeamTask[];
   chats: ChatWindow[];
   chatName: string;
   mine: boolean;
-  onOp: (op: Op) => void;
+  onOp: (op: Op) => void | Promise<void>;
   onEdit: () => void;
   onOpenChat: (id: string) => void;
   onOpenTask: (id: number) => void;
+  onOpenPath?: (path: string) => void;
 }) {
   const [sure, setSure] = useState(false);
+  const [running, setRunning] = useState(false);
+  const runNow = async () => {
+    if (running) return;
+    setRunning(true);
+    try {
+      await onOp("run");
+    } finally {
+      setRunning(false);
+    }
+  };
   const next = nextOf(s);
   const today = s.day === dayKey(Date.now()) ? s.runs_day : 0;
   const chatAlive = !!s.chat && chats.some((c) => c.id === s.chat);
@@ -302,9 +317,14 @@ function ScheduleDetail({
             Reanudar
           </button>
         )}
-        <button className="cc-btn sec" disabled={!mine} onClick={() => onOp("run")} title="Crea la tarea ahora (cuenta para el tope de hoy)">
+        <button
+          className="cc-btn sec"
+          disabled={!mine || running}
+          onClick={() => void runNow()}
+          title="Crea la tarea ahora (cuenta para el tope de hoy)"
+        >
           <Icon name="play" size={13} />
-          Ejecutar ahora
+          {running ? "Ejecutando…" : "Ejecutar ahora"}
         </button>
         <button className="cc-btn sec" onClick={onEdit}>
           <Icon name="pencil" size={13} />
@@ -364,7 +384,7 @@ function ScheduleDetail({
       <div className="sc-block">
         <h4>Encargo de cada ejecución</h4>
         <div className="sc-notes">
-          <Markdown text={s.notes} onPath={() => {}} />
+          <Markdown text={s.notes} onPath={onOpenPath} />
         </div>
       </div>
 
@@ -450,6 +470,11 @@ function ScheduleForm({
   return (
     <form
       className="sc-form"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape") return;
+        e.stopPropagation();
+        onCancel();
+      }}
       onSubmit={(e) => {
         e.preventDefault();
         if (!ready || busy) return;

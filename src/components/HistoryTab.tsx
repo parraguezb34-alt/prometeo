@@ -4,9 +4,11 @@ import type { TeamEvent, TeamTask } from "../lib/team";
 import { diffOf, diffStats, historyDiff, historyList, historyRevert, historySave } from "../lib/history";
 import type { HDiff, HEntry, HFile, HList, HOutcome } from "../lib/history";
 import { Icon } from "./Icon";
+import { ConfirmButton } from "./ConfirmButton";
 import "../history.css";
 
 const MAX_LINES = 800;
+const PAGE = 100;
 
 function lineKind(line: string): string {
   if (line.startsWith("+++") || line.startsWith("---")) return "h";
@@ -139,6 +141,12 @@ export function HistoryTab({
     return focusTask == null ? all : all.filter((e) => e.task === focusTask);
   }, [list, focusTask]);
 
+  // La lista se pinta por tandas de 100: con historiales largos no frena la vista.
+  const [limit, setLimit] = useState(PAGE);
+  useEffect(() => {
+    setLimit(PAGE);
+  }, [project, focusTask]);
+
   // Elige algo que enseñar: lo de la tarea pedida, lo sin guardar o la última entrega.
   const focusRef = useRef<number | null>(null);
   useEffect(() => {
@@ -252,7 +260,7 @@ export function HistoryTab({
             </span>
           </button>
         )}
-        {entries.map((e) => (
+        {entries.slice(0, limit).map((e) => (
           <button
             key={e.id}
             className="hs-item"
@@ -276,6 +284,11 @@ export function HistoryTab({
             {e.undone && <span className="hs-tag">deshecha</span>}
           </button>
         ))}
+        {entries.length > limit && (
+          <button type="button" className="hs-link hs-showmore" onClick={() => setLimit((n) => n + PAGE)}>
+            Ver más ({entries.length - limit})
+          </button>
+        )}
         {realEntries.length === 0 && focusTask == null && (
           <div className="hs-hint">
             Cada vez que un agente entregue una tarea, aquí quedará una copia de sus archivos para que
@@ -326,15 +339,16 @@ export function HistoryTab({
                       Rehacer
                     </button>
                   ) : (
-                    <button
+                    <ConfirmButton
                       className="hs-btn hs-btn-warn"
-                      onClick={() => void revert(entry.id, false, false)}
+                      onConfirm={() => void revert(entry.id, false, false)}
                       disabled={busy}
+                      confirmText="¿Seguro? Pulsa otra vez"
                       title="Devuelve sus archivos a como estaban antes de esta entrega"
                     >
                       <Icon name="undo" size={14} />
                       Deshacer
-                    </button>
+                    </ConfirmButton>
                   )
                 ) : null}
               </div>

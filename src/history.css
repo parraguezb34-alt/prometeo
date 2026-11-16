@@ -122,6 +122,12 @@
   padding: 10px;
 }
 
+.hs-showmore {
+  display: block;
+  margin: 8px auto;
+  padding: 4px 8px;
+}
+
 .hs-detail {
   min-width: 0;
   min-height: 0;
